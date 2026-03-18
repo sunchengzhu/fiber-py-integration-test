@@ -294,7 +294,7 @@ class FiberTest(CkbTest):
             idx = 0
             if channel_id is not None:
                 for i in range(len(channels["channels"])):
-                    self.logger.debug(f"waiting for channel_id: {channel_id}")
+                    print("channel_id:", channel_id)
                     if channels["channels"][i]["channel_id"] == channel_id:
                         idx = i
             if type(expected_state) == str:
