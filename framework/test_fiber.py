@@ -20,6 +20,11 @@ class FiberConfigPath(Enum):
         "download/fiber/current/fnn",
     )
 
+    PR1120= (
+        "/source/fiber/dev_config_3.yml.j2",
+        "download/fiber/pr1120/fnn",
+    )
+
     CURRENT_DEV_DEBUG = (
         "/source/fiber/dev_config_3.yml.j2",
         "download/fiber/current/fnn.debug",

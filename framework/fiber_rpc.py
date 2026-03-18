@@ -50,6 +50,9 @@ class FiberRPCClient:
         """
         return self.call("open_channel", [param])
 
+    def open_channel_with_external_funding(self, param):
+        return self.call("open_channel_with_external_funding", [param])
+
     def list_channels(self, param):
         """
         curl --location 'http://127.0.0.1:8227' --header 'Content-Type: application/json' --data '{
@@ -80,6 +83,9 @@ class FiberRPCClient:
 
     def shutdown_channel(self, param):
         return self.call("shutdown_channel", [param])
+
+    def submit_signed_funding_tx(self, param):
+        return self.call("submit_signed_funding_tx", [param])
 
     def new_invoice(self, param):
         """

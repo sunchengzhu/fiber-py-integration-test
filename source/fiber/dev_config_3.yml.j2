@@ -17,6 +17,9 @@ fiber:
   {% if fiber_funding_timeout_seconds is defined %}
   funding_timeout_seconds: {{ fiber_funding_timeout_seconds }}
   {% endif %}
+  {% if fiber_external_funding_timeout_seconds is defined %}
+  external_funding_timeout_seconds: {{ fiber_external_funding_timeout_seconds }}
+  {% endif %}
   {% if fiber_rpc_biscuit_public_key is defined %}
   rpc_biscuit_public_key: {{ fiber_rpc_biscuit_public_key }}
   {% endif %}
