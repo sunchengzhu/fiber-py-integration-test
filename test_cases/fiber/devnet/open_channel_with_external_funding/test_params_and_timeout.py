@@ -1,3 +1,4 @@
+import re
 import time
 
 import pytest
@@ -26,8 +27,11 @@ class TestExternalFundingParams(ExternalFundingBase):
                 public=True, extra_params={"tlc_expiry_delta": "0x1"}
             )
 
-        self._assert_error_contains_any(
-            exc_info.value.args[0], ["TLC expiry delta", "tlc expiry delta"]
+        error_message = exc_info.value.args[0]
+        error_pattern = r"TLC expiry delta is too small, expect larger than \d+, got 1"
+        assert re.search(error_pattern, error_message), (
+            f"Expected pattern '{error_pattern}' "
+            f"not found in actual string '{error_message}'"
         )
 
     def test_commitment_delay_epoch_too_small(self):
@@ -37,8 +41,13 @@ class TestExternalFundingParams(ExternalFundingBase):
                 public=True, extra_params={"commitment_delay_epoch": "0x0"}
             )
 
-        self._assert_error_contains_any(
-            exc_info.value.args[0], ["commitment delay", "Commitment delay"]
+        error_message = exc_info.value.args[0]
+        error_pattern = (
+            r"Commitment delay epoch .+ is less than the minimal value .+"
+        )
+        assert re.search(error_pattern, error_message), (
+            f"Expected pattern '{error_pattern}' "
+            f"not found in actual string '{error_message}'"
         )
 
     def test_funding_amount_too_small(self):
@@ -46,9 +55,13 @@ class TestExternalFundingParams(ExternalFundingBase):
         with pytest.raises(Exception) as exc_info:
             self._open_external_funding_channel(funding_amount=0, public=True)
 
-        self._assert_error_contains_any(
-            exc_info.value.args[0],
-            ["funding", "capacity", "greater than or equal", "occupied"],
+        error_message = exc_info.value.args[0]
+        error_pattern = (
+            r"The funding amount \(0\) should be greater than or equal to \d+"
+        )
+        assert re.search(error_pattern, error_message), (
+            f"Expected pattern '{error_pattern}' "
+            f"not found in actual string '{error_message}'"
         )
 
 
@@ -88,9 +101,11 @@ class TestExternalFundingTimeoutLifecycle(ExternalFundingBase):
         with pytest.raises(Exception) as exc_info:
             self._submit_external_funding(context["channel_id"], signed_funding_tx)
 
-        self._assert_error_contains_any(
-            exc_info.value.args[0],
-            ["not found", "stopped", "not exist", "UnknownChannel", "InvalidState"],
+        error_message = exc_info.value.args[0]
+        error_pattern = r"Channel not found error: Hash256\(0x[0-9a-f]{64}\)"
+        assert re.search(error_pattern, error_message), (
+            f"Expected pattern '{error_pattern}' "
+            f"not found in actual string '{error_message}'"
         )
 
     def test_signed_submission_is_not_aborted_by_stale_timeout(self):
@@ -141,7 +156,9 @@ class TestExternalFundingTimeoutLifecycle(ExternalFundingBase):
         with pytest.raises(Exception) as exc_info:
             self._submit_external_funding(context["channel_id"], signed_funding_tx)
 
-        self._assert_error_contains_any(
-            exc_info.value.args[0],
-            ["not found", "not exist", "UnknownChannel", "InvalidState"],
+        error_message = exc_info.value.args[0]
+        error_pattern = r"Channel not found error: Hash256\(0x[0-9a-f]{64}\)"
+        assert re.search(error_pattern, error_message), (
+            f"Expected pattern '{error_pattern}' "
+            f"not found in actual string '{error_message}'"
         )

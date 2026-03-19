@@ -1,3 +1,4 @@
+import re
 import time
 
 import pytest
@@ -34,7 +35,9 @@ class TestExternalFundingPreconditions(ExternalFundingBase):
         with pytest.raises(Exception) as exc_info:
             self._open_external_funding_channel(public=True)
 
-        self._assert_error_contains_any(
-            exc_info.value.args[0],
-            ["peer", "connect", "not connected", "Peer"],
+        error_message = exc_info.value.args[0]
+        error_pattern = r"Peer Pubkey\([^)]+\) is not connected"
+        assert re.search(error_pattern, error_message), (
+            f"Expected pattern '{error_pattern}' "
+            f"not found in actual string '{error_message}'"
         )

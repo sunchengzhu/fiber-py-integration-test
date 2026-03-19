@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 from test_cases.fiber.devnet.open_channel_with_external_funding.external_funding_base import (
@@ -35,7 +37,11 @@ class TestExternalFundingInvalidSignedTx(ExternalFundingBase):
             tx["outputs"][0]["capacity"] = hex(int(tx["outputs"][0]["capacity"], 16) + 1)
 
         error_message = self._submit_tampered_tx_and_get_error(tamper)
-        self._assert_error_contains_any(error_message, ["mismatch", "InvalidParameter"])
+        expected_error_message = "Output 0 mismatch"
+        assert expected_error_message in error_message, (
+            f"Expected substring '{expected_error_message}' "
+            f"not found in actual string '{error_message}'"
+        )
 
     def test_input_count_mismatch(self):
         """T-06: input count mismatch against the original unsigned tx should fail."""
@@ -43,8 +49,10 @@ class TestExternalFundingInvalidSignedTx(ExternalFundingBase):
             tx["inputs"].append(self._clone_tx(tx["inputs"][0]))
 
         error_message = self._submit_tampered_tx_and_get_error(tamper)
-        self._assert_error_contains_any(
-            error_message, ["Input count mismatch", "mismatch"]
+        error_pattern = r"Input count mismatch: unsigned has \d+, signed has \d+"
+        assert re.search(error_pattern, error_message), (
+            f"Expected pattern '{error_pattern}' "
+            f"not found in actual string '{error_message}'"
         )
 
     def test_output_data_mismatch(self):
@@ -55,7 +63,11 @@ class TestExternalFundingInvalidSignedTx(ExternalFundingBase):
             )
 
         error_message = self._submit_tampered_tx_and_get_error(tamper)
-        self._assert_error_contains_any(error_message, ["mismatch", "InvalidParameter"])
+        expected_error_message = "Output data 0 mismatch"
+        assert expected_error_message in error_message, (
+            f"Expected substring '{expected_error_message}' "
+            f"not found in actual string '{error_message}'"
+        )
 
     def test_previous_output_mismatch(self):
         """
@@ -79,8 +91,10 @@ class TestExternalFundingInvalidSignedTx(ExternalFundingBase):
             self._submit_external_funding(context["channel_id"], tampered_signed_tx)
 
         error_message = exc_info.value.args[0]
-        self._assert_error_contains_any(
-            error_message, ["previous_output mismatch", "mismatch"]
+        expected_error_message = "Input 0 previous_output mismatch"
+        assert expected_error_message in error_message, (
+            f"Expected substring '{expected_error_message}' "
+            f"not found in actual string '{error_message}'"
         )
 
     def test_output_count_mismatch(self):
@@ -101,8 +115,11 @@ class TestExternalFundingInvalidSignedTx(ExternalFundingBase):
         with pytest.raises(Exception) as exc_info:
             self._submit_external_funding(context["channel_id"], tampered_signed_tx)
 
-        self._assert_error_contains_any(
-            exc_info.value.args[0], ["Output count mismatch", "mismatch"]
+        error_message = exc_info.value.args[0]
+        error_pattern = r"Output count mismatch: unsigned has \d+, signed has \d+"
+        assert re.search(error_pattern, error_message), (
+            f"Expected pattern '{error_pattern}' "
+            f"not found in actual string '{error_message}'"
         )
 
     def test_outputs_data_count_mismatch(self):
@@ -122,8 +139,13 @@ class TestExternalFundingInvalidSignedTx(ExternalFundingBase):
         with pytest.raises(Exception) as exc_info:
             self._submit_external_funding(context["channel_id"], tampered_signed_tx)
 
-        self._assert_error_contains_any(
-            exc_info.value.args[0], ["mismatch", "outputs_data", "Output data"]
+        error_message = exc_info.value.args[0]
+        error_pattern = (
+            r"Outputs data count mismatch: unsigned has \d+, signed has \d+"
+        )
+        assert re.search(error_pattern, error_message), (
+            f"Expected pattern '{error_pattern}' "
+            f"not found in actual string '{error_message}'"
         )
 
     def test_submit_signed_funding_tx_on_normal_channel(self):
@@ -144,8 +166,14 @@ class TestExternalFundingInvalidSignedTx(ExternalFundingBase):
         with pytest.raises(Exception) as exc_info:
             self._submit_external_funding(normal_channel_id, signed_funding_tx)
 
-        self._assert_error_contains_any(
-            exc_info.value.args[0], ["AwaitingExternalFunding", "InvalidState"]
+        error_message = exc_info.value.args[0]
+        error_pattern = (
+            r"Expected channel in AwaitingExternalFunding-compatible state, but got "
+            r"[A-Za-z_]+"
+        )
+        assert re.search(error_pattern, error_message), (
+            f"Expected pattern '{error_pattern}' "
+            f"not found in actual string '{error_message}'"
         )
 
     def test_duplicate_submit_signed_funding_tx(self):
@@ -157,9 +185,10 @@ class TestExternalFundingInvalidSignedTx(ExternalFundingBase):
                 context["channel_id"], context["signed_funding_tx"]
             )
 
-        self._assert_error_contains_any(
-            exc_info.value.args[0],
-            ["already been submitted", "InvalidState", "AwaitingExternalFunding"],
+        expected_error_message = "Signed funding tx has already been submitted"
+        assert expected_error_message in exc_info.value.args[0], (
+            f"Expected substring '{expected_error_message}' "
+            f"not found in actual string '{exc_info.value.args[0]}'"
         )
 
     def test_submit_signed_funding_tx_with_nonexistent_channel_id(self):
@@ -173,7 +202,9 @@ class TestExternalFundingInvalidSignedTx(ExternalFundingBase):
         with pytest.raises(Exception) as exc_info:
             self._submit_external_funding(fake_channel_id, signed_funding_tx)
 
-        self._assert_error_contains_any(
-            exc_info.value.args[0],
-            ["not found", "not exist", "channel", "UnknownChannel"],
+        error_message = exc_info.value.args[0]
+        error_pattern = r"Channel not found error: Hash256\(0x[0-9a-f]{64}\)"
+        assert re.search(error_pattern, error_message), (
+            f"Expected pattern '{error_pattern}' "
+            f"not found in actual string '{error_message}'"
         )

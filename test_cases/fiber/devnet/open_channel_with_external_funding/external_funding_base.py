@@ -218,11 +218,6 @@ class ExternalFundingBase(FiberTest):
             channel_id=channel_id,
         )
 
-    def _assert_error_contains_any(self, error_message, expected_substrings):
-        assert any(sub in error_message for sub in expected_substrings), (
-            f"Expected one of {expected_substrings}, got '{error_message}'"
-        )
-
     def _get_lock_capacity(self, lock_script):
         return int(
             self.node.getClient()
