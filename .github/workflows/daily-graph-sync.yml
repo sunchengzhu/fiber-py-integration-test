@@ -10,9 +10,6 @@ on:
     - cron: '0 1 * * *'   # daily at 01:00 UTC
   workflow_dispatch:
     inputs:
-      GitUrl:
-        description: 'fiber git url (non-official URLs are rejected)'
-        default: 'https://github.com/nervosnetwork/fiber.git'
       GitRef:
         description: 'fiber branch / tag / commit sha to benchmark'
         default: 'develop'
@@ -27,6 +24,9 @@ on:
 permissions:
   contents: read
 
+env:
+  FIBER_GIT_URL: https://github.com/nervosnetwork/fiber.git
+
 jobs:
   resolve-and-build:
     runs-on: ubuntu-22.04
@@ -40,23 +40,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Validate fiber git url (official only unless allowlisted)
-        env:
-          GIT_URL: ${{ github.event.inputs.GitUrl || 'https://github.com/nervosnetwork/fiber.git' }}
-        run: |
-          set -euo pipefail
-          case "$GIT_URL" in
-            https://github.com/nervosnetwork/fiber.git|https://github.com/nervosnetwork/fiber)
-              echo "official fiber url ok" ;;
-            *)
-              echo "::error::Refusing non-official fiber url: $GIT_URL"
-              exit 1 ;;
-          esac
-
       - name: Build fnn and export official configs
         id: build
         env:
-          GIT_URL: ${{ github.event.inputs.GitUrl || 'https://github.com/nervosnetwork/fiber.git' }}
           GIT_REF: ${{ github.event.inputs.GitRef || 'develop' }}
         run: |
           set -euo pipefail
@@ -64,7 +50,7 @@ jobs:
             '' ) echo "::error::Empty GitRef"; exit 1 ;;
             -* ) echo "::error::Refusing GitRef starting with '-': $GIT_REF"; exit 1 ;;
           esac
-          git clone "$GIT_URL" fiber
+          git clone "$FIBER_GIT_URL" fiber
           cd fiber
           # Resolve short branch/tag names explicitly. If both exist, require the
           # caller to disambiguate with refs/heads/... or refs/tags/....
