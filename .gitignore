@@ -3,7 +3,7 @@ tmp.bak
 .pytest_cache
 download
 pytest.ini
-reprot
+report/
 __pycache__
 pid.txt
 .idea

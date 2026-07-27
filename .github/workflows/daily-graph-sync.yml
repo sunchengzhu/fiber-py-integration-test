@@ -1,0 +1,264 @@
+name: daily graph sync benchmark
+
+# Measures how long a fresh Fiber node takes to sync the network graph
+# (nodes + channels) from the official bootnodes. The exact convergence
+# predicate lives in framework/daily_graph_sync.py. This workflow is independent
+# from the devnet suite (fiber.yml) and the existing mainnet/testnet workflows.
+
+on:
+  schedule:
+    - cron: '0 1 * * *'   # daily at 01:00 UTC
+  workflow_dispatch:
+    inputs:
+      GitUrl:
+        description: 'fiber git url (non-official URLs are rejected)'
+        default: 'https://github.com/nervosnetwork/fiber.git'
+      GitRef:
+        description: 'fiber branch / tag / commit sha to benchmark'
+        default: 'develop'
+      Attempts:
+        description: 'attempts per network (1 = no retry, 2 = one retry on failure)'
+        type: choice
+        options:
+          - '1'
+          - '2'
+        default: '2'
+
+permissions:
+  contents: read
+
+jobs:
+  resolve-and-build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    outputs:
+      full_sha: ${{ steps.build.outputs.full_sha }}
+      artifact_name: ${{ steps.names.outputs.artifact_name }}
+    steps:
+      - name: Checkout integration repo
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Validate fiber git url (official only unless allowlisted)
+        env:
+          GIT_URL: ${{ github.event.inputs.GitUrl || 'https://github.com/nervosnetwork/fiber.git' }}
+        run: |
+          set -euo pipefail
+          case "$GIT_URL" in
+            https://github.com/nervosnetwork/fiber.git|https://github.com/nervosnetwork/fiber)
+              echo "official fiber url ok" ;;
+            *)
+              echo "::error::Refusing non-official fiber url: $GIT_URL"
+              exit 1 ;;
+          esac
+
+      - name: Build fnn and export official configs
+        id: build
+        env:
+          GIT_URL: ${{ github.event.inputs.GitUrl || 'https://github.com/nervosnetwork/fiber.git' }}
+          GIT_REF: ${{ github.event.inputs.GitRef || 'develop' }}
+        run: |
+          set -euo pipefail
+          case "$GIT_REF" in
+            '' ) echo "::error::Empty GitRef"; exit 1 ;;
+            -* ) echo "::error::Refusing GitRef starting with '-': $GIT_REF"; exit 1 ;;
+          esac
+          git clone "$GIT_URL" fiber
+          cd fiber
+          # Resolve short branch/tag names explicitly. If both exist, require the
+          # caller to disambiguate with refs/heads/... or refs/tags/....
+          BRANCH_SHA="$(git rev-parse --verify --quiet "refs/remotes/origin/${GIT_REF}^{commit}" || true)"
+          TAG_SHA="$(git rev-parse --verify --quiet "refs/tags/${GIT_REF}^{commit}" || true)"
+          if [ -n "$BRANCH_SHA" ] && [ -n "$TAG_SHA" ]; then
+            echo "::error::Ambiguous GitRef exists as both branch and tag: $GIT_REF"
+            echo "::error::Use refs/heads/$GIT_REF or refs/tags/$GIT_REF"
+            exit 1
+          fi
+          RESOLVED="${BRANCH_SHA:-$TAG_SHA}"
+          if [ -z "$RESOLVED" ]; then
+            RESOLVED="$(git rev-parse --verify --quiet "${GIT_REF}^{commit}" || true)"
+          fi
+          if [ -z "$RESOLVED" ]; then
+            # Not a local branch/tag/sha (e.g. a PR head or arbitrary commit):
+            # fetch it explicitly, then resolve FETCH_HEAD.
+            git fetch --quiet origin "$GIT_REF" || true
+            RESOLVED="$(git rev-parse --verify --quiet "FETCH_HEAD^{commit}" || true)"
+          fi
+          if [ -z "$RESOLVED" ]; then
+            echo "::error::Could not resolve GitRef to a commit: $GIT_REF"
+            exit 1
+          fi
+          git checkout --detach "$RESOLVED"
+          FULL_SHA="$(git rev-parse HEAD)"
+          echo "full_sha=$FULL_SHA" >> "$GITHUB_OUTPUT"
+          echo "Building fnn at $FULL_SHA"
+          cargo build --release --locked --package fiber-bin --bin fnn
+          cd ..
+          mkdir -p artifact
+          cp fiber/target/release/fnn artifact/fnn
+          cp fiber/config/mainnet/config.yml artifact/mainnet-config.yml
+          cp fiber/config/testnet/config.yml artifact/testnet-config.yml
+          {
+            echo "full_sha=$FULL_SHA"
+            echo "git_ref=$GIT_REF"
+            echo "rustc=$(rustc --version)"
+            echo "cargo=$(cargo --version)"
+            echo "runner=ubuntu-22.04"
+          } > artifact/build-info.txt
+          cd artifact
+          sha256sum fnn mainnet-config.yml testnet-config.yml > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Compute artifact name
+        id: names
+        env:
+          FULL_SHA: ${{ steps.build.outputs.full_sha }}
+        run: |
+          set -euo pipefail
+          echo "artifact_name=fnn-${FULL_SHA}-${{ github.run_id }}-${{ github.run_attempt }}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.names.outputs.artifact_name }}
+          path: |
+            artifact/fnn
+            artifact/mainnet-config.yml
+            artifact/testnet-config.yml
+            artifact/build-info.txt
+            artifact/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7
+
+  test:
+    needs: resolve-and-build
+    runs-on: ubuntu-22.04
+    timeout-minutes: 70
+    strategy:
+      fail-fast: false
+      matrix:
+        network: [mainnet, testnet]
+    steps:
+      - name: Checkout integration repo
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Record test-runner metadata
+        if: always()
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          mkdir -p report/daily-graph-sync/${{ matrix.network }}
+          {
+            echo "network=${{ matrix.network }}"
+            echo "image_os=${ImageOS:-unknown}"
+            echo "image_version=${ImageVersion:-unknown}"
+            echo "runner_arch=$(uname -m)"
+            echo "runner_os=$(uname -s)"
+            echo "cpu_model=$(lscpu 2>/dev/null | sed -n 's/^Model name:[[:space:]]*//p' | head -1)"
+            echo "cpu_cores=$(nproc 2>/dev/null || echo unknown)"
+            echo "mem_total=$(free -h 2>/dev/null | awk '/^Mem:/{print $2}')"
+            echo "expected_sha=${{ needs.resolve-and-build.outputs.full_sha }}"
+            echo "run_id=${{ github.run_id }}"
+            echo "run_attempt=${{ github.run_attempt }}"
+          } > report/daily-graph-sync/${{ matrix.network }}/runner-info.txt
+          cat report/daily-graph-sync/${{ matrix.network }}/runner-info.txt
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies
+        timeout-minutes: 10
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run engine unit tests (no network, fail fast)
+        timeout-minutes: 5
+        run: make daily_graph_sync_unit_test
+
+      - name: Download build artifact
+        timeout-minutes: 5
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.resolve-and-build.outputs.artifact_name }}
+          path: artifact
+
+      - name: Verify checksums and prepare binary
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          cd artifact
+          sha256sum -c SHA256SUMS
+          chmod +x fnn
+
+      - name: Run daily graph sync benchmark (${{ matrix.network }})
+        timeout-minutes: 40
+        env:
+          DAILY_SYNC_ENABLED: '1'
+          DAILY_SYNC_NETWORK: ${{ matrix.network }}
+          DAILY_SYNC_ATTEMPTS: ${{ github.event.inputs.Attempts || '2' }}
+          DAILY_SYNC_FNN: ${{ github.workspace }}/artifact/fnn
+          DAILY_SYNC_CONFIG: ${{ github.workspace }}/artifact/${{ matrix.network }}-config.yml
+          DAILY_SYNC_EXPECTED_SHA: ${{ needs.resolve-and-build.outputs.full_sha }}
+        run: |
+          python -m pytest \
+            test_cases/fiber/daily/test_daily_graph_sync.py \
+            -v -s --html=report/daily-graph-sync-${{ matrix.network }}.html --self-contained-html
+
+      - name: Upload report
+        if: always()
+        timeout-minutes: 5
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-graph-sync-${{ matrix.network }}-${{ needs.resolve-and-build.outputs.full_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            report/daily-graph-sync-${{ matrix.network }}.html
+            report/daily-graph-sync/${{ matrix.network }}/runner-info.txt
+            report/daily-graph-sync/${{ matrix.network }}/attempt-*/summary.json
+            report/daily-graph-sync/${{ matrix.network }}/attempt-*/samples.jsonl
+            report/daily-graph-sync/${{ matrix.network }}/attempt-*/node.log.gz
+          if-no-files-found: error
+          retention-days: 30
+
+  notify-discord:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    needs: [resolve-and-build, test]
+    # Only notify when something failed. On full success the whole job is
+    # skipped, so no Discord message is sent.
+    if: always() && (needs.resolve-and-build.result != 'success' || needs.test.result != 'success')
+    steps:
+      - name: Notify Discord on failure
+        id: discord
+        continue-on-error: true
+        # Pinned to the v1.16.0 commit SHA: this step touches the Discord webhook
+        # secret, so we avoid a movable tag / upstream supply-chain change.
+        uses: sarisia/actions-status-discord@eb045afee445dc055c18d3d90bd0f244fd062708
+        with:
+          webhook: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          nofail: false
+          content: "<@802020984097734656>"
+          status: failure
+          title: "Fiber Daily Graph Sync Failed"
+          description: "Daily graph sync benchmark failed (build: ${{ needs.resolve-and-build.result }}, test: ${{ needs.test.result }}). Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}."
+          color: 0xff0000
+
+      - name: Surface Discord delivery failure
+        # continue-on-error above keeps a broken webhook from masking the real
+        # benchmark failure, but a silently-dropped alert is its own incident, so
+        # make it loud in the job summary and fail this (already-failing) job.
+        if: always() && steps.discord.outcome == 'failure'
+        run: |
+          echo "::warning::Discord notification failed to send; check the DISCORD_WEBHOOK_URL secret."
+          {
+            echo "### ⚠️ Discord notification failed to send"
+            echo ""
+            echo "The daily graph-sync benchmark failed **and** the Discord alert could not be delivered."
+            echo "Check the \`DISCORD_WEBHOOK_URL\` secret / channel webhook."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1

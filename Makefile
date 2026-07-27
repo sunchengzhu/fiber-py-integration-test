@@ -1,4 +1,4 @@
-.PHONY: prepare test clean docs
+.PHONY: prepare test clean docs daily_graph_sync_test daily_graph_sync_unit_test
 
 prepare:
 	python3 -m venv venv
@@ -171,6 +171,23 @@ develop_test:
         rm -f failed_test_cases.txt; \
         exit 1; \
     fi
+
+# Standalone daily graph-sync benchmark (mainnet / testnet).
+# Independent from the devnet/testnet/mainnet suites: it starts its own fnn node
+# with trace-level gossip logging and does not need `make prepare`.
+# The benchmark is opt-in (skipped unless DAILY_SYNC_ENABLED is set), so this
+# target sets it automatically. Configure the rest via env vars, e.g.:
+#   DAILY_SYNC_NETWORK=testnet DAILY_SYNC_FNN=/path/to/fnn \
+#   DAILY_SYNC_CONFIG=/path/to/config.yml make daily_graph_sync_test
+daily_graph_sync_test:
+	DAILY_SYNC_ENABLED=1 python3 -u -m pytest -vv test_cases/fiber/daily/test_daily_graph_sync.py
+
+# Deterministic, no-network unit tests for the daily graph-sync engine.
+# Safe to run anywhere (no fnn binary, no CKB, no public network) and fast, so
+# it runs in the Lint-and-Format workflow on every push/PR and again in the
+# daily workflow before the long E2E. Not gated behind DAILY_SYNC_ENABLED.
+daily_graph_sync_unit_test:
+	python3 -u -m pytest -vv test_cases/fiber/daily/test_daily_graph_sync_unit.py
 
 
 
