@@ -33,7 +33,8 @@ env:
 
 jobs:
   resolve-package:
-    runs-on: ubuntu-22.04
+    # The shared "portable" package currently requires glibc 2.39.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       full_sha: ${{ steps.package.outputs.full_sha }}
@@ -257,7 +258,8 @@ jobs:
             echo "develop_relation=$develop_relation"
             echo "develop_commits_behind=$develop_commits_behind"
             echo "fnn_version=$version_output"
-            echo "runner=ubuntu-22.04"
+            echo "runner=ubuntu-24.04"
+            echo "glibc=$(getconf GNU_LIBC_VERSION)"
           } > artifact/build-info.txt
 
           cd artifact
@@ -290,7 +292,7 @@ jobs:
 
   test:
     needs: resolve-package
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 70
     strategy:
       fail-fast: false
@@ -314,6 +316,7 @@ jobs:
             echo "image_version=${ImageVersion:-unknown}"
             echo "runner_arch=$(uname -m)"
             echo "runner_os=$(uname -s)"
+            echo "glibc=$(getconf GNU_LIBC_VERSION)"
             echo "cpu_model=$(lscpu 2>/dev/null | sed -n 's/^Model name:[[:space:]]*//p' | head -1)"
             echo "cpu_cores=$(nproc 2>/dev/null || echo unknown)"
             echo "mem_total=$(free -h 2>/dev/null | awk '/^Mem:/{print $2}')"
@@ -387,18 +390,21 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 5
     needs: [resolve-package, test]
+    env:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
     # Only notify when something failed. On full success the whole job is
     # skipped, so no Discord message is sent.
     if: always() && (needs.resolve-package.result != 'success' || needs.test.result != 'success')
     steps:
       - name: Notify Discord on failure
         id: discord
+        if: env.DISCORD_WEBHOOK_URL != ''
         continue-on-error: true
         # Pinned to the v1.16.0 commit SHA: this step touches the Discord webhook
         # secret, so we avoid a movable tag / upstream supply-chain change.
         uses: sarisia/actions-status-discord@eb045afee445dc055c18d3d90bd0f244fd062708
         with:
-          webhook: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          webhook: ${{ env.DISCORD_WEBHOOK_URL }}
           nofail: false
           content: "<@802020984097734656>"
           status: failure
@@ -406,11 +412,16 @@ jobs:
           description: "Daily graph sync benchmark failed (package: ${{ needs.resolve-package.result }}, test: ${{ needs.test.result }}). Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}."
           color: 0xff0000
 
+      - name: Note that Discord is not configured
+        if: env.DISCORD_WEBHOOK_URL == ''
+        run: |
+          echo "::notice::DISCORD_WEBHOOK_URL is not configured; skipping the optional failure notification."
+
       - name: Surface Discord delivery failure
         # continue-on-error above keeps a broken webhook from masking the real
         # benchmark failure, but a silently-dropped alert is its own incident, so
         # make it loud in the job summary and fail this (already-failing) job.
-        if: always() && steps.discord.outcome == 'failure'
+        if: always() && env.DISCORD_WEBHOOK_URL != '' && steps.discord.outcome == 'failure'
         run: |
           echo "::warning::Discord notification failed to send; check the DISCORD_WEBHOOK_URL secret."
           {
