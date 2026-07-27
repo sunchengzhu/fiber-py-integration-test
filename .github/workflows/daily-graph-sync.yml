@@ -4,15 +4,18 @@ name: daily graph sync benchmark
 # (nodes + channels) from the official bootnodes. The exact convergence
 # predicate lives in framework/daily_graph_sync.py. This workflow is independent
 # from the devnet suite (fiber.yml) and the existing mainnet/testnet workflows.
+# It reuses the develop package published by fiber-jmeter-sample instead of
+# compiling fnn again.
 
 on:
   schedule:
     - cron: '0 1 * * *'   # daily at 01:00 UTC
   workflow_dispatch:
     inputs:
-      GitRef:
-        description: 'fiber branch / tag / commit sha to benchmark'
-        default: 'develop'
+      FnnPackage:
+        description: 'optional fnn package name (blank = latest packaged develop)'
+        required: false
+        default: ''
       Attempts:
         description: 'attempts per network (1 = no retry, 2 = one retry on failure)'
         type: choice
@@ -25,86 +28,254 @@ permissions:
   contents: read
 
 env:
-  FIBER_GIT_URL: https://github.com/nervosnetwork/fiber.git
+  FIBER_PACKAGE_BASE_URL: https://github-test-logs.ckbapp.dev/fiber
+  FIBER_REPO_URL: https://github.com/nervosnetwork/fiber.git
 
 jobs:
-  resolve-and-build:
+  resolve-package:
     runs-on: ubuntu-22.04
-    timeout-minutes: 60
+    timeout-minutes: 10
     outputs:
-      full_sha: ${{ steps.build.outputs.full_sha }}
+      full_sha: ${{ steps.package.outputs.full_sha }}
+      package_name: ${{ steps.package.outputs.package_name }}
       artifact_name: ${{ steps.names.outputs.artifact_name }}
     steps:
-      - name: Checkout integration repo
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
-      - name: Build fnn and export official configs
-        id: build
+      - name: Resolve and download fnn package
+        id: package
         env:
-          GIT_REF: ${{ github.event.inputs.GitRef || 'develop' }}
+          GITHUB_TOKEN: ${{ github.token }}
+          REQUESTED_PACKAGE: ${{ github.event.inputs.FnnPackage || '' }}
         run: |
           set -euo pipefail
-          case "$GIT_REF" in
-            '' ) echo "::error::Empty GitRef"; exit 1 ;;
-            -* ) echo "::error::Refusing GitRef starting with '-': $GIT_REF"; exit 1 ;;
-          esac
-          git clone "$FIBER_GIT_URL" fiber
-          cd fiber
-          # Resolve short branch/tag names explicitly. If both exist, require the
-          # caller to disambiguate with refs/heads/... or refs/tags/....
-          BRANCH_SHA="$(git rev-parse --verify --quiet "refs/remotes/origin/${GIT_REF}^{commit}" || true)"
-          TAG_SHA="$(git rev-parse --verify --quiet "refs/tags/${GIT_REF}^{commit}" || true)"
-          if [ -n "$BRANCH_SHA" ] && [ -n "$TAG_SHA" ]; then
-            echo "::error::Ambiguous GitRef exists as both branch and tag: $GIT_REF"
-            echo "::error::Use refs/heads/$GIT_REF or refs/tags/$GIT_REF"
+          staging_dir="$(mktemp -d)"
+          trap 'rm -rf "$staging_dir"' EXIT
+
+          if [ -n "$REQUESTED_PACKAGE" ]; then
+            package_name="$REQUESTED_PACKAGE"
+            package_source="workflow input"
+          else
+            index_url="${FIBER_PACKAGE_BASE_URL}/fnn.conf?run=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            curl \
+              --proto '=https' --proto-redir '=https' --tlsv1.2 \
+              --fail --silent --show-error --location \
+              --retry 3 --retry-all-errors \
+              "$index_url" \
+              --output "$staging_dir/fnn.conf"
+            package_name="$(
+              sed -n 's/^TARBALL_develop="\([^"]*\)"$/\1/p' \
+                "$staging_dir/fnn.conf"
+            )"
+            package_source="latest TARBALL_develop"
+          fi
+
+          package_pattern='^fnn_develop_([0-9]{8})_([0-9a-f]{7,40})-x86_64-linux-portable\.tar\.gz$'
+          if [[ ! "$package_name" =~ $package_pattern ]]; then
+            echo "::error::Invalid develop package name: $package_name"
             exit 1
           fi
-          RESOLVED="${BRANCH_SHA:-$TAG_SHA}"
-          if [ -z "$RESOLVED" ]; then
-            RESOLVED="$(git rev-parse --verify --quiet "${GIT_REF}^{commit}" || true)"
-          fi
-          if [ -z "$RESOLVED" ]; then
-            # Not a local branch/tag/sha (e.g. a PR head or arbitrary commit):
-            # fetch it explicitly, then resolve FETCH_HEAD.
-            git fetch --quiet origin "$GIT_REF" || true
-            RESOLVED="$(git rev-parse --verify --quiet "FETCH_HEAD^{commit}" || true)"
-          fi
-          if [ -z "$RESOLVED" ]; then
-            echo "::error::Could not resolve GitRef to a commit: $GIT_REF"
+          package_date="${BASH_REMATCH[1]}"
+          package_commit="${BASH_REMATCH[2]}"
+
+          marker_name="fnn_develop_${package_commit}.commit"
+          marker_value="$(
+            curl \
+              --proto '=https' --proto-redir '=https' --tlsv1.2 \
+              --fail --silent --show-error --location \
+              --retry 3 --retry-all-errors \
+              "${FIBER_PACKAGE_BASE_URL}/${marker_name}" |
+              tr -d '\r\n[:space:]'
+          )"
+          if [ "$marker_value" != "$package_name" ]; then
+            echo "::error::Package marker mismatch: expected $package_name, got $marker_value"
             exit 1
           fi
-          git checkout --detach "$RESOLVED"
-          FULL_SHA="$(git rev-parse HEAD)"
-          echo "full_sha=$FULL_SHA" >> "$GITHUB_OUTPUT"
-          echo "Building fnn at $FULL_SHA"
-          cargo build --release --locked --package fiber-bin --bin fnn
-          cd ..
+
+          curl \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --fail --silent --show-error --location \
+            --retry 3 --retry-all-errors \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GITHUB_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/nervosnetwork/fiber/commits/${package_commit}" \
+            --output "$staging_dir/commit.json"
+          full_sha="$(jq -er '.sha' "$staging_dir/commit.json")"
+          if [[ ! "$full_sha" =~ ^[0-9a-f]{40}$ ]] ||
+             [[ "$full_sha" != "$package_commit"* ]]; then
+            echo "::error::Could not resolve package commit $package_commit to a full Fiber SHA"
+            exit 1
+          fi
+
+          develop_head="$(
+            git ls-remote "$FIBER_REPO_URL" refs/heads/develop |
+              awk 'NR == 1 { print $1 }'
+          )"
+          if [[ ! "$develop_head" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Could not resolve current Fiber develop head"
+            exit 1
+          fi
+
+          curl \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --fail --silent --show-error --location \
+            --retry 3 --retry-all-errors \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GITHUB_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/nervosnetwork/fiber/compare/${full_sha}...${develop_head}" \
+            --output "$staging_dir/compare.json"
+          develop_relation="$(jq -er '.status' "$staging_dir/compare.json")"
+          develop_commits_behind="$(jq -er '.ahead_by | numbers' "$staging_dir/compare.json")"
+          if [ "$develop_relation" != "ahead" ] &&
+             [ "$develop_relation" != "identical" ]; then
+            echo "::error::Package commit $full_sha is not an ancestor of current Fiber develop ($develop_head)"
+            exit 1
+          fi
+          unset GITHUB_TOKEN
+          if [ "$full_sha" != "$develop_head" ]; then
+            echo "::warning::Package $package_name is $develop_commits_behind commit(s) behind current develop head $develop_head"
+          fi
+
+          package_url="${FIBER_PACKAGE_BASE_URL}/${package_name}"
+          curl \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --fail --silent --show-error --location \
+            --retry 3 --retry-all-errors \
+            "$package_url" \
+            --output "$staging_dir/fnn.tar.gz"
+
+          package_bytes="$(stat -c '%s' "$staging_dir/fnn.tar.gz")"
+          if [ "$package_bytes" -lt 1048576 ] ||
+             [ "$package_bytes" -gt 314572800 ]; then
+            echo "::error::Unexpected package size: $package_bytes bytes"
+            exit 1
+          fi
+
+          ARCHIVE="$staging_dir/fnn.tar.gz" python3 - <<'PY'
+          import os
+          import pathlib
+          import tarfile
+
+          limits = {
+              "fnn": (1024 * 1024, 256 * 1024 * 1024),
+              "config/mainnet/config.yml": (1, 10 * 1024 * 1024),
+              "config/testnet/config.yml": (1, 10 * 1024 * 1024),
+          }
+          counts = {name: 0 for name in limits}
+          total_regular_bytes = 0
+
+          with tarfile.open(os.environ["ARCHIVE"], "r:gz") as archive:
+              for member in archive:
+                  path = pathlib.PurePosixPath(member.name)
+                  if path.is_absolute() or ".." in path.parts:
+                      raise SystemExit(f"unsafe archive path: {member.name}")
+                  if not (member.isfile() or member.isdir()):
+                      raise SystemExit(
+                          f"unsupported archive entry type: {member.name}"
+                      )
+                  if member.isfile():
+                      total_regular_bytes += member.size
+                      if total_regular_bytes > 512 * 1024 * 1024:
+                          raise SystemExit("archive expands beyond 512 MiB")
+                  if member.name in limits:
+                      counts[member.name] += 1
+                      minimum, maximum = limits[member.name]
+                      if not member.isfile():
+                          raise SystemExit(
+                              f"required entry is not a file: {member.name}"
+                          )
+                      if not minimum <= member.size <= maximum:
+                          raise SystemExit(
+                              f"unexpected size for {member.name}: {member.size}"
+                          )
+
+          for name, count in counts.items():
+              if count != 1:
+                  raise SystemExit(
+                      f"archive must contain exactly one {name} entry; found {count}"
+                  )
+          PY
+
+          mkdir "$staging_dir/unpacked"
+          tar \
+            --extract --gzip \
+            --file "$staging_dir/fnn.tar.gz" \
+            --directory "$staging_dir/unpacked" \
+            --no-same-owner --no-same-permissions \
+            fnn \
+            config/mainnet/config.yml \
+            config/testnet/config.yml
+          test -f "$staging_dir/unpacked/fnn"
+          test ! -L "$staging_dir/unpacked/fnn"
+          test -x "$staging_dir/unpacked/fnn"
+          for config_file in \
+            "$staging_dir/unpacked/config/mainnet/config.yml" \
+            "$staging_dir/unpacked/config/testnet/config.yml"
+          do
+            test -f "$config_file"
+            test ! -L "$config_file"
+            test -s "$config_file"
+          done
+
+          mkdir "$staging_dir/empty-home"
+          version_output="$(
+            env -i \
+              HOME="$staging_dir/empty-home" \
+              PATH="/usr/bin:/bin" \
+              "$staging_dir/unpacked/fnn" --version
+          )"
+          reported_commit="$(
+            sed -n 's/.*(\([0-9a-f]\{7,40\}\) .*/\1/p' <<< "$version_output"
+          )"
+          if [ -z "$reported_commit" ] ||
+             [[ "$full_sha" != "$reported_commit"* ]]; then
+            echo "::error::fnn version commit does not match package commit: $version_output"
+            exit 1
+          fi
+
           mkdir -p artifact
-          cp fiber/target/release/fnn artifact/fnn
-          cp fiber/config/mainnet/config.yml artifact/mainnet-config.yml
-          cp fiber/config/testnet/config.yml artifact/testnet-config.yml
+          install -m 0755 "$staging_dir/unpacked/fnn" artifact/fnn
+          install -m 0644 \
+            "$staging_dir/unpacked/config/mainnet/config.yml" \
+            artifact/mainnet-config.yml
+          install -m 0644 \
+            "$staging_dir/unpacked/config/testnet/config.yml" \
+            artifact/testnet-config.yml
+
+          package_sha256="$(sha256sum "$staging_dir/fnn.tar.gz" | awk '{ print $1 }')"
           {
-            echo "full_sha=$FULL_SHA"
-            echo "git_ref=$GIT_REF"
-            echo "rustc=$(rustc --version)"
-            echo "cargo=$(cargo --version)"
+            echo "source=shared-package"
+            echo "package_source=$package_source"
+            echo "package_name=$package_name"
+            echo "package_url=$package_url"
+            echo "package_date=$package_date"
+            echo "package_bytes=$package_bytes"
+            echo "package_sha256=$package_sha256"
+            echo "package_provenance=external-storage-no-producer-signature"
+            echo "full_sha=$full_sha"
+            echo "develop_head_at_download=$develop_head"
+            echo "develop_relation=$develop_relation"
+            echo "develop_commits_behind=$develop_commits_behind"
+            echo "fnn_version=$version_output"
             echo "runner=ubuntu-22.04"
           } > artifact/build-info.txt
+
           cd artifact
           sha256sum fnn mainnet-config.yml testnet-config.yml > SHA256SUMS
           cat SHA256SUMS
+          echo "::notice title=Fiber package::$package_name ($full_sha)"
+          echo "full_sha=$full_sha" >> "$GITHUB_OUTPUT"
+          echo "package_name=$package_name" >> "$GITHUB_OUTPUT"
 
       - name: Compute artifact name
         id: names
         env:
-          FULL_SHA: ${{ steps.build.outputs.full_sha }}
+          FULL_SHA: ${{ steps.package.outputs.full_sha }}
         run: |
           set -euo pipefail
           echo "artifact_name=fnn-${FULL_SHA}-${{ github.run_id }}-${{ github.run_attempt }}" >> "$GITHUB_OUTPUT"
 
-      - name: Upload build artifact
+      - name: Upload validated package
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.names.outputs.artifact_name }}
@@ -118,7 +289,7 @@ jobs:
           retention-days: 7
 
   test:
-    needs: resolve-and-build
+    needs: resolve-package
     runs-on: ubuntu-22.04
     timeout-minutes: 70
     strategy:
@@ -146,7 +317,8 @@ jobs:
             echo "cpu_model=$(lscpu 2>/dev/null | sed -n 's/^Model name:[[:space:]]*//p' | head -1)"
             echo "cpu_cores=$(nproc 2>/dev/null || echo unknown)"
             echo "mem_total=$(free -h 2>/dev/null | awk '/^Mem:/{print $2}')"
-            echo "expected_sha=${{ needs.resolve-and-build.outputs.full_sha }}"
+            echo "expected_sha=${{ needs.resolve-package.outputs.full_sha }}"
+            echo "package_name=${{ needs.resolve-package.outputs.package_name }}"
             echo "run_id=${{ github.run_id }}"
             echo "run_attempt=${{ github.run_attempt }}"
           } > report/daily-graph-sync/${{ matrix.network }}/runner-info.txt
@@ -167,11 +339,11 @@ jobs:
         timeout-minutes: 5
         run: make daily_graph_sync_unit_test
 
-      - name: Download build artifact
+      - name: Download validated package
         timeout-minutes: 5
         uses: actions/download-artifact@v4
         with:
-          name: ${{ needs.resolve-and-build.outputs.artifact_name }}
+          name: ${{ needs.resolve-package.outputs.artifact_name }}
           path: artifact
 
       - name: Verify checksums and prepare binary
@@ -190,7 +362,7 @@ jobs:
           DAILY_SYNC_ATTEMPTS: ${{ github.event.inputs.Attempts || '2' }}
           DAILY_SYNC_FNN: ${{ github.workspace }}/artifact/fnn
           DAILY_SYNC_CONFIG: ${{ github.workspace }}/artifact/${{ matrix.network }}-config.yml
-          DAILY_SYNC_EXPECTED_SHA: ${{ needs.resolve-and-build.outputs.full_sha }}
+          DAILY_SYNC_EXPECTED_SHA: ${{ needs.resolve-package.outputs.full_sha }}
         run: |
           python -m pytest \
             test_cases/fiber/daily/test_daily_graph_sync.py \
@@ -201,7 +373,7 @@ jobs:
         timeout-minutes: 5
         uses: actions/upload-artifact@v4
         with:
-          name: daily-graph-sync-${{ matrix.network }}-${{ needs.resolve-and-build.outputs.full_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: daily-graph-sync-${{ matrix.network }}-${{ needs.resolve-package.outputs.full_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             report/daily-graph-sync-${{ matrix.network }}.html
             report/daily-graph-sync/${{ matrix.network }}/runner-info.txt
@@ -214,10 +386,10 @@ jobs:
   notify-discord:
     runs-on: ubuntu-22.04
     timeout-minutes: 5
-    needs: [resolve-and-build, test]
+    needs: [resolve-package, test]
     # Only notify when something failed. On full success the whole job is
     # skipped, so no Discord message is sent.
-    if: always() && (needs.resolve-and-build.result != 'success' || needs.test.result != 'success')
+    if: always() && (needs.resolve-package.result != 'success' || needs.test.result != 'success')
     steps:
       - name: Notify Discord on failure
         id: discord
@@ -231,7 +403,7 @@ jobs:
           content: "<@802020984097734656>"
           status: failure
           title: "Fiber Daily Graph Sync Failed"
-          description: "Daily graph sync benchmark failed (build: ${{ needs.resolve-and-build.result }}, test: ${{ needs.test.result }}). Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}."
+          description: "Daily graph sync benchmark failed (package: ${{ needs.resolve-package.result }}, test: ${{ needs.test.result }}). Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}."
           color: 0xff0000
 
       - name: Surface Discord delivery failure
