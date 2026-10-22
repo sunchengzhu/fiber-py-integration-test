@@ -9,7 +9,7 @@ from pathlib import Path
 import shutil
 import subprocess
 
-REVISION = "8419c005e2d0e737c5abf7e0f881aaedbc6fd300"
+REVISION = "40288844157cac8dd7fb025304be276cb1ac1f0b"
 ROOT = Path(__file__).resolve().parents[1]
 
 

@@ -62,7 +62,7 @@ class RetrySignatureGate:
                     self.send_header("Content-Length", "0")
                     self.end_headers()
                 else:
-                    forward_events(self, gate.upstream)
+                    gate.forward_events(self)
 
             def do_POST(self):
                 try:
@@ -179,6 +179,9 @@ class RetrySignatureGate:
         self.url = f"http://127.0.0.1:{self.server.server_port}"
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
+
+    def forward_events(self, handler):
+        forward_events(handler, self.upstream)
 
     def arm_fault(self, mode, submission):
         assert mode in ("disconnect", "lose_response")

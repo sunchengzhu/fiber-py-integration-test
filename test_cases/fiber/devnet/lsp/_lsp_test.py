@@ -21,7 +21,7 @@ from framework.util import get_project_root
 from test_cases.fiber.devnet.lsp._signer_gate import SignatureGate
 from test_cases.fiber.devnet.lsp._retry_signer_gate import RetrySignatureGate
 
-REVISION = "8419c005e2d0e737c5abf7e0f881aaedbc6fd300"
+REVISION = "40288844157cac8dd7fb025304be276cb1ac1f0b"
 BUNDLE = Path(get_project_root()) / "download/fiber/pr-1623"
 BISCUIT_PUBLIC_KEY = (
     "ed25519/17b172749be74276f0ed35a5d0685752684a3c5722114bba447a2f301136db79"

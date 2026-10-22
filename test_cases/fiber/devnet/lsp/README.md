@@ -25,12 +25,12 @@ cp download/0.202.0/ckb-cli source/ckb-cli
 ```
 
 FNN、SDK agent 和本地 SDK 控制驱动固定使用
-`8419c005e2d0e737c5abf7e0f881aaedbc6fd300`。新建独立源码目录：
+`40288844157cac8dd7fb025304be276cb1ac1f0b`。新建独立源码目录：
 
 ```bash
 git clone --no-checkout https://github.com/nervosnetwork/fiber.git download/fiber/source-pr-1623
 git -C download/fiber/source-pr-1623 fetch origin pull/1623/head
-git -C download/fiber/source-pr-1623 checkout --detach 8419c005e2d0e737c5abf7e0f881aaedbc6fd300
+git -C download/fiber/source-pr-1623 checkout --detach 40288844157cac8dd7fb025304be276cb1ac1f0b
 venv/bin/python scripts/build_lsp_test_binaries.py --source download/fiber/source-pr-1623
 ```
 
@@ -59,12 +59,41 @@ venv/bin/python -m pytest -vv -s --tb=short \
   --html=report/lsp-core16/regression.html
 ```
 
-2026-10-20 在旧测试仓库基线 `v0.9.1 / 852c97d`、上述固定 FNN/SDK 版本及最终驱动上实测：
+以下三轮历史结果使用 FNN/SDK `8419c005`。
+2026-10-20 在旧测试仓库基线 `v0.9.1 / 852c97d` 及最终驱动上实测：
 `16 passed in 2643.36s`，退出码 0，无跳过。
 2026-10-22 在 `v0.10.0 / 6088115` 基线上完整回归：`16 passed in 2579.42s`，无失败、错误或跳过。
 优化 LSP 节点准备后，相同基线、FNN/SDK 和 16 条用例再次通过：`16 passed in 1473.33s`，
 退出码 0，无失败、错误或跳过。整轮从 42 分 59 秒降到 24 分 33 秒，耗时减少约 43%。
+
+2026-10-22 将 FNN、SDK agent 和测试驱动一起升级到 `4028884` 后，沿用原场景和断言回归：
+先跑正常开通→收款→协作关闭，`1 passed in 112.12s`；再以
+`-k 'not test_checked_open_pay_and_close'` 运行上述三个文件，`15 passed, 1 deselected in 1368.61s`。
+两次退出码均为 0，合计 16 条全部通过，无失败、错误或跳过；排除项就是已单独通过的主流程。
+总执行时间 24 分 41 秒，用例集合与上一轮相同。原始日志及 HTML/JUnit 报告位于
+`report/lsp-core16-4028884-20261022/` 的 `smoke.*` 和 `regression.*`（本地报告不提交）。
 这些是本批范围的执行结果，不代表整个 LSP PR 已验收。
+
+## SSE 通道签名通知
+
+已批准的 [9 条 SSE 用例](../../../../reviews/lsp/sse-signing-events.md) 包含初始快照、实时推送、
+租户隔离、无效订阅、原会话重连、真实 SDK 自动恢复，以及新客户端接管与旧 SDK 停止重试。
+自动化位于 `test_sse_signing_events.py`，共 13 个方法：无效订阅的五种输入分别使用独立环境。
+沿用上述同版本 FNN/SDK、临时 `CKB_CLI_HOME` 和串行运行要求：
+
+```bash
+venv/bin/python -m pytest -vv -s --tb=short --durations=15 \
+  test_cases/fiber/devnet/lsp/test_sse_signing_events.py \
+  test_cases/fiber/devnet/lsp/test_channel_signing_retry.py::TestChannelSigningRetry::test_identical_retry_preserves_next_request \
+  --junitxml=report/lsp-sse/regression.xml \
+  --html=report/lsp-sse/regression.html
+```
+
+最后一条是原有重复提交回归，用于验证共享 gate 转发入口的默认行为；不计入新增 SSE 用例。
+
+2026-10-22 在 `4028884` 上执行上述范围：`14 passed in 1314.14s`（21 分 54 秒），退出码 0，
+无失败、错误或跳过。日志、JUnit 和 HTML 位于 `report/lsp-sse-4028884-20261022/regression.*`。
+GPT 6.1 sol 对照批准用例完成了代码及结果复核，未发现需要修改的问题。
 
 `python3 scripts/check_test_map.py` 检查评审行与 `TEST-MAP` 的对应关系。复选框只表示存在映射；
 本批 16 条均有映射。仓库原有 `PMP-01～05`、`SETTLE-01` 缺少对应评审行，会使全库检查退出码为 1，
