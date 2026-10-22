@@ -3,6 +3,7 @@
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 import socket
 import subprocess
@@ -12,9 +13,10 @@ from types import SimpleNamespace
 import requests
 import yaml
 
-from framework.basic_fiber import FiberTest
+from framework.basic_fiber import FiberTest, XUDT_TX_HASH
 from framework.fiber_rpc import FiberRPCClient
-from framework.test_fiber import FiberConfigPath
+from framework.helper.udt_contract import UdtContract, issue_udt_tx
+from framework.test_fiber import Fiber, FiberConfigPath, wait_for_port
 from framework.util import get_project_root
 from test_cases.fiber.devnet.lsp._signer_gate import SignatureGate
 from test_cases.fiber.devnet.lsp._retry_signer_gate import RetrySignatureGate
@@ -34,6 +36,15 @@ def stop_agent(process):
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=5)
+
+
+class LspFiber(Fiber):
+    def stop(self):
+        super().stop()
+        # Initial startup is a direct child; reap it before checking its old PID.
+        process = getattr(self, "process", None)
+        if process is not None:
+            process.wait(timeout=30)
 
 
 class LspTestBase(FiberTest):
@@ -94,10 +105,60 @@ class LspTestBase(FiberTest):
                 ), f"test port {port} already in use"
         super().setup_class()
 
-    def setUp(self):
-        # FiberTest supplies the chain, public node and a separate funding-signing node.
-        self.public_key = self.fiber1.get_pubkey()
-        self.fiber1.stop()
+    def setup_method(self, method):
+        # Keep FiberTest's fresh nodes, chain preparation and cleanup contract.
+        started = time.monotonic()
+        self.did_pass = None
+        self.beginNum = hex(self.node.getClient().get_tip_block_number())
+        self.fibers = []
+        self.new_fibers = []
+        self.fiber1 = LspFiber(
+            self.fiber_version,
+            self.account1_private_key,
+            "fiber/node1",
+            {
+                "rpc_listening_addr": f"127.0.0.1:{self.fiber1_rpc_port}",
+                "fiber_listening_addr": f"/ip4/127.0.0.1/tcp/{self.fiber1_p2p_port}",
+            },
+        )
+        self.fiber2 = LspFiber(
+            self.fiber_version,
+            self.account2_private_key,
+            "fiber/node2",
+            {
+                "rpc_listening_addr": f"127.0.0.1:{self.fiber2_rpc_port}",
+                "fiber_listening_addr": f"/ip4/127.0.0.1/tcp/{self.fiber2_p2p_port}",
+            },
+        )
+        self.fibers.extend((self.fiber1, self.fiber2))
+        self.udtContract = UdtContract(XUDT_TX_HASH, 0)
+        deploy_hash, deploy_index = self.udtContract.get_deploy_hash_and_index()
+        self.node.getClient().clear_tx_pool()
+        for _ in range(5):
+            self.Miner.miner_with_version(self.node, "0x0")
+        tx_hash = issue_udt_tx(
+            self.udtContract,
+            self.node.rpcUrl,
+            self.account1_private_key,
+            self.account1_private_key,
+            1000 * 100000000,
+        )
+        self.Miner.miner_until_tx_committed(self.node, tx_hash)
+        self.node.start_miner()
+        update_config = {
+            "ckb_rpc_url": self.node.rpcUrl,
+            "ckb_udt_whitelist": True,
+            "xudt_script_code_hash": self.Contract.get_ckb_contract_codehash(
+                deploy_hash, deploy_index, True, self.node.rpcUrl
+            ),
+            "xudt_cell_deps_tx_hash": deploy_hash,
+            "xudt_cell_deps_index": deploy_index,
+            **self.start_fiber_config,
+        }
+        for fiber in self.fibers:
+            fiber.prepare(update_config=update_config)
+
+        # Configure Hosted LSP before the first start, avoiding a stop/start cycle.
         config_path = Path(self.fiber1.fiber_config_path)
         # Preserve the template's hex scalars; YAML 1.1 loaders turn them into integers.
         config = config_path.read_text()
@@ -129,7 +190,44 @@ class LspTestBase(FiberTest):
             try_count=1,
             timeout=10,
         )
-        self.fiber1.start()
+        # The nodes have independent stores and ports; start both before waiting.
+        # Popen also avoids the shared pid.txt used by framework.run_command.
+        node_start = time.monotonic()
+        for fiber in self.fibers:
+            with (Path(fiber.tmp_path) / "node.log").open("a") as log:
+                process = subprocess.Popen(
+                    [
+                        str(BUNDLE / "fnn"),
+                        "-c",
+                        fiber.fiber_config_path,
+                        "-d",
+                        fiber.tmp_path,
+                    ],
+                    env={
+                        **os.environ,
+                        **fiber.extra_env,
+                        "FIBER_SECRET_KEY_PASSWORD": "password0",
+                        "RUST_LOG": f"info,fnn={self.fnn_log_level}",
+                    },
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                )
+            fiber.process = process
+            self.addCleanup(stop_agent, process)
+        for fiber in self.fibers:
+            wait_for_port(fiber.rpc_port, timeout=300, open=True)
+        self.fiber1.connect_peer(self.fiber2)
+        time.sleep(1)
+        print(
+            f"LSP nodes ready: startup={time.monotonic() - node_start:.2f}s, "
+            f"setup={time.monotonic() - started:.2f}s"
+        )
+
+    def setUp(self):
+        started = time.monotonic()
+        self.public_key = self.fiber1.get_pubkey()
+        config_path = Path(self.fiber1.fiber_config_path)
+        operator_token = (BUNDLE / "operator-token").read_text().strip()
         self.tenants = []
 
         # Allocate all wallets before opening channels, so the faucet cannot spend
@@ -323,6 +421,7 @@ class LspTestBase(FiberTest):
                 tenant["client"], tenant["channel_id"]
             )
             assert tenant["state"]["state_name"] != "ChannelReady"
+        print(f"LSP tenants ready: {time.monotonic() - started:.2f}s")
 
     def _channel_state(self, client, channel_id):
         channels = client.list_channels({})["channels"]
