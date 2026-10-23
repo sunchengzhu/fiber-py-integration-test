@@ -10,8 +10,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import requests
 
-from test_cases.fiber.devnet.lsp._signer_gate import forward_events
-
 
 class RetrySignatureGate:
     def __init__(self, upstream):
@@ -23,8 +21,6 @@ class RetrySignatureGate:
         self.authorization = None
         self.submissions = {}
         self.attempts = []
-        self.queries = []
-        self.pause_queries = False
         self.forwarded = []
         self.errors = []
         self.passthrough = False
@@ -33,37 +29,10 @@ class RetrySignatureGate:
         self.fault_started = None
         self.fault_applied = None
         self.client_closed = None
-        self.repolled_at = None
-        self.repolled = threading.Event()
+        self.on_fault = None
         gate = self
 
         class Handler(BaseHTTPRequestHandler):
-            def do_GET(self):
-                if self.path != "/lsp/events":
-                    self.send_error(404)
-                    return
-                with gate.lock:
-                    if gate.authorization is not None:
-                        assert self.headers.get("Authorization") == gate.authorization
-                    gate.queries.append(time.monotonic())
-                    paused = gate.pause_queries
-                    disconnected = (
-                        gate.fault_started is not None
-                        and gate.fault_mode == "disconnect"
-                    )
-                    if gate.fault_started is not None and gate.repolled_at is None:
-                        gate.repolled_at = time.monotonic()
-                        gate.repolled.set()
-                if disconnected:
-                    self.close_connection = True
-                    self.connection.shutdown(socket.SHUT_RDWR)
-                elif paused:
-                    self.send_response(503)
-                    self.send_header("Content-Length", "0")
-                    self.end_headers()
-                else:
-                    gate.forward_events(self)
-
             def do_POST(self):
                 try:
                     self.handle_rpc()
@@ -83,11 +52,8 @@ class RetrySignatureGate:
                 method = payload["method"]
                 params = payload["params"][0]
                 action = "forward"
+                fault_triggered = False
                 with gate.lock:
-                    if method == "get_channel_signing_status":
-                        gate.queries.append(time.monotonic())
-                        if gate.pause_queries:
-                            action = "pause"
                     if method == "submit_channel_signature":
                         gate.attempts.append((time.monotonic(), copy.deepcopy(params)))
                         if gate.authorization is None:
@@ -105,15 +71,15 @@ class RetrySignatureGate:
                     if target and params.get("channel_id") == target["channel_id"]:
                         assert gate.authorization == authorization
                         if gate.fault_started is not None:
-                            if method == "get_channel_signing_status":
-                                if gate.repolled_at is None:
-                                    gate.repolled_at = time.monotonic()
-                                    gate.repolled.set()
                             if gate.fault_mode == "disconnect":
                                 action = "disconnect"
                         elif method == "submit_channel_signature" and params == target:
                             gate.fault_started = time.monotonic()
                             action = gate.fault_mode
+                            fault_triggered = True
+
+                if fault_triggered and gate.on_fault is not None:
+                    gate.on_fault(action)
 
                 if action == "disconnect":
                     self.close_connection = True
@@ -179,9 +145,6 @@ class RetrySignatureGate:
         self.url = f"http://127.0.0.1:{self.server.server_port}"
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
-
-    def forward_events(self, handler):
-        forward_events(handler, self.upstream)
 
     def arm_fault(self, mode, submission):
         assert mode in ("disconnect", "lose_response")

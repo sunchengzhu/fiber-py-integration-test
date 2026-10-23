@@ -64,16 +64,37 @@ class TestChannelSigningRetry(ChannelSigningTestBase):
 
     # TEST-MAP: LSP-RETRY-04
     def test_unsent_signature_recovers_after_disconnect(self):
+        """
+        1. 保存未送达的有效签名，注入 HTTP 断线并拦住恢复订阅。
+        2. 核对原请求不变且从未提交，放行同一 SDK 的新订阅并核对补发。
+        3. 放行真实提交，核对首次应用及原通道、原注资完成。
+        """
+        # 1. HTTP 请求未转发；真正断线触发原 SDK 重新连接。
         original, submission = self._pending()
+        sdk_pid = self.tenant["agent"].pid
         self.gate.arm_fault("disconnect", submission)
-        self._wait_for_fault_repoll()
-        assert self.gate.fault_started is not None
+        attempted_at, connection, request = self._wait_for_fault_resubscription()
+
+        # 2. 新 subscribe 尚未转发，复核 R1 后才允许服务器补发。
         assert self._status() == original
         assert self.gate.forwarded == []
+        with self.subscription_proxy.lock:
+            assert any(
+                item["message"] == request and item["forwarded_at"] is None
+                for item in connection.requests
+            )
+        with self.gate.lock:
+            self.gate.fault_mode = None
+            self.gate.fault_submission = None
+        self.subscription_proxy.resume_subscriptions()
+        self._wait_for_subscription_request(original, self.gate.fault_started)
+        assert self.tenant["agent"].pid == sdk_pid
         print(
-            f"SDK retried status after disconnect in "
-            f"{self.gate.repolled_at - self.gate.fault_started:.3f}s"
+            f"SDK WS resubscribe after unsent request: "
+            f"{attempted_at - self.gate.fault_started:.3f}s"
         )
+
+        # 3. 首次真实上游结果必须 Applied，签名体及原业务身份不变。
         self._finish_opening()
         with self.gate.lock:
             first_params, first_reply = self.gate.forwarded[0]
@@ -82,27 +103,39 @@ class TestChannelSigningRetry(ChannelSigningTestBase):
 
     # TEST-MAP: LSP-RETRY-05
     def test_applied_signature_recovers_after_http_timeout(self):
+        """
+        1. 真实应用 S1，保持 HTTP 无响应，由 SDK 自然经历请求超时。
+        2. 观察同一 SDK 重新订阅并收到 R2，冻结下一提交后重交 S1。
+        3. 核对幂等与 R2 不变，完成原通道且不重复注资。
+        """
+        # 1. 不发送 HTTP 头、正文或 EOF，记录客户端自然关闭请求。
         original, submission = self._pending()
+        sdk_pid = self.tenant["agent"].pid
         self.gate.arm_fault("lose_response", submission)
-        self._wait_for_fault_repoll()
+        attempted_at, _, _ = self._wait_for_fault_resubscription()
         assert self.gate.fault_applied is not None
         for _ in range(20):
             if self.gate.client_closed is not None:
                 break
             time.sleep(0.1)
-        assert (
-            self.gate.client_closed is not None
-        ), "SDK did not cancel its unacknowledged request"
+        assert self.gate.client_closed is not None, "SDK did not cancel HTTP request"
+        assert self.gate.client_closed - self.gate.fault_started >= 9
         print(
-            f"SDK cancelled unacknowledged submission in "
+            f"SDK natural HTTP cancellation: "
             f"{self.gate.client_closed - self.gate.fault_started:.3f}s; "
-            f"next status query at {self.gate.repolled_at - self.gate.fault_started:.3f}s"
+            f"WS resubscribe: {attempted_at - self.gate.fault_started:.3f}s"
         )
+
+        # 2. 原 SDK 的真实新订阅交付 R2，不能用 Python 查询代替恢复。
         following, _ = self._pending(previous=original["request_id"])
+        self._wait_for_subscription_request(following, self.gate.fault_started)
+        assert self.tenant["agent"].pid == sdk_pid
         before = self._snapshot(self.client)
         self._submit(submission, "AlreadyApplied")
         assert self._status() == following
         assert self._snapshot(self.client) == before
+
+        # 3. 上游仅首次应用一次，保持最近记录后完成原通道。
         with self.gate.lock:
             assert len(self.gate.forwarded) == 1, self.gate.forwarded
             forwarded_submission, reply = self.gate.forwarded[0]

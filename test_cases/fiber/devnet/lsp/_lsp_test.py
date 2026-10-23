@@ -20,8 +20,9 @@ from framework.test_fiber import Fiber, FiberConfigPath, wait_for_port
 from framework.util import get_project_root
 from test_cases.fiber.devnet.lsp._signer_gate import SignatureGate
 from test_cases.fiber.devnet.lsp._retry_signer_gate import RetrySignatureGate
+from test_cases.fiber.devnet.lsp._subscription_observer import SubscriptionProxy
 
-REVISION = "40288844157cac8dd7fb025304be276cb1ac1f0b"
+REVISION = "24b5c38bc098aeb29de5f6af7ac28dc667f218e3"
 BUNDLE = Path(get_project_root()) / "download/fiber/pr-1623"
 BISCUIT_PUBLIC_KEY = (
     "ed25519/17b172749be74276f0ed35a5d0685752684a3c5722114bba447a2f301136db79"
@@ -170,9 +171,14 @@ class LspTestBase(FiberTest):
         config = config.replace(
             "  enabled_modules:\n", "  enabled_modules:\n    - lsp\n"
         )
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            ws_port = sock.getsockname()[1]
+        self.ws_url = f"ws://127.0.0.1:{ws_port}"
         config = config.replace(
             "rpc:\n",
             "rpc:\n"
+            f"  ws_listening_addr: 127.0.0.1:{ws_port}\n"
             f"  biscuit_public_key: {BISCUIT_PUBLIC_KEY}\n"
             f"  biscuit_private_key_path: {json.dumps(str(BUNDLE / 'biscuit-private-key'))}\n",
         )
@@ -246,6 +252,14 @@ class LspTestBase(FiberTest):
             status_file = directory / "status.json"
             gate = self.gate_class(self.fiber1.client.url)
             self.addCleanup(gate.close)
+            subscription_proxy = SubscriptionProxy(self.ws_url)
+            self.addCleanup(subscription_proxy.close)
+            # Hold a new subscribe before the SDK can recover from a deliberately
+            # unsent HTTP request. Other HTTP faults keep their natural timing.
+            if isinstance(gate, RetrySignatureGate):
+                gate.on_fault = lambda mode, proxy=subscription_proxy: (
+                    proxy.pause_subscriptions() if mode == "disconnect" else None
+                )
             with socket.socket() as sock:
                 sock.bind(("127.0.0.1", 0))
                 control_port = sock.getsockname()[1]
@@ -255,6 +269,8 @@ class LspTestBase(FiberTest):
                 str(BUNDLE / "lsp-integration-driver"),
                 "--rpc",
                 gate.url,
+                "--ws-rpc",
+                subscription_proxy.url,
                 "--store",
                 str(directory / "store"),
                 "--status-file",
@@ -308,6 +324,7 @@ class LspTestBase(FiberTest):
                 "label": label,
                 "client": client,
                 "gate": gate,
+                "subscription_proxy": subscription_proxy,
                 "agent": agent,
                 "status": status,
                 "command": agent_command,
@@ -464,6 +481,7 @@ class ChannelSigningTestBase(LspTestBase):
         self.client = self.tenant["client"]
         self.channel_id = self.tenant["channel_id"]
         self.gate = self.tenant["gate"]
+        self.subscription_proxy = self.tenant["subscription_proxy"]
         created = int(self._channel(self.client)["created_at"], 16) / 1000
         assert created + self.opening_window_seconds - time.time() >= (
             self.opening_window_margin
@@ -598,12 +616,58 @@ class ChannelSigningTestBase(LspTestBase):
         assert transaction["tx_status"]["status"] == "committed", transaction
         assert not local["pending_tlcs"] and not public["pending_tlcs"]
 
-    def _wait_for_fault_repoll(self):
+    def _wait_for_fault_resubscription(self):
+        """Observe this SDK's new subscribe attempt after the HTTP fault."""
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             assert self.tenant["agent"].poll() is None
             assert not self.gate.errors, self.gate.errors
-            if self.gate.repolled.is_set():
-                return
+            assert not self.subscription_proxy.errors, self.subscription_proxy.errors
+            fault_at = self.gate.fault_started
+            if fault_at is not None:
+                for (
+                    at,
+                    connection,
+                    request,
+                ) in self.subscription_proxy.subscribe_attempts():
+                    if (
+                        connection.started >= fault_at
+                        and at >= fault_at
+                        and request["params"][0] == "channel_signing"
+                    ):
+                        return at, connection, request
             time.sleep(0.1)
-        assert False, "SDK did not start a new status query after the injected fault"
+        assert False, "SDK did not reconnect and subscribe after the HTTP fault"
+
+    def _wait_for_subscription_request(self, pending, after, timeout=60):
+        """Require a new SDK connection, accepted subscription and exact delivery."""
+        deadline = time.monotonic() + timeout
+        expected = {
+            "type": "channel_signing",
+            "data": {"channel_id": self.channel_id, "status": pending},
+        }
+        while time.monotonic() < deadline:
+            assert self.tenant["agent"].poll() is None
+            assert not self.subscription_proxy.errors, self.subscription_proxy.errors
+            for (
+                accepted,
+                connection,
+                identity,
+                topic,
+            ) in self.subscription_proxy.successful_subscriptions():
+                if (
+                    connection.started < after
+                    or accepted < after
+                    or topic != "channel_signing"
+                ):
+                    continue
+                for delivered, sub_id, event in connection.delivered_frames():
+                    if (
+                        delivered >= after
+                        and type(sub_id) is type(identity)
+                        and sub_id == identity
+                        and event == expected
+                    ):
+                        return connection, identity
+            time.sleep(0.1)
+        assert False, f"new SDK subscription did not deliver original request {pending}"

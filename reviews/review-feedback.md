@@ -1,3 +1,13 @@
 - model: unavailable | cases: PR1675-04 PR1675-07 | feedback: `1675-04` 和`PR1675-07` 可以先写测试，以测试结果为准，可以写自动化测试了，能复用的用例尽量复用，自动化框架里的fnn 我已经更新了
 - model: unavailable | cases: H32V2-34 | feedback: 不应该卡在`NegotiatingFunding`， 新节点应该abort channel 让旧节点知道channel 创建失败
 - model: unavailable | cases: H32V2-05 | feedback: 须迁移
+- model: unavailable | cases: LSP 场景评审流程 | feedback: 现在不是gate1通过了走gate2流程嘛 你看下ai-test-agent
+- model: unavailable | cases: LSP Gate1 分析范围 | feedback: 对 你扩大一下当前gate1的范围吧
+- model: unavailable | cases: LSP Gate1 异常时间与超时预期 | feedback: 我需要知道你异常时间的控制 这个pr有描述吗 然后超时保护你没有预期结果吗
+- model: unavailable | cases: LSP-RETRY-04、LSP-RETRY-05 时间控制 | feedback: 你看下怎么样好点 结合pr和sdk分析一下
+- model: unavailable | cases: LSP 进程重启恢复补充流程 | feedback: 不是从gate1开始的吗
+- model: unavailable | cases: PR #1623 Python 功能测试与上游诊断的范围边界 | feedback: 你怎么会有一个改rust的压力测试场景 而不是聚焦写python的功能测试用例 你怎么不找我确认 ai-test-agent里面有这方面的规定吗
+- model: unavailable | cases: LSP 签名订阅迁移 Gate1 | feedback: 太坑了 这个是他刚刚改的 能不能改造一下我现有的用例 无效的可以删除
+- model: unavailable | cases: LSP 签名订阅命名 | feedback: 现有条目名称带有明显的SSE 要改造一下
+- model: unavailable | cases: LSP 签名订阅 ID 与映射迁移 | feedback: ID 也改为 LSP-SUB-*，同步迁移映射
+- model: unavailable | cases: LSP-SUBSCRIPTION-01～07、10～13 完整前缀选择（侧边对话转达，替换此前 SUB 选择） | feedback: 那还是长一点吧

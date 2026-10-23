@@ -46,19 +46,17 @@ class TestChannelSigningRecovery(ChannelSigningTestBase):
             assert self.tenant["agent"].poll() is None
             assert not self.gate.errors, self.gate.errors
             with self.gate.lock:
-                queries = [t for t in self.gate.queries if t >= started]
                 attempts = [
                     body
                     for t, body in self.gate.attempts
                     if t >= started and body["request_id"] == pending["request_id"]
                 ]
-            if queries and attempts and self.tenant["status_file"].exists():
+            if attempts and self.tenant["status_file"].exists():
                 break
             time.sleep(0.2)
         else:
-            assert (
-                False
-            ), "new SDK process did not query and sign the original pending request"
+            assert False, "new SDK process did not sign the original pending request"
+        self._wait_for_subscription_request(pending, started)
         restored = json.loads(self.tenant["status_file"].read_text())
         for field in (
             "tenant_id",
@@ -79,10 +77,10 @@ class TestChannelSigningRecovery(ChannelSigningTestBase):
     def _restart_fnn(self, pending):
         sdk_pid = self.tenant["agent"].pid
         controls = list(self.tenant["control_calls"])
+        self.subscription_proxy.freeze()
         with self.gate.lock:
-            self.gate.pause_queries = True
             self.gate.passthrough = False
-        # Drain any in-flight poll before stopping the upstream server.
+        # Wait for the current SDK event handler before stopping the server.
         self.signer_control(self.tenant, "records")
         old_pid = int(
             subprocess.check_output(
@@ -113,8 +111,9 @@ class TestChannelSigningRecovery(ChannelSigningTestBase):
         # The unchanged client still uses the original tenant token.
         assert self._status() == pending
         assert self.tenant["control_calls"][:-1] == controls
-        with self.gate.lock:
-            self.gate.pause_queries = False
+        self.subscription_proxy.resume()
+        self._wait_for_subscription_request(pending, stopped)
+        assert self.tenant["agent"].pid == sdk_pid
         print(f"Hosted FNN process recovered: {old_pid} -> {new_pid}; SDK stayed alive")
 
     def _check_first_forward(self, submission):
@@ -438,20 +437,42 @@ class TestChannelSigningRecovery(ChannelSigningTestBase):
 
     # TEST-MAP: LSP-RECOVERY-02
     def test_sdk_restart_with_saved_unsubmitted_opening_signature(self):
+        """
+        1. 保存已签但未送达的开通请求，核对安全余量。
+        2. 强制退出 SDK，以原存储新进程订阅恢复原请求并生成相同签名。
+        3. 放行首次应用，核对原通道及原注资完成。
+        """
+        # 1. 保存已签但未送达的开通请求，核对安全余量。
         pending, submission = self._pending()
         assert not self.gate.forwarded
         self._check_opening_window(900)
+        # 2. 强制退出 SDK，以原存储新进程订阅恢复原请求并生成相同签名。
         self._kill_sdk()
         assert self._status() == pending
         self._restore_sdk(pending, submission)
+
+        # 3. 放行首次应用，核对原通道及原注资完成。
         self._check_opening_window(180)
         self._finish_opening()
         self._check_first_forward(submission)
 
     # TEST-MAP: LSP-RECOVERY-03
     def test_sdk_restart_without_learning_applied_result(self):
+        """
+        1. 在转发 S1 前冻结全部 WS 通知和新订阅，应用后扣住 HTTP 响应。
+        2. 确认旧 SDK 未收到 R2 后强制退出，以原存储新进程订阅恢复 R2。
+        3. 重交 S1 核对幂等且 R2 不变，放行后完成原通道及原注资。
+        """
+        # 1. 在下一次 S1 已到代理、尚未到 FNN 时建立同步冻结屏障。
         first, submission = self._pending()
         self._check_opening_window(900)
+        checkpoint = {}
+
+        def freeze_before_forward(mode):
+            assert mode == "lose_response"
+            checkpoint["frozen_at"] = self.subscription_proxy.freeze()
+
+        self.gate.on_fault = freeze_before_forward
         self.gate.arm_fault("lose_response", submission)
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
@@ -461,11 +482,15 @@ class TestChannelSigningRecovery(ChannelSigningTestBase):
             time.sleep(0.05)
         else:
             assert False, "upstream did not apply the intercepted signature"
-        # No successful response was written; prevent any later query from revealing R2.
-        with self.gate.lock:
-            self.gate.pause_queries = True
-            assert not self.gate.repolled.is_set()
+        assert checkpoint["frozen_at"] < self.gate.fault_applied
+
+        # 2. 代理实际交付记录没有越过冻结点；新进程只能读服务器新补发。
         self._kill_sdk()
+        for connection in self.subscription_proxy.connections():
+            assert all(
+                at <= checkpoint["frozen_at"]
+                for at, _, _ in connection.delivered_frames()
+            )
         assert (
             self.gate.client_closed is None
             or self.gate.client_closed >= self.gate.fault_applied
@@ -482,11 +507,17 @@ class TestChannelSigningRecovery(ChannelSigningTestBase):
         else:
             assert False, f"next signing request did not appear: {following}"
         with self.gate.lock:
-            assert not self.gate.repolled.is_set()
+            assert not any(
+                body["request_id"] == following["request_id"]
+                for _, body in self.gate.attempts
+            )
             self.gate.fault_mode = None
             self.gate.fault_submission = None
-            self.gate.pause_queries = False
+            self.gate.on_fault = None
+        self.subscription_proxy.resume()
         self._restore_sdk(following)
+
+        # 3. 保留真实幂等、完整 R2、原通道和注资身份的判断。
         self._submit(submission, "AlreadyApplied")
         assert self._status() == following
         self._check_opening_window(180)
@@ -495,16 +526,31 @@ class TestChannelSigningRecovery(ChannelSigningTestBase):
 
     # TEST-MAP: LSP-RECOVERY-04
     def test_hosted_fnn_restart_with_pending_opening_signature(self):
+        """
+        1. 冻结未送达的开通签名并保存完整请求。
+        2. 正常重启整个 FNN，同一 SDK 重新订阅取得原请求。
+        3. 放行签名，核对首次应用及原通道原注资完成。
+        """
+        # 1. 冻结未送达的开通签名并保存完整请求。
         pending, submission = self._pending()
         assert not self.gate.forwarded
         self._check_opening_window(900)
+        # 2. 正常重启整个 FNN，同一 SDK 重新订阅取得原请求。
         self._restart_fnn(pending)
+
+        # 3. 放行签名，核对首次应用及原通道原注资完成。
         self._check_opening_window(180)
         self._finish_opening()
         self._check_first_forward(submission)
 
     # TEST-MAP: LSP-RECOVERY-05
     def test_hosted_fnn_restart_preserves_payment_receipt_and_next_request(self):
+        """
+        1. 发起唯一支付并应用关联承诺 S1，冻结下一请求 R2。
+        2. 正常重启 FNN，同一 SDK 重新订阅恢复 R2，重交 S1仍幂等。
+        3. 恢复原连接和支付，核对终态、TLC 清理及四端余额只结算一次。
+        """
+        # 1. 发起唯一支付并应用关联承诺 S1，冻结下一请求 R2。
         self._finish_opening()
         self._start_payment()
         first, submission = self._pending()
@@ -521,15 +567,24 @@ class TestChannelSigningRecovery(ChannelSigningTestBase):
         self._check_payment_window(900)
         self._submit(submission)
         following, _ = self._pending(first["request_id"])
+        # 2. 正常重启 FNN，同一 SDK 重新订阅恢复 R2，重交 S1仍幂等。
         self._restart_fnn(following)
         self._submit(submission, "AlreadyApplied")
         assert self._status() == following
+
+        # 3. 恢复原连接和支付，核对终态、TLC 清理及四端余额只结算一次。
         self.fiber2.connect_peer(self.fiber1)
         self._check_payment_window(180)
         self._finish_payment()
 
     # TEST-MAP: LSP-RECOVERY-06
     def test_sdk_restart_preserves_payment_revocation_and_authorizations(self):
+        """
+        1. 保存支付授权及该支付的撤销签名，保持其未提交。
+        2. 以原存储重启 SDK，通过新订阅恢复原请求和相同提交体。
+        3. 首次应用撤销签名并完成原支付，核对资金只结算一次。
+        """
+        # 1. 保存支付授权及该支付的撤销签名，保持其未提交。
         self._finish_opening()
         self._start_payment()
         pending, submission = self._pending()
@@ -566,14 +621,23 @@ class TestChannelSigningRecovery(ChannelSigningTestBase):
             s["request_id"] == submission["request_id"] for s, _ in self.gate.forwarded
         )
         self._check_payment_window(900)
+        # 2. 以原存储重启 SDK，通过新订阅恢复原请求和相同提交体。
         self._kill_sdk()
         self._restore_sdk(pending, submission)
+
+        # 3. 首次应用撤销签名并完成原支付，核对资金只结算一次。
         self._check_payment_window(180)
         self._finish_payment()
         self._check_first_forward(submission)
 
     # TEST-MAP: LSP-RECOVERY-07
     def test_sdk_restart_preserves_close_authorization_and_outputs(self):
+        """
+        1. 完成收款并批准关闭，冻结已保存但未送达的关闭签名。
+        2. 以原存储重启 SDK，新订阅恢复原关闭请求且不重新授权。
+        3. 首次应用后确认关闭交易，核对原注资只花费一次及输出地址金额。
+        """
+        # 1. 完成收款并批准关闭，冻结已保存但未送达的关闭签名。
         self._finish_opening()
         self._start_payment(pause=False)
         self._finish_payment()
@@ -585,7 +649,10 @@ class TestChannelSigningRecovery(ChannelSigningTestBase):
         assert not any(
             s["request_id"] == submission["request_id"] for s, _ in self.gate.forwarded
         )
+        # 2. 以原存储重启 SDK，新订阅恢复原关闭请求且不重新授权。
         self._kill_sdk()
         self._restore_sdk(pending, submission)
+
+        # 3. 首次应用后确认关闭交易，核对原注资只花费一次及输出地址金额。
         self._finish_close(content["transaction"])
         self._check_first_forward(submission)

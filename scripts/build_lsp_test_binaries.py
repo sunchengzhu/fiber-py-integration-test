@@ -9,7 +9,7 @@ from pathlib import Path
 import shutil
 import subprocess
 
-REVISION = "40288844157cac8dd7fb025304be276cb1ac1f0b"
+REVISION = "24b5c38bc098aeb29de5f6af7ac28dc667f218e3"
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -73,6 +73,7 @@ def main():
             '[workspace]\n[[bin]]\nname = "lsp-integration-driver"\npath = "main.rs"\n'
             "[dependencies]\n" + dependencies + "\n"
             'anyhow = "1.0"\nclap = { version = "4.5", features = ["derive"] }\n'
+            'biscuit-auth = "=6.0.0"\n'
             'ckb-types = "1"\nckb-jsonrpc-types = "1"\n'
             'serde = { version = "1.0", features = ["derive"] }\nserde_json = "1.0"\n'
             'tokio = { version = "1", features = ["io-util", "net", "macros", "rt-multi-thread", "time"] }\n'

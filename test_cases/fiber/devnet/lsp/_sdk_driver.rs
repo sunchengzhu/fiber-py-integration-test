@@ -6,7 +6,7 @@ use fiber_lsp_sdk::{
     ChannelSigningContent, CloseAuthorization, CommitmentParameters, Musig2SignableContent,
     OpeningNetwork, PaymentAuthorization,
 };
-use fiber_lsp_sdk_agent::{Agent, AgentConfig, FileSignerStore, HttpFiberRpc};
+use fiber_lsp_sdk_agent::{Agent, AgentConfig, EventStream, FileSignerStore, HttpFiberRpc};
 use fiber_types::{ChannelActorData, Hash256};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -20,6 +20,9 @@ use tokio::{
 struct Args {
     #[arg(long)]
     rpc: String,
+    /// Dedicated WebSocket RPC URL for signing subscriptions.
+    #[arg(long)]
+    ws_rpc: String,
     #[arg(long)]
     store: PathBuf,
     #[arg(long)]
@@ -28,9 +31,74 @@ struct Args {
     control_addr: String,
     #[arg(long)]
     operator_token: String,
-    /// Deadline tests save real signatures for explicit submission by Python.
+    /// Tests save real signatures for explicit submission by Python.
     #[arg(long)]
     ack_held_events: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum MissingPermission {
+    SubscriptionsWrite,
+    ChannelSigningRead,
+}
+
+#[derive(Deserialize)]
+struct SubscriptionToken {
+    token: String,
+    private_key_file: PathBuf,
+    missing_permission: MissingPermission,
+}
+
+fn subscription_token() -> Result<()> {
+    use biscuit_auth::{
+        builder::{Fact, Term},
+        AuthorizerBuilder, Biscuit, KeyPair, PrivateKey,
+    };
+    use std::str::FromStr;
+
+    let input: SubscriptionToken = serde_json::from_reader(std::io::stdin())?;
+    // This is the public devnet test key, never a production signing identity.
+    let private_key = std::fs::read_to_string(input.private_key_file)?;
+    let root = KeyPair::from(&PrivateKey::from_str(private_key.trim())?);
+    let original = Biscuit::from_base64(&input.token, root.public())?;
+    let mut authorizer = AuthorizerBuilder::new().build(&original)?;
+    // Default queries trust authority facts only, matching FNN's scope routing.
+    let tenants: Vec<(String,)> = authorizer.query("data($id) <- tenant($id)")?;
+    let nodes: Vec<(String,)> = authorizer.query("data($id) <- node($id)")?;
+    ensure!(tenants.len() == 1 && nodes.len() == 1, "expected tenant token");
+    let builder = Biscuit::builder()
+        .fact(Fact::new("tenant".into(), &[Term::Str(tenants[0].0.clone())]))?
+        .fact(Fact::new("node".into(), &[Term::Str(nodes[0].0.clone())]))?;
+    let builder = match input.missing_permission {
+        MissingPermission::SubscriptionsWrite => builder.fact("read(\"channels\")")?,
+        MissingPermission::ChannelSigningRead => builder.fact("write(\"subscriptions\")")?,
+    };
+    println!("{}", json!({"token": builder.build(&root)?.to_base64()?}));
+    Ok(())
+}
+
+fn operator_subscription_token() -> Result<()> {
+    use biscuit_auth::{Biscuit, KeyPair, PrivateKey};
+    use std::str::FromStr;
+
+    #[derive(Deserialize)]
+    struct Input {
+        private_key_file: PathBuf,
+    }
+    let input: Input = serde_json::from_reader(std::io::stdin())?;
+    // The upstream Bruno operator fixture predates subscriptions. Issue only
+    // the two required capabilities from the same public devnet test key.
+    // No tenant or node fact: this credential must resolve to the host scope.
+    let private_key = std::fs::read_to_string(input.private_key_file)?;
+    let root = KeyPair::from(&PrivateKey::from_str(private_key.trim())?);
+    let token = Biscuit::builder()
+        .fact("write(\"subscriptions\")")?
+        .fact("read(\"channels\")")?
+        .build(&root)?
+        .to_base64()?;
+    println!("{}", json!({"token": token}));
+    Ok(())
 }
 
 // The fee template is fixed by the devnet contracts, not a signing response.
@@ -234,6 +302,12 @@ async fn control(agent: &mut Agent<HttpFiberRpc, FileSignerStore>, value: Value)
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("subscription-token") {
+        return subscription_token();
+    }
+    if std::env::args().nth(1).as_deref() == Some("operator-subscription-token") {
+        return operator_subscription_token();
+    }
     if std::env::args().nth(1).as_deref() == Some("commitment-message") {
         let transaction: ckb_jsonrpc_types::Transaction =
             serde_json::from_reader(std::io::stdin())?;
@@ -258,7 +332,7 @@ async fn main() -> Result<()> {
     )
     .await?;
     agent.initialize().await?;
-    let mut events = rpc.subscribe_events(agent.tenant_token()?)?;
+    let mut events = EventStream::connect(&args.ws_rpc, agent.tenant_token()?)?;
     let listener = TcpListener::bind(&args.control_addr).await?;
     loop {
         tokio::select! {
@@ -280,13 +354,13 @@ async fn main() -> Result<()> {
                 let delivery = delivery.context("tenant event reader stopped")?;
                 let result = agent.handle_event(delivery.event).await;
                 // A deliberately held, already saved signature is a test
-                // checkpoint, not a broken SSE connection. Real RPC/SDK errors
+                // checkpoint, not a broken subscription. Real RPC/SDK errors
                 // still use the upstream reconnect path, including HTTP timeout.
                 let held_by_test = args.ack_held_events && result.as_ref().err()
                     .is_some_and(|error| format!("{error:#}") == "test driver pauses this submission");
                 let _ = delivery.processed.send(result.is_ok() || held_by_test);
                 if held_by_test {
-                    eprintln!("event: saved signature held by test; SSE stays connected");
+                    eprintln!("event: saved signature held by test; subscription stays connected");
                 } else if let Err(error) = result {
                     eprintln!("event: {error:#}");
                 }

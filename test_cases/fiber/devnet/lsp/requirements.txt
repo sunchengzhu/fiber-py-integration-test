@@ -1,0 +1,2 @@
+# Dedicated WebSocket listener observation and transparent fault injection.
+websockets==15.0.1

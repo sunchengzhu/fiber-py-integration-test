@@ -7,37 +7,6 @@ import threading
 import requests
 
 
-def forward_events(handler, upstream):
-    """Relay the real authenticated SSE stream without buffering event bodies."""
-    headers = {
-        name: handler.headers[name]
-        for name in ("Authorization", "Accept", "x-lsp-session-id")
-        if name in handler.headers
-    }
-    try:
-        with requests.Session() as session:
-            session.trust_env = False
-            with session.get(
-                upstream.rstrip("/") + handler.path,
-                headers=headers,
-                stream=True,
-                timeout=(10, 65),
-            ) as response:
-                handler.send_response(response.status_code)
-                for name in ("Content-Type", "x-lsp-session-id", "Retry-After"):
-                    if name in response.headers:
-                        handler.send_header(name, response.headers[name])
-                handler.end_headers()
-                handler.wfile.flush()
-                for chunk in response.iter_content(chunk_size=None):
-                    handler.wfile.write(chunk)
-                    handler.wfile.flush()
-    except (requests.RequestException, OSError):
-        # FNN restart or SDK termination closes a live stream; its own SSE
-        # reconnect logic must recover outstanding work from the real node.
-        handler.close_connection = True
-
-
 class SignatureGate:
     def __init__(self, upstream):
         self.upstream = upstream
@@ -50,9 +19,6 @@ class SignatureGate:
         gate = self
 
         class Handler(BaseHTTPRequestHandler):
-            def do_GET(self):
-                forward_events(self, gate.upstream)
-
             def do_POST(self):
                 payload = json.loads(
                     self.rfile.read(int(self.headers["Content-Length"]))
