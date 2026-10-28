@@ -16,8 +16,16 @@ import time
 
 import requests
 
-from test_cases.fiber.devnet.lsp._lsp_test import BUNDLE, REVISION, ChannelSigningTestBase, stop_agent
-from test_cases.fiber.devnet.lsp._commitment_broadcast_gate import CommitmentBroadcastGate, REMOTE_ERROR
+from test_cases.fiber.devnet.lsp._lsp_test import (
+    BUNDLE,
+    REVISION,
+    ChannelSigningTestBase,
+    stop_agent,
+)
+from test_cases.fiber.devnet.lsp._commitment_broadcast_gate import (
+    CommitmentBroadcastGate,
+    REMOTE_ERROR,
+)
 from test_cases.fiber.devnet.lsp._competing_close_observer import CompetingCloseObserver
 
 # These two never send the wallet funding signature, so setup stops before any
@@ -39,11 +47,14 @@ class _RecoveryBudgetExpired(BaseException):
 
 def ckb_hash(preimage):
     """Fiber's default CkbHash: blake2b-256 with the CKB personalization."""
-    return "0x" + hashlib.blake2b(
-        bytes.fromhex(preimage.replace("0x", "")),
-        digest_size=32,
-        person=b"ckb-default-hash",
-    ).hexdigest()
+    return (
+        "0x"
+        + hashlib.blake2b(
+            bytes.fromhex(preimage.replace("0x", "")),
+            digest_size=32,
+            person=b"ckb-default-hash",
+        ).hexdigest()
+    )
 
 
 def _raw_transaction_hash(tx):
@@ -52,8 +63,11 @@ def _raw_transaction_hash(tx):
     Checked against real CKB accepted hashes as well as the A spawn hash; this
     distinguishes dependency refreshes that share a canonical signing message.
     """
+
     def number(value, size=4):
-        return (int(value, 16) if isinstance(value, str) else value).to_bytes(size, "little")
+        return (int(value, 16) if isinstance(value, str) else value).to_bytes(
+            size, "little"
+        )
 
     def raw(value):
         return bytes.fromhex(value.removeprefix("0x"))
@@ -74,23 +88,58 @@ def _raw_transaction_hash(tx):
 
     def script(value):
         args = raw(value["args"])
-        return table([raw(value["code_hash"]), bytes([{"data": 0, "type": 1, "data1": 2, "data2": 4}[value["hash_type"]]]),
-                      number(len(args)) + args])
+        return table(
+            [
+                raw(value["code_hash"]),
+                bytes(
+                    [{"data": 0, "type": 1, "data1": 2, "data2": 4}[value["hash_type"]]]
+                ),
+                number(len(args)) + args,
+            ]
+        )
 
-    encoded = table([
-        number(tx["version"]),
-        fixed([outpoint(d["out_point"]) + bytes([{"code": 0, "dep_group": 1}[d["dep_type"]]]) for d in tx["cell_deps"]]),
-        fixed([raw(h) for h in tx["header_deps"]]),
-        fixed([number(i["since"], 8) + outpoint(i["previous_output"]) for i in tx["inputs"]]),
-        table([table([number(o["capacity"], 8), script(o["lock"]), script(o["type"]) if o["type"] else b""])
-               for o in tx["outputs"]]),
-        table([number(len(raw(d))) + raw(d) for d in tx["outputs_data"]]),
-    ])
-    return "0x" + hashlib.blake2b(encoded, digest_size=32, person=b"ckb-default-hash").hexdigest()
+    encoded = table(
+        [
+            number(tx["version"]),
+            fixed(
+                [
+                    outpoint(d["out_point"])
+                    + bytes([{"code": 0, "dep_group": 1}[d["dep_type"]]])
+                    for d in tx["cell_deps"]
+                ]
+            ),
+            fixed([raw(h) for h in tx["header_deps"]]),
+            fixed(
+                [
+                    number(i["since"], 8) + outpoint(i["previous_output"])
+                    for i in tx["inputs"]
+                ]
+            ),
+            table(
+                [
+                    table(
+                        [
+                            number(o["capacity"], 8),
+                            script(o["lock"]),
+                            script(o["type"]) if o["type"] else b"",
+                        ]
+                    )
+                    for o in tx["outputs"]
+                ]
+            ),
+            table([number(len(raw(d))) + raw(d) for d in tx["outputs_data"]]),
+        ]
+    )
+    return (
+        "0x"
+        + hashlib.blake2b(
+            encoded, digest_size=32, person=b"ckb-default-hash"
+        ).hexdigest()
+    )
 
 
 class TestChannelSigningDeadline(ChannelSigningTestBase):
-    # Save signatures without converting this deliberate checkpoint into SSE
+    # Save signatures without converting this deliberate checkpoint into subscription
     # reconnect failures and exponential backoff. Python submits the real result.
     agent_extra_args = ("--ack-held-events",)
     # The hosting FNN runs with a 180 s opening timeout and a 60 s external
@@ -109,15 +158,26 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         self.broadcast_gate = None
         if method.__name__ == RECOVERY_TEST:
             root = os.environ.get("LSP_RECOVERY_ARTIFACTS")
-            self.recovery_directory = Path(root) if root else Path(tempfile.mkdtemp(
-                prefix="lsp-loser-recovery-", dir="report"
-            )) / "case"
+            self.recovery_directory = (
+                Path(root)
+                if root
+                else Path(tempfile.mkdtemp(prefix="lsp-loser-recovery-", dir="report"))
+                / "case"
+            )
             self.recovery_directory.mkdir(parents=True, exist_ok=False)
-            self.recovery_evidence = {"revision": REVISION, "case": "LSP-TIMEOUT-12",
-                                      "result": "incomplete", "observations": []}
-            self.recovery_observer = CompetingCloseObserver(self.node.rpcUrl, self.recovery_directory)
-            self.start_fiber_config = {**self.start_fiber_config,
-                                       "ckb_rpc_url": self.recovery_observer.url}
+            self.recovery_evidence = {
+                "revision": REVISION,
+                "case": "LSP-TIMEOUT-12",
+                "result": "incomplete",
+                "observations": [],
+            }
+            self.recovery_observer = CompetingCloseObserver(
+                self.node.rpcUrl, self.recovery_directory
+            )
+            self.start_fiber_config = {
+                **self.start_fiber_config,
+                "ckb_rpc_url": self.recovery_observer.url,
+            }
             self.addCleanup(self._recovery_cleanup)
         if method.__name__ in ISOLATED_CLOSE_TESTS:
             self.deadline_evidence = {"test": method.__name__, "observations": []}
@@ -125,7 +185,8 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
                 self.node.rpcUrl, BUNDLE / "lsp-integration-driver"
             )
             self.start_fiber_config = {
-                **self.start_fiber_config, "ckb_rpc_url": self.broadcast_gate.url
+                **self.start_fiber_config,
+                "ckb_rpc_url": self.broadcast_gate.url,
             }
             # Registered first: SDK and FNN cleanup runs before the chain proxy.
             self.addCleanup(self._close_broadcast_gate)
@@ -146,9 +207,14 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         finally:
             self.broadcast_gate.stop()
             self.deadline_evidence["broadcasts"] = self.broadcast_gate.snapshot()
-            directory = Path(os.environ.get(
-                "LSP_DEADLINE_ARTIFACTS", "report/lsp-timeout-isolated"
-            )) / self._testMethodName
+            directory = (
+                Path(
+                    os.environ.get(
+                        "LSP_DEADLINE_ARTIFACTS", "report/lsp-timeout-isolated"
+                    )
+                )
+                / self._testMethodName
+            )
             directory.mkdir(parents=True, exist_ok=True)
             (directory / "evidence.json").write_text(
                 json.dumps(self.deadline_evidence, indent=2) + "\n"
@@ -163,7 +229,9 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
                 if path is not None and path.exists():
                     shutil.copy2(path, directory / label)
             print(f"isolated deadline evidence: {directory}")
-            assert not self.deadline_evidence["broadcasts"]["errors"], self.deadline_evidence["broadcasts"]["errors"]
+            assert not self.deadline_evidence["broadcasts"][
+                "errors"
+            ], self.deadline_evidence["broadcasts"]["errors"]
 
     def setUp(self):
         if self._testMethodName in WALLET_HOLD_TESTS:
@@ -182,20 +250,19 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
 
     def _channel_view(self, client):
         channels = client.list_channels({"include_closed": True})["channels"]
-        return next(
-            (c for c in channels if c["channel_id"] == self.channel_id), None
-        )
+        return next((c for c in channels if c["channel_id"] == self.channel_id), None)
 
     def _abort_entry(self, client):
         """The synthesized failure entry only, never the in-progress opening."""
         channels = client.list_channels({"only_pending": True})["channels"]
-        entry = next(
-            (c for c in channels if c["channel_id"] == self.channel_id), None
-        )
+        entry = next((c for c in channels if c["channel_id"] == self.channel_id), None)
         if entry is None:
             return None
         state = entry["state"]
-        if state["state_name"] == "Closed" and "FUNDING_ABORTED" in state["state_flags"]:
+        if (
+            state["state_name"] == "Closed"
+            and "FUNDING_ABORTED" in state["state_flags"]
+        ):
             return entry
         return None
 
@@ -374,8 +441,10 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         )
         assert self._commitment_hash(self.client) != payment["commitment_before"]
         signed = [
-            record for record in records
-            if record["complete"] and not record["for_remote"]
+            record
+            for record in records
+            if record["complete"]
+            and not record["for_remote"]
             and record["transaction_hash"] == self._commitment_hash(self.client)
         ]
         assert len(signed) == 1, records
@@ -392,7 +461,10 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
             status = self._status()
             if status["type"] == "NoSignatureRequired":
                 return None
-            if status["type"] == "SignatureRequired" and status["request_id"] != previous:
+            if (
+                status["type"] == "SignatureRequired"
+                and status["request_id"] != previous
+            ):
                 with self.gate.lock:
                     submission = copy.deepcopy(
                         self.gate.submissions.get(status["request_id"])
@@ -471,9 +543,7 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
                 tx_hash = view["shutdown_transaction_hash"]
                 tx = self.node.getClient().get_transaction(tx_hash)
                 if tx["tx_status"]["status"] == "committed":
-                    assert tx["transaction"]["inputs"][0][
-                        "previous_output"
-                    ] == {
+                    assert tx["transaction"]["inputs"][0]["previous_output"] == {
                         "tx_hash": funding["tx_hash"],
                         "index": funding["index"],
                     }, tx["transaction"]
@@ -485,8 +555,10 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
     def _assert_force_close_uses(self, funding, commitment_after):
         records = self.signer_control(self.tenant, "records")
         signed = [
-            record for record in records
-            if record["complete"] and not record["for_remote"]
+            record
+            for record in records
+            if record["complete"]
+            and not record["for_remote"]
             and record["transaction_hash"] == commitment_after
         ]
         assert len(signed) == 1, records
@@ -504,14 +576,19 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         transaction.pop("hash")
         message = subprocess.check_output(
             [str(BUNDLE / "lsp-integration-driver"), "commitment-message"],
-            input=json.dumps(transaction), text=True,
+            input=json.dumps(transaction),
+            text=True,
         ).strip()
         assert message == signed[0]["signing_message"], (
-            "confirmed close does not match the saved signed commitment", message, signed[0]
+            "confirmed close does not match the saved signed commitment",
+            message,
+            signed[0],
         )
         peer = self._channel_view(self.fiber1.client)
         if peer and peer["shutdown_transaction_hash"]:
-            assert peer["shutdown_transaction_hash"] != closed["shutdown_transaction_hash"]
+            assert (
+                peer["shutdown_transaction_hash"] != closed["shutdown_transaction_hash"]
+            )
         return view, tx, observed_at
 
     def _arm_signature_gate(self):
@@ -528,8 +605,12 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         return min(cap, remaining)
 
     def _observe(self, stage, **values):
-        entry = {"stage": stage, "monotonic": time.monotonic(),
-                 "wall_ms": time.time() * 1000, **values}
+        entry = {
+            "stage": stage,
+            "monotonic": time.monotonic(),
+            "wall_ms": time.time() * 1000,
+            **values,
+        }
         self.deadline_evidence["observations"].append(entry)
         print(f"deadline {stage}: {json.dumps(entry)}")
 
@@ -539,7 +620,8 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         with requests.Session() as session:
             session.trust_env = False
             response = session.post(
-                url, headers=headers,
+                url,
+                headers=headers,
                 json={"jsonrpc": "2.0", "id": 81, "method": method, "params": params},
                 timeout=self._remaining(until),
             )
@@ -559,7 +641,10 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
 
     def _isolated_status(self, until):
         return self._isolated_rpc(
-            self.client, "get_channel_signing_status", [{"channel_id": self.channel_id}], until
+            self.client,
+            "get_channel_signing_status",
+            [{"channel_id": self.channel_id}],
+            until,
         )["status"]
 
     def _isolated_records(self, until):
@@ -595,7 +680,9 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
             status = self._isolated_status(until)
             if status["type"] == "SignatureRequired":
                 with self.gate.lock:
-                    submission = copy.deepcopy(self.gate.submissions.get(status["request_id"]))
+                    submission = copy.deepcopy(
+                        self.gate.submissions.get(status["request_id"])
+                    )
                 if submission is not None and status["request_id"] != previous:
                     return status, submission
             time.sleep(min(0.2, self._remaining(until)))
@@ -621,11 +708,15 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         view = self._isolated_view(self.client, until)
         assert view["state"]["state_name"] == "ChannelReady", view
         funding = self._funding_outpoint(view)
-        tx = self._isolated_rpc(self.node.rpcUrl, "get_transaction", [funding["tx_hash"]], until)
+        tx = self._isolated_rpc(
+            self.node.rpcUrl, "get_transaction", [funding["tx_hash"]], until
+        )
         assert tx["tx_status"]["status"] == "committed", tx
         while True:
             indexer = self._isolated_rpc(self.node.rpcUrl, "get_indexer_tip", [], until)
-            if indexer and int(indexer["block_number"], 16) >= int(tx["tx_status"]["block_number"], 16):
+            if indexer and int(indexer["block_number"], 16) >= int(
+                tx["tx_status"]["block_number"], 16
+            ):
                 break
             time.sleep(min(0.1, self._remaining(until)))
         # stop_miner sends SIGTERM but does not reap/wait for its child.
@@ -635,7 +726,9 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         stable_since, last_tip = None, None
         while True:
             self._remaining(until)
-            tip = self._isolated_rpc(self.node.rpcUrl, "get_tip_block_number", [], until)
+            tip = self._isolated_rpc(
+                self.node.rpcUrl, "get_tip_block_number", [], until
+            )
             if tip != last_tip:
                 stable_since = time.monotonic()
             last_tip = tip
@@ -655,7 +748,9 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         )
         timestamp = invoice["invoice"]["data"]["timestamp"]
         created_ms = int(timestamp, 16) if isinstance(timestamp, str) else timestamp
-        before = self._isolated_view(self.client, until)["latest_commitment_transaction_hash"]
+        before = self._isolated_view(self.client, until)[
+            "latest_commitment_transaction_hash"
+        ]
         # This preparation cap is conservative: the actual TLC timestamp is read back below.
         until = time.monotonic() + self.tlc_lifetime_seconds - 1.333 - 5
         self._inject_tlc(payment_hash, self.tlc_lifetime_seconds)
@@ -677,10 +772,18 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         records = self._isolated_records(until)
         local_hash = local["latest_commitment_transaction_hash"]
         remote_hash = remote["latest_commitment_transaction_hash"]
-        local_records = [r for r in records if r["complete"] and not r["for_remote"]
-                         and r["transaction_hash"] == local_hash]
-        remote_records = [r for r in records if r["for_remote"]
-                          and r["transaction_hash"] == remote_hash]
+        local_records = [
+            r
+            for r in records
+            if r["complete"]
+            and not r["for_remote"]
+            and r["transaction_hash"] == local_hash
+        ]
+        remote_records = [
+            r
+            for r in records
+            if r["for_remote"] and r["transaction_hash"] == remote_hash
+        ]
         assert len(local_records) == len(remote_records) == 1, records
         signed, peer_signed = local_records[0], remote_records[0]
         assert signed["signing_message"] != peer_signed["signing_message"]
@@ -691,29 +794,62 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
             assert local_hash != before and len(target_tlcs) == 1, signed
             assert target_tlcs[0]["expiry"] == expiry, signed
             assert deadline_ms / 1000 + 95 < created_ms / 1000 + invoice_seconds
-        assert self._isolated_rpc(
-            self.client, "get_invoice", [{"payment_hash": payment_hash}], until
-        )["status"] == "Open"
+        assert (
+            self._isolated_rpc(
+                self.client, "get_invoice", [{"payment_hash": payment_hash}], until
+            )["status"]
+            == "Open"
+        )
         local = self._isolated_view(self.client, until)
         assert local["latest_commitment_transaction_hash"] == local_hash
-        assert self._isolated_view(self.fiber1.client, until)["latest_commitment_transaction_hash"] == remote_hash
+        assert (
+            self._isolated_view(self.fiber1.client, until)[
+                "latest_commitment_transaction_hash"
+            ]
+            == remote_hash
+        )
         assert local["state"]["state_name"] == "ChannelReady", local
         assert self._isolated_status(until) == status
-        assert self._isolated_rpc(self.node.rpcUrl, "get_live_cell", [funding, False], until)["status"] == "live"
-        self.broadcast_gate.arm(funding, signed["signing_message"], peer_signed["signing_message"], deadline_ms)
+        assert (
+            self._isolated_rpc(
+                self.node.rpcUrl, "get_live_cell", [funding, False], until
+            )["status"]
+            == "live"
+        )
+        self.broadcast_gate.arm(
+            funding,
+            signed["signing_message"],
+            peer_signed["signing_message"],
+            deadline_ms,
+        )
         self._remaining(until)
         with self.gate.lock:
             forwarded = copy.deepcopy(self.gate.forwarded)
         payment = {
-            "hash": payment_hash, "expiry": expiry, "deadline_ms": deadline_ms,
-            "deadline": deadline, "until": deadline + (95 if checkpoint == "B" else 110),
+            "hash": payment_hash,
+            "expiry": expiry,
+            "deadline_ms": deadline_ms,
+            "deadline": deadline,
+            "until": deadline + (95 if checkpoint == "B" else 110),
             "invoice_expires_at": created_ms / 1000 + invoice_seconds,
-            "funding": funding, "local": signed, "remote": peer_signed,
-            "request": status, "submission": submission, "forwarded": forwarded,
+            "funding": funding,
+            "local": signed,
+            "remote": peer_signed,
+            "request": status,
+            "submission": submission,
+            "forwarded": forwarded,
         }
-        self._observe("armed", checkpoint=checkpoint, payment_hash=payment_hash, expiry=expiry,
-                      deadline_ms=deadline_ms, invoice_expires_at=payment["invoice_expires_at"],
-                      local_record=signed, remote_record=peer_signed, request_id=status["request_id"])
+        self._observe(
+            "armed",
+            checkpoint=checkpoint,
+            payment_hash=payment_hash,
+            expiry=expiry,
+            deadline_ms=deadline_ms,
+            invoice_expires_at=payment["invoice_expires_at"],
+            local_record=signed,
+            remote_record=peer_signed,
+            request_id=status["request_id"],
+        )
         return payment
 
     def _confirm_isolated_close(self, payment):
@@ -721,18 +857,41 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         while True:
             audit = self._isolation_health(until)
             view = self._isolated_view(self.client, until)
-            local = [e for e in audit["events"] if e["classification"] == "local" and e.get("actual_hash")]
-            remote = [e for e in audit["events"] if e["classification"] == "remote"
-                      and e["outcome"] == "blocked" and e["response"].get("error") == REMOTE_ERROR]
+            local = [
+                e
+                for e in audit["events"]
+                if e["classification"] == "local" and e.get("actual_hash")
+            ]
+            remote = [
+                e
+                for e in audit["events"]
+                if e["classification"] == "remote"
+                and e["outcome"] == "blocked"
+                and e["response"].get("error") == REMOTE_ERROR
+            ]
             if local and remote and view["state"]["state_name"] == "ShuttingDown":
-                assert "WAITING_COMMITMENT_CONFIRMATION" in view["state"]["state_flags"], view
+                assert (
+                    "WAITING_COMMITMENT_CONFIRMATION" in view["state"]["state_flags"]
+                ), view
                 break
             time.sleep(min(0.2, self._remaining(until)))
         for event in local + remote:
-            assert payment["deadline_ms"] <= event["received_wall_ms"] <= payment["deadline_ms"] + 15_000, event
-        self._observe("protection", state=view["state"], local_sends=len(local), remote_blocks=len(remote))
-        first_forward = min(e["forwarded_monotonic"] for e in audit["events"]
-                            if e["classification"] == "local" and e["forwarded_monotonic"] is not None)
+            assert (
+                payment["deadline_ms"]
+                <= event["received_wall_ms"]
+                <= payment["deadline_ms"] + 15_000
+            ), event
+        self._observe(
+            "protection",
+            state=view["state"],
+            local_sends=len(local),
+            remote_blocks=len(remote),
+        )
+        first_forward = min(
+            e["forwarded_monotonic"]
+            for e in audit["events"]
+            if e["classification"] == "local" and e["forwarded_monotonic"] is not None
+        )
         until = min(payment["until"], first_forward + 60)
         assert self._remaining(until, 60) > 3, "no budget to resume miner"
         self.node.start_miner()
@@ -740,7 +899,9 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         tx_hash = local[0]["actual_hash"]
         while True:
             self._isolation_health(until)
-            tx = self._isolated_rpc(self.node.rpcUrl, "get_transaction", [tx_hash], until)
+            tx = self._isolated_rpc(
+                self.node.rpcUrl, "get_transaction", [tx_hash], until
+            )
             assert tx["tx_status"]["status"] != "rejected", tx
             if tx["tx_status"]["status"] == "committed":
                 committed_at = time.monotonic()
@@ -749,20 +910,31 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
             time.sleep(min(0.2, self._remaining(until)))
         transaction = copy.deepcopy(tx["transaction"])
         transaction.pop("hash", None)
-        assert any(i["previous_output"] == payment["funding"] for i in transaction["inputs"]), transaction
-        cell = self._isolated_rpc(self.node.rpcUrl, "get_live_cell", [payment["funding"], False], until)
+        assert any(
+            i["previous_output"] == payment["funding"] for i in transaction["inputs"]
+        ), transaction
+        cell = self._isolated_rpc(
+            self.node.rpcUrl, "get_live_cell", [payment["funding"], False], until
+        )
         # CKB 0.202 deprecates 'dead': spent cells normally return 'unknown'.
         # The committed transaction's exact input above proves the spend;
         # 'unknown' by itself would not prove it (docs/rpc.md:5853 in the bundle).
         assert cell["status"] in ("dead", "unknown") and cell["cell"] is None, cell
         message = subprocess.check_output(
             [str(BUNDLE / "lsp-integration-driver"), "commitment-message"],
-            input=json.dumps(transaction), text=True, timeout=self._remaining(until),
+            input=json.dumps(transaction),
+            text=True,
+            timeout=self._remaining(until),
         ).strip()
         assert message == payment["local"]["signing_message"]
         assert message != payment["remote"]["signing_message"]
-        self._observe("committed", hash=tx_hash, transaction=transaction,
-                      signing_message=message, funding_cell=cell)
+        self._observe(
+            "committed",
+            hash=tx_hash,
+            transaction=transaction,
+            signing_message=message,
+            funding_cell=cell,
+        )
         until = min(payment["until"], committed_at + 15)
         while True:
             self._isolation_health(until)
@@ -773,9 +945,14 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
             time.sleep(min(0.2, self._remaining(until)))
         assert "UNCOOPERATIVE_LOCAL" in view["state"]["state_flags"], view
         assert view["shutdown_transaction_hash"] == tx_hash, view
-        assert view["latest_commitment_transaction_hash"] == payment["local"]["transaction_hash"], view
+        assert (
+            view["latest_commitment_transaction_hash"]
+            == payment["local"]["transaction_hash"]
+        ), view
         with self.gate.lock:
-            assert self.gate.forwarded == payment["forwarded"], "SDK forwarded a held signature"
+            assert (
+                self.gate.forwarded == payment["forwarded"]
+            ), "SDK forwarded a held signature"
         assert not any(op == "fulfill" for op, _ in self.tenant["control_calls"])
         self._observe("local_closed", view=view)
         self._remaining(until)
@@ -784,11 +961,21 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
     def _closed_snapshot(self, until):
         view = self._isolated_view(self.client, until)
         return {
-            "view": {k: v for k, v in view.items() if k in (
-                "state", "shutdown_transaction_hash", "latest_commitment_transaction_hash",
-                "local_commitment_number", "remote_commitment_number",
-            )},
-            "complete_records": [r for r in self._isolated_records(until) if r["complete"]],
+            "view": {
+                k: v
+                for k, v in view.items()
+                if k
+                in (
+                    "state",
+                    "shutdown_transaction_hash",
+                    "latest_commitment_transaction_hash",
+                    "local_commitment_number",
+                    "remote_commitment_number",
+                )
+            },
+            "complete_records": [
+                r for r in self._isolated_records(until) if r["complete"]
+            ],
             "signing_status": self._isolated_status(until),
         }
 
@@ -832,30 +1019,46 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         with self._recovery_budget(until, 1) as due:
             with requests.Session() as session:
                 session.trust_env = False
-                response = session.post(url, headers=headers,
-                    json={"jsonrpc": "2.0", "id": 91, "method": method, "params": params},
-                    timeout=max(0.001, due - time.monotonic()))
+                response = session.post(
+                    url,
+                    headers=headers,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 91,
+                        "method": method,
+                        "params": params,
+                    },
+                    timeout=max(0.001, due - time.monotonic()),
+                )
                 response.raise_for_status()
                 body = response.json()
                 assert "error" not in body and "result" in body, (method, body)
                 return body["result"]
 
     def _recovery_view(self, client, until):
-        channels = self._recovery_rpc(client, "list_channels", [{"include_closed": True}], until)["channels"]
+        channels = self._recovery_rpc(
+            client, "list_channels", [{"include_closed": True}], until
+        )["channels"]
         found = [c for c in channels if c["channel_id"] == self.channel_id]
         assert len(found) == 1, ("channel missing or ambiguous", channels)
         return found[0]
 
     def _recovery_status(self, until):
-        return self._recovery_rpc(self.client, "get_channel_signing_status",
-                                 [{"channel_id": self.channel_id}], until)["status"]
+        return self._recovery_rpc(
+            self.client,
+            "get_channel_signing_status",
+            [{"channel_id": self.channel_id}],
+            until,
+        )["status"]
 
     def _recovery_pending(self, until, previous=None):
         while time.monotonic() < until:
             status = self._recovery_status(until)
             if status["type"] == "SignatureRequired":
                 with self.gate.lock:
-                    submission = copy.deepcopy(self.gate.submissions.get(status["request_id"]))
+                    submission = copy.deepcopy(
+                        self.gate.submissions.get(status["request_id"])
+                    )
                 if submission and status["request_id"] != previous:
                     return status, submission
             self._recovery_health()
@@ -872,18 +1075,27 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
     def _recovery_health(self):
         for fiber in self.fibers:
             if fiber.process.poll() is not None:
-                self._recovery_fail("runtime_failure_product_not_excluded", "FNN exited")
+                self._recovery_fail(
+                    "runtime_failure_product_not_excluded", "FNN exited"
+                )
         if self.tenant["agent"].poll() is not None:
             self._recovery_fail("runtime_failure_product_not_excluded", "SDK exited")
-        for label, pid in (("CKB", self.node.ckb_pid), ("miner", self.node.ckb_miner_pid)):
+        for label, pid in (
+            ("CKB", self.node.ckb_pid),
+            ("miner", self.node.ckb_miner_pid),
+        ):
             pid = int(pid)
             assert pid > 0, (label, pid)
             os.kill(pid, 0)
         with self.gate.lock:
             assert not self.gate.errors, self.gate.errors
             if hasattr(self, "recovery_forwarded"):
-                assert self.gate.forwarded == self.recovery_forwarded, "new signature forwarded"
-        assert not self.recovery_observer.snapshot()["errors"], self.recovery_observer.snapshot()["errors"]
+                assert (
+                    self.gate.forwarded == self.recovery_forwarded
+                ), "new signature forwarded"
+        assert not self.recovery_observer.snapshot()[
+            "errors"
+        ], self.recovery_observer.snapshot()["errors"]
 
     def _recovery_fail(self, kind, message):
         self.recovery_evidence["result"] = kind
@@ -894,7 +1106,9 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         with self._recovery_budget(until, 1) as due:
             return subprocess.check_output(
                 [str(BUNDLE / "lsp-integration-driver"), "commitment-message"],
-                input=json.dumps(transaction), text=True, timeout=max(0.001, due - time.monotonic()),
+                input=json.dumps(transaction),
+                text=True,
+                timeout=max(0.001, due - time.monotonic()),
             ).strip()
 
     def _recovery_broadcasts(self, payment, until):
@@ -903,16 +1117,24 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         for event in events:
             if payment["funding"] not in event["inputs"]:
                 continue
-            assert event["received_monotonic"] >= payment["deadline"], "early funding spend"
+            assert (
+                event["received_monotonic"] >= payment["deadline"]
+            ), "early funding spend"
             if not event.get("response"):
                 continue
             key = event["raw_request"]
             if key not in self.recovery_decoded:
                 message = self._recovery_decode(event["transaction"], until)
-                roles = [side for side in ("A", "T") if payment[side]["signing_message"] == message]
+                roles = [
+                    side
+                    for side in ("A", "T")
+                    if payment[side]["signing_message"] == message
+                ]
                 assert len(roles) == 1, ("unknown target funding spend", event)
                 self.recovery_decoded[key] = roles[0]
-                self._recovery_record("broadcast_classified", side=roles[0], message=message, event=event)
+                self._recovery_record(
+                    "broadcast_classified", side=roles[0], message=message, event=event
+                )
             found[self.recovery_decoded[key]].append(event)
         return found
 
@@ -920,86 +1142,146 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         timing = self.recovery_observer.timing_snapshot()
         episode, delayed = timing["episode"], timing["delayed_queries"]
         assert episode and delayed, "fixed query window did not activate"
-        assert _raw_transaction_hash(rejected["transaction"]) == episode["transaction_hash"], "A rejected transaction differs from delayed hash"
-        assert _raw_transaction_hash(accepted["transaction"]) == accepted["actual_hash"], "T raw transaction hash differs from CKB acceptance"
+        assert (
+            _raw_transaction_hash(rejected["transaction"])
+            == episode["transaction_hash"]
+        ), "A rejected transaction differs from delayed hash"
+        assert (
+            _raw_transaction_hash(accepted["transaction"]) == accepted["actual_hash"]
+        ), "T raw transaction hash differs from CKB acceptance"
         start, release = episode["started_at"], episode["release_at"]
         assert start >= payment["deadline"] and abs(release - start - 0.250) < 0.000001
         assert start <= accepted["forwarded_monotonic"] < release, accepted
         assert start <= accepted["upstream_response_monotonic"] < release, accepted
-        preflight = [q for q in delayed if q["request"]["params"] == [episode["transaction_hash"], "0x0", True]]
+        preflight = [
+            q
+            for q in delayed
+            if q["request"]["params"] == [episode["transaction_hash"], "0x0", True]
+        ]
         assert preflight, "only tracer was delayed; broadcaster preflight is missing"
-        assert any(q.get("response_written_monotonic", float("inf")) <= rejected["forwarded_monotonic"] for q in preflight)
+        assert any(
+            q.get("response_written_monotonic", float("inf"))
+            <= rejected["forwarded_monotonic"]
+            for q in preflight
+        )
         for query in delayed:
             written = query.get("response_written_monotonic")
             assert written is not None and release <= written <= release + 0.100, query
             assert query["upstream_response_monotonic"] <= written
             assert query["response"]["result"]["tx_status"]["status"] == "unknown"
             if t_commit is not None:
-                assert written < t_commit, "query delay remained active after observed confirmation"
+                assert (
+                    written < t_commit
+                ), "query delay remained active after observed confirmation"
         return timing
 
     def _recovery_sample(self, payment, winner_hash, until):
         started = time.monotonic()
         with self._recovery_budget(until, 3) as due:
             self._recovery_health()
-            sample = {"started": started, "local": self._recovery_view(self.client, due),
-                      "signing": self._recovery_status(due)}
-            sample["tip"] = self._recovery_rpc(self.node.rpcUrl, "get_tip_block_number", [], due)
-            sample["indexer_tip"] = self._recovery_rpc(self.node.rpcUrl, "get_indexer_tip", [], due)
-            sample["transaction"] = self._recovery_rpc(
-                self.node.rpcUrl, "get_transaction", [winner_hash], due) if winner_hash else None
+            sample = {
+                "started": started,
+                "local": self._recovery_view(self.client, due),
+                "signing": self._recovery_status(due),
+            }
+            sample["tip"] = self._recovery_rpc(
+                self.node.rpcUrl, "get_tip_block_number", [], due
+            )
+            sample["indexer_tip"] = self._recovery_rpc(
+                self.node.rpcUrl, "get_indexer_tip", [], due
+            )
+            sample["transaction"] = (
+                self._recovery_rpc(
+                    self.node.rpcUrl, "get_transaction", [winner_hash], due
+                )
+                if winner_hash
+                else None
+            )
             sample["tx_observed"] = time.monotonic()
             sample["indexed_input"] = None
             tx = sample["transaction"]
             if tx and tx["tx_status"]["status"] == "committed":
                 assert tx["transaction"]["hash"] == winner_hash
-                assert payment["funding"] in [i["previous_output"] for i in tx["transaction"]["inputs"]]
+                assert payment["funding"] in [
+                    i["previous_output"] for i in tx["transaction"]["inputs"]
+                ]
                 cursor = None
                 pages = []
                 for _ in range(3):
-                    params = [{"script": payment["funding_lock"], "script_type": "lock",
-                               "script_search_mode": "exact", "group_by_transaction": False}, "desc", "0x64"]
+                    params = [
+                        {
+                            "script": payment["funding_lock"],
+                            "script_type": "lock",
+                            "script_search_mode": "exact",
+                            "group_by_transaction": False,
+                        },
+                        "desc",
+                        "0x64",
+                    ]
                     if cursor is not None:
                         params.append(cursor)
-                    page = self._recovery_rpc(self.node.rpcUrl, "get_transactions", params, due)
+                    page = self._recovery_rpc(
+                        self.node.rpcUrl, "get_transactions", params, due
+                    )
                     pages.append(page)
                     for entry in page["objects"]:
-                        if entry["tx_hash"] == winner_hash and entry["io_type"] == "input":
+                        if (
+                            entry["tx_hash"] == winner_hash
+                            and entry["io_type"] == "input"
+                        ):
                             index = int(entry["io_index"], 16)
                             assert index < len(tx["transaction"]["inputs"]), entry
-                            if tx["transaction"]["inputs"][index]["previous_output"] == payment["funding"]:
+                            if (
+                                tx["transaction"]["inputs"][index]["previous_output"]
+                                == payment["funding"]
+                            ):
                                 sample["indexed_input"] = entry
                     if sample["indexed_input"] or not page["objects"]:
                         break
-                    assert page["last_cursor"] != cursor, "indexer cursor did not advance"
+                    assert (
+                        page["last_cursor"] != cursor
+                    ), "indexer cursor did not advance"
                     cursor = page["last_cursor"]
                 sample["index_pages"] = pages
             sample["reads_finished"] = time.monotonic()
             self._recovery_record("sample", **sample)
             sample["finished"] = time.monotonic()
-            self._recovery_record("sample_complete", started=started, finished=sample["finished"])
+            self._recovery_record(
+                "sample_complete", started=started, finished=sample["finished"]
+            )
         return sample
 
     @staticmethod
     def _recovery_ready(sample):
         tx, tip = sample["transaction"], sample["indexer_tip"]
-        return bool(tx and tx["tx_status"]["status"] == "committed" and tip
-                    and int(tip["block_number"], 16) >= int(tx["tx_status"]["block_number"], 16)
-                    and sample["indexed_input"])
+        return bool(
+            tx
+            and tx["tx_status"]["status"] == "committed"
+            and tip
+            and int(tip["block_number"], 16) >= int(tx["tx_status"]["block_number"], 16)
+            and sample["indexed_input"]
+        )
 
     @staticmethod
     def _recovery_complete(sample, winner_hash):
         local = sample["local"]
         flags = local["state"].get("state_flags", "")
-        return (local["state"]["state_name"] == "Closed" and "UNCOOPERATIVE_REMOTE" in flags
-                and "UNCOOPERATIVE_LOCAL" not in flags
-                and local["shutdown_transaction_hash"] == winner_hash
-                and sample["signing"]["type"] == "NoSignatureRequired")
+        return (
+            local["state"]["state_name"] == "Closed"
+            and "UNCOOPERATIVE_REMOTE" in flags
+            and "UNCOOPERATIVE_LOCAL" not in flags
+            and local["shutdown_transaction_hash"] == winner_hash
+            and sample["signing"]["type"] == "NoSignatureRequired"
+        )
 
     def _recovery_logs(self, payment):
         text = (Path(self.fiber1.tmp_path) / "node.log").read_text()
         blocks = list(re.finditer(r"(?m)^  \d{4}-[^\n]+(?:\n(?!\s*$)[^\n]*)*", text))
-        actor_pattern = r'in ractor::actor::Actor with id: "([^"]+)", name: "HostedTenant 0x' + re.escape(payment["a_pubkey"].removeprefix("0x")) + '"'
+        actor_pattern = (
+            r'in ractor::actor::Actor with id: "([^"]+)", name: "HostedTenant 0x'
+            + re.escape(payment["a_pubkey"].removeprefix("0x"))
+            + '"'
+        )
         recognition = None
         for block in blocks:
             value = block.group(0)
@@ -1008,12 +1290,19 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
                 continue
             if f"channel Hash256({self.channel_id}) is shutdown by remote" in value:
                 recognition = (actor.group(1), block.start(), value)
-            elif (recognition and actor.group(1) == recognition[0]
-                  and "Updating channel state from" in value
-                  and "to Closed(CloseFlags(UNCOOPERATIVE_REMOTE" in value):
-                return {"actor_id": actor.group(1), "recognition": recognition[2],
-                        "transition": value, "recognition_line": text[:recognition[1]].count("\n") + 1,
-                        "transition_line": text[:block.start()].count("\n") + 1}
+            elif (
+                recognition
+                and actor.group(1) == recognition[0]
+                and "Updating channel state from" in value
+                and "to Closed(CloseFlags(UNCOOPERATIVE_REMOTE" in value
+            ):
+                return {
+                    "actor_id": actor.group(1),
+                    "recognition": recognition[2],
+                    "transition": value,
+                    "recognition_line": text[: recognition[1]].count("\n") + 1,
+                    "transition_line": text[: block.start()].count("\n") + 1,
+                }
         return None
 
     def _recovery_cleanup(self):
@@ -1024,7 +1313,9 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         until = started + 60
         errors = []
         try:
-            processes = [f.process for f in getattr(self, "fibers", []) if hasattr(f, "process")]
+            processes = [
+                f.process for f in getattr(self, "fibers", []) if hasattr(f, "process")
+            ]
             processes += [t["agent"] for t in getattr(self, "tenants", [])]
             for process in processes:
                 if process.poll() is None:
@@ -1036,24 +1327,37 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
                     process.kill()
                     process.wait(timeout=max(0.001, min(5, until - time.monotonic())))
             self.recovery_observer.stop(until=until)
-            if "CKB observer did not stop within cleanup budget" in self.recovery_observer.snapshot()["errors"]:
+            if (
+                "CKB observer did not stop within cleanup budget"
+                in self.recovery_observer.snapshot()["errors"]
+            ):
                 errors.append("CKB observer did not stop within cleanup budget")
             self._stop_owned_miner(min(until, time.monotonic() + 5))
         except BaseException as error:
             errors.append(f"{type(error).__name__}: {error}")
         finally:
             self.recovery_evidence["broadcasts"] = self.recovery_observer.snapshot()
-            self.recovery_evidence["query_timing"] = self.recovery_observer.timing_snapshot()
+            self.recovery_evidence["query_timing"] = (
+                self.recovery_observer.timing_snapshot()
+            )
             node = Path(self.fiber1.tmp_path) if hasattr(self, "fiber1") else None
-            for label, path in (("fnn.log", node / "node.log" if node else None),
-                                ("sdk.log", node / "sdk-A/agent.log" if node else None),
-                                ("ckb.log", Path(self.node.ckb_dir) / "data/logs/run.log")):
+            for label, path in (
+                ("fnn.log", node / "node.log" if node else None),
+                ("sdk.log", node / "sdk-A/agent.log" if node else None),
+                ("ckb.log", Path(self.node.ckb_dir) / "data/logs/run.log"),
+            ):
                 if path is not None and path.exists():
                     shutil.copy2(path, self.recovery_directory / label)
             if time.monotonic() > until:
                 errors.append("cleanup exceeded 60 seconds")
-            self.recovery_evidence["cleanup"] = {"started": started, "finished": time.monotonic(), "errors": errors}
-            (self.recovery_directory / "evidence.json").write_text(json.dumps(self.recovery_evidence, indent=2) + "\n")
+            self.recovery_evidence["cleanup"] = {
+                "started": started,
+                "finished": time.monotonic(),
+                "errors": errors,
+            }
+            (self.recovery_directory / "evidence.json").write_text(
+                json.dumps(self.recovery_evidence, indent=2) + "\n"
+            )
             print(f"SPEC-09 evidence: {self.recovery_directory}", flush=True)
         assert not errors, errors
 
@@ -1067,7 +1371,9 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         entry = self._wait_abort(timeout=150)
         aborted_at = time.time()
         self._assert_funding_aborted(entry)
-        print(f"aborted {aborted_at - created:.1f}s after channel creation: {entry['state']}")
+        print(
+            f"aborted {aborted_at - created:.1f}s after channel creation: {entry['state']}"
+        )
         # The external funding timer (60 s) fired well before the 180 s opening timeout.
         assert created + 58 <= aborted_at <= created + 120, (created, aborted_at)
         self._assert_inputs_unspent(unsigned)
@@ -1125,10 +1431,14 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
             assert self.tenant["agent"].poll() is None
             assert not self.gate.errors, self.gate.errors
             time.sleep(1)
-        assert self._abort_entry(self.client) is None, "stale timer aborted a funded opening"
+        assert (
+            self._abort_entry(self.client) is None
+        ), "stale timer aborted a funded opening"
         assert self._abort_entry(self.fiber1.client) is None
         assert self._status()["type"] == "SignatureRequired"
-        print(f"external funding deadline passed at {time.time() - created:.1f}s without abort")
+        print(
+            f"external funding deadline passed at {time.time() - created:.1f}s without abort"
+        )
         self._finish_opening()
         assert time.time() - created < self.opening_window_seconds
 
@@ -1140,7 +1450,9 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         entry = self._wait_abort(timeout=240)
         aborted_at = time.time()
         self._assert_funding_aborted(entry)
-        print(f"aborted {aborted_at - created:.1f}s after channel creation: {entry['state']}")
+        print(
+            f"aborted {aborted_at - created:.1f}s after channel creation: {entry['state']}"
+        )
         # The normal 180 s opening timeout fired, and the funding tx never broadcast.
         assert created + 178 <= aborted_at <= created + 240, (created, aborted_at)
         self._assert_funding_not_on_chain(self.tenant["funding_tx_hash"])
@@ -1173,7 +1485,9 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
             f"expiry={payment['expiry']} deadline={payment['deadline']}"
         )
         self._to_checkpoint_b(payment)
-        print(f"checkpoint B: request={payment['b_request']['request_id']}, invoice Open")
+        print(
+            f"checkpoint B: request={payment['b_request']['request_id']}, invoice Open"
+        )
         # Keep driving all asynchronous signature/ACK steps until Received.
         previous = payment["b_request"]["request_id"]
         self._submit(payment["b_submission"])
@@ -1189,9 +1503,9 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
                 previous = following[0]["request_id"]
                 self._submit(following[1])
         assert self._status()["type"] == "NoSignatureRequired"
-        assert self._invoice_status(payment["hash"]) == "Received", (
-            f"hold invoice did not turn Received: {self._invoice_status(payment['hash'])}"
-        )
+        assert (
+            self._invoice_status(payment["hash"]) == "Received"
+        ), f"hold invoice did not turn Received: {self._invoice_status(payment['hash'])}"
         print(
             f"fixture reaches Received: {payment['hash']} "
             f"invoice={self._invoice_status(payment['hash'])}"
@@ -1205,7 +1519,9 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         expected = self._commitment_hash(self.client)
         self._wait_past_deadline(payment)
         submitted_at = time.monotonic()
-        assert submitted_at - payment["injected_at"] < 28, submitted_at - payment["injected_at"]
+        assert submitted_at - payment["injected_at"] < 28, (
+            submitted_at - payment["injected_at"]
+        )
         body = self._submit_raw(payment["b_submission"])
         self._assert_not_applied(body)
         assert self._commitment_hash(self.client) == expected
@@ -1213,7 +1529,10 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         assert observed_at - payment["injected_at"] < 30
         # The protection clears the pending request.
         deadline = time.monotonic() + 15
-        while time.monotonic() < deadline and self._status()["type"] == "SignatureRequired":
+        while (
+            time.monotonic() < deadline
+            and self._status()["type"] == "SignatureRequired"
+        ):
             time.sleep(0.5)
         assert self._status()["type"] != "SignatureRequired", self._status()
 
@@ -1236,12 +1555,16 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         # 3. 原签名仅提交一次；以提交前快照验证五秒内没有复活或新承诺。
         before = self._closed_snapshot(payment["until"])
         assert before["signing_status"]["type"] == "NoSignatureRequired", before
-        body = self._submit_raw(payment["submission"], timeout=self._remaining(payment["until"]))
+        body = self._submit_raw(
+            payment["submission"], timeout=self._remaining(payment["until"])
+        )
         self._assert_not_applied(body)
         self._remaining(payment["until"])
         self._observe("late_submission_rejected", response=body, before=before)
         stable_until = time.monotonic() + 5
-        assert stable_until < payment["until"], "insufficient stability observation budget"
+        assert (
+            stable_until < payment["until"]
+        ), "insufficient stability observation budget"
         while True:
             self._isolation_health(payment["until"])
             after = self._closed_snapshot(payment["until"])
@@ -1271,11 +1594,17 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         invoice = self._isolated_rpc(
             self.client, "get_invoice", [{"payment_hash": payment["hash"]}], until
         )
-        assert time.time() < payment["invoice_expires_at"], "invoice observation was too late"
+        assert (
+            time.time() < payment["invoice_expires_at"]
+        ), "invoice observation was too late"
         assert invoice["status"] == "Open", invoice
         self._isolation_health(until)
-        self._observe("invoice_open", status=invoice["status"],
-                      expires_at=payment["invoice_expires_at"], local_record=payment["local"])
+        self._observe(
+            "invoice_open",
+            status=invoice["status"],
+            expires_at=payment["invoice_expires_at"],
+            local_record=payment["local"],
+        )
 
     # TEST-MAP: LSP-TIMEOUT-12
     def test_checkpoint_b_loser_recovers_remote_close(self):
@@ -1293,21 +1622,29 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
             self._arm_signature_gate()
             payment_hash, _, _ = self._new_hold_invoice(600)
             until = time.monotonic() + 10
-            invoice = self._recovery_rpc(self.client, "get_invoice", [{"payment_hash": payment_hash}], until)
+            invoice = self._recovery_rpc(
+                self.client, "get_invoice", [{"payment_hash": payment_hash}], until
+            )
             timestamp = invoice["invoice"]["data"]["timestamp"]
             created_ms = int(timestamp, 16) if isinstance(timestamp, str) else timestamp
             local_before = self._recovery_view(self.client, until)
             funding = self._funding_outpoint(local_before)
-            live = self._recovery_rpc(self.node.rpcUrl, "get_live_cell", [funding, False], until)
+            live = self._recovery_rpc(
+                self.node.rpcUrl, "get_live_cell", [funding, False], until
+            )
             assert live["status"] == "live" and live["cell"]
-            funding_tx = self._recovery_rpc(self.node.rpcUrl, "get_transaction", [funding["tx_hash"]], until)
+            funding_tx = self._recovery_rpc(
+                self.node.rpcUrl, "get_transaction", [funding["tx_hash"]], until
+            )
             assert funding_tx["tx_status"]["status"] == "committed"
             until = time.monotonic() + 22 - 1.333 - 5
             with self._recovery_budget(until, 1):
                 self._inject_tlc(payment_hash, 22)
             status, submission = self._recovery_pending(until)
             local = self._recovery_view(self.client, until)
-            tlcs = [t for t in local["pending_tlcs"] if t["payment_hash"] == payment_hash]
+            tlcs = [
+                t for t in local["pending_tlcs"] if t["payment_hash"] == payment_hash
+            ]
             assert len(tlcs) == 1, tlcs
             expiry = int(tlcs[0]["expiry"], 16)
             wall, mono = time.time(), time.monotonic()
@@ -1316,48 +1653,106 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
             self.recovery_until = deadline + 445
             until = min(until, deadline - 5)
             assert created_ms / 1000 + 600 > d_ms / 1000 + 450
-            assert self._recovery_rpc(self.client, "submit_channel_signature", [submission], until) == {"type": "Applied"}
-            status, held_submission = self._recovery_pending(until, status["request_id"])
+            assert self._recovery_rpc(
+                self.client, "submit_channel_signature", [submission], until
+            ) == {"type": "Applied"}
+            status, held_submission = self._recovery_pending(
+                until, status["request_id"]
+            )
             assert status["transition"] == "SendRevokeAndAck", status
             local = self._recovery_view(self.client, until)
             remote = self._recovery_view(self.fiber1.client, until)
             with self._recovery_budget(until, 1):
                 records = self._isolated_records(until)
-            a_records = [r for r in records if r["complete"] and not r["for_remote"]
-                         and r["transaction_hash"] == local["latest_commitment_transaction_hash"]]
-            t_records = [r for r in records if r["for_remote"]
-                         and r["transaction_hash"] == remote["latest_commitment_transaction_hash"]]
+            a_records = [
+                r
+                for r in records
+                if r["complete"]
+                and not r["for_remote"]
+                and r["transaction_hash"] == local["latest_commitment_transaction_hash"]
+            ]
+            t_records = [
+                r
+                for r in records
+                if r["for_remote"]
+                and r["transaction_hash"]
+                == remote["latest_commitment_transaction_hash"]
+            ]
             assert len(a_records) == len(t_records) == 1, records
             a, t = a_records[0], t_records[0]
             assert a["signing_message"] != t["signing_message"]
-            assert a["transaction_hash"] != local_before["latest_commitment_transaction_hash"]
+            assert (
+                a["transaction_hash"]
+                != local_before["latest_commitment_transaction_hash"]
+            )
             target = [x for x in a["tlcs"] if x["payment_hash"] == payment_hash]
             assert len(target) == 1 and target[0]["expiry"] == expiry
-            assert self._recovery_rpc(self.client, "get_invoice", [{"payment_hash": payment_hash}], until)["status"] == "Open"
+            assert (
+                self._recovery_rpc(
+                    self.client, "get_invoice", [{"payment_hash": payment_hash}], until
+                )["status"]
+                == "Open"
+            )
             assert self._recovery_status(until) == status
             for client, saved in ((self.client, local), (self.fiber1.client, remote)):
                 current = self._recovery_view(client, until)
                 assert current["state"]["state_name"] == "ChannelReady"
-                assert current["latest_commitment_transaction_hash"] == saved["latest_commitment_transaction_hash"]
-            assert self._recovery_rpc(self.node.rpcUrl, "get_live_cell", [funding, False], until)["status"] == "live"
-            assert not any(funding in e["inputs"] for e in self.recovery_observer.snapshot()["events"])
+                assert (
+                    current["latest_commitment_transaction_hash"]
+                    == saved["latest_commitment_transaction_hash"]
+                )
+            assert (
+                self._recovery_rpc(
+                    self.node.rpcUrl, "get_live_cell", [funding, False], until
+                )["status"]
+                == "live"
+            )
+            assert not any(
+                funding in e["inputs"]
+                for e in self.recovery_observer.snapshot()["events"]
+            )
             with self.gate.lock:
                 self.recovery_forwarded = copy.deepcopy(self.gate.forwarded)
-            payment = {"hash": payment_hash, "expiry": expiry, "deadline_ms": d_ms,
-                       "deadline": deadline, "invoice_created_ms": created_ms,
-                       "invoice_expires_at": created_ms / 1000 + 600,
-                       "funding": funding, "funding_lock": live["cell"]["output"]["lock"],
-                       "A": a, "T": t, "a_pubkey": remote["pubkey"], "t_pubkey": local["pubkey"],
-                       "request": status, "wall": wall, "monotonic": mono}
-            assert held_submission["request_id"] == status["request_id"], held_submission
+            payment = {
+                "hash": payment_hash,
+                "expiry": expiry,
+                "deadline_ms": d_ms,
+                "deadline": deadline,
+                "invoice_created_ms": created_ms,
+                "invoice_expires_at": created_ms / 1000 + 600,
+                "funding": funding,
+                "funding_lock": live["cell"]["output"]["lock"],
+                "A": a,
+                "T": t,
+                "a_pubkey": remote["pubkey"],
+                "t_pubkey": local["pubkey"],
+                "request": status,
+                "wall": wall,
+                "monotonic": mono,
+            }
+            assert (
+                held_submission["request_id"] == status["request_id"]
+            ), held_submission
             self.recovery_observer.configure_query_timing(
-                Path(self.fiber1.tmp_path) / "node.log", self.channel_id, local["pubkey"], deadline)
+                Path(self.fiber1.tmp_path) / "node.log",
+                self.channel_id,
+                local["pubkey"],
+                deadline,
+            )
             assert time.monotonic() <= until, "checkpoint B prepared too late"
-            self.recovery_evidence.update({"channel_id": self.channel_id, "payment": payment,
-                "signature_forwarded_baseline": self.recovery_forwarded,
-                "held_request_id": held_submission["request_id"],
-                "prepared_at": time.monotonic(), "mode": "controlled_query_timing_250ms"})
-            self._recovery_record("prepared", local=local, remote=remote, signing=status)
+            self.recovery_evidence.update(
+                {
+                    "channel_id": self.channel_id,
+                    "payment": payment,
+                    "signature_forwarded_baseline": self.recovery_forwarded,
+                    "held_request_id": held_submission["request_id"],
+                    "prepared_at": time.monotonic(),
+                    "mode": "controlled_query_timing_250ms",
+                }
+            )
+            self._recovery_record(
+                "prepared", local=local, remote=remote, signing=status
+            )
 
             # 2. 仅观察真实竞争；未取得 T 胜/A RBF 时非零退出，不自动调整时序。
             phase = "acquisition"
@@ -1367,10 +1762,21 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
             while time.monotonic() < acquisition_until:
                 events = self._recovery_broadcasts(payment, acquisition_until)
                 accepted = next((e for e in events["T"] if e.get("actual_hash")), None)
-                rejected = next((e for e in events["A"] if
-                    (e["response"].get("error") or {}).get("code") == -1111 and
-                    "RBFRejected" in str((e["response"].get("error") or {}).get("data", ""))), None)
-                sample = self._recovery_sample(payment, accepted["actual_hash"] if accepted else None, acquisition_until)
+                rejected = next(
+                    (
+                        e
+                        for e in events["A"]
+                        if (e["response"].get("error") or {}).get("code") == -1111
+                        and "RBFRejected"
+                        in str((e["response"].get("error") or {}).get("data", ""))
+                    ),
+                    None,
+                )
+                sample = self._recovery_sample(
+                    payment,
+                    accepted["actual_hash"] if accepted else None,
+                    acquisition_until,
+                )
                 tx = sample["transaction"]
                 if t_commit is None and tx and tx["tx_status"]["status"] == "committed":
                     t_commit = sample["tx_observed"]
@@ -1380,19 +1786,33 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
                     break
                 time.sleep(max(0, min(0.25, acquisition_until - time.monotonic())))
             if not accepted or not rejected:
-                self._recovery_fail("scenario_not_acquired", "did not obtain real T acceptance and A RBF within D+15s")
+                self._recovery_fail(
+                    "scenario_not_acquired",
+                    "did not obtain real T acceptance and A RBF within D+15s",
+                )
             assert accepted["upstream_response_monotonic"] <= acquisition_until
             assert rejected["upstream_response_monotonic"] <= acquisition_until
             self._recovery_timing(payment, accepted, rejected)
             winner_hash = accepted["actual_hash"]
-            self.recovery_evidence.update({"winner_hash": winner_hash, "T_accepted": accepted, "A_rejected": rejected})
+            self.recovery_evidence.update(
+                {
+                    "winner_hash": winner_hash,
+                    "T_accepted": accepted,
+                    "A_rejected": rejected,
+                }
+            )
 
             # 3. 首次确认与精确索引可见分别记录，绝不重置期限。
             phase = "confirmation"
-            confirm_until = min(self.recovery_until, accepted["forwarded_monotonic"] + 60)
+            confirm_until = min(
+                self.recovery_until, accepted["forwarded_monotonic"] + 60
+            )
             while t_commit is None:
                 if time.monotonic() >= confirm_until:
-                    self._recovery_fail("confirmation_failure_product_not_excluded", "T not committed within 60s")
+                    self._recovery_fail(
+                        "confirmation_failure_product_not_excluded",
+                        "T not committed within 60s",
+                    )
                 sample = self._recovery_sample(payment, winner_hash, confirm_until)
                 tx = sample["transaction"]
                 if tx and tx["tx_status"]["status"] == "committed":
@@ -1402,17 +1822,32 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
                     break
                 time.sleep(max(0, min(0.25, confirm_until - time.monotonic())))
             self._recovery_timing(payment, accepted, rejected, t_commit)
-            assert self._recovery_decode(sample["transaction"]["transaction"], confirm_until) == t["signing_message"]
-            a_hash = self.recovery_observer.timing_snapshot()["episode"]["transaction_hash"]
-            a_tx = self._recovery_rpc(self.node.rpcUrl, "get_transaction", [a_hash], confirm_until)
+            assert (
+                self._recovery_decode(
+                    sample["transaction"]["transaction"], confirm_until
+                )
+                == t["signing_message"]
+            )
+            a_hash = self.recovery_observer.timing_snapshot()["episode"][
+                "transaction_hash"
+            ]
+            a_tx = self._recovery_rpc(
+                self.node.rpcUrl, "get_transaction", [a_hash], confirm_until
+            )
             assert not a_tx or a_tx["tx_status"]["status"] != "committed", a_tx
-            spent = self._recovery_rpc(self.node.rpcUrl, "get_live_cell", [funding, False], confirm_until)
-            assert spent["status"] in ("dead", "unknown") and spent["cell"] is None, spent
+            spent = self._recovery_rpc(
+                self.node.rpcUrl, "get_live_cell", [funding, False], confirm_until
+            )
+            assert (
+                spent["status"] in ("dead", "unknown") and spent["cell"] is None
+            ), spent
             ready_until = min(self.recovery_until, t_commit + 30)
             phase = "indexing"
             while not self._recovery_ready(sample):
                 if time.monotonic() >= ready_until:
-                    self._recovery_fail("chain_not_ready", "exact funding input not indexed within 30s")
+                    self._recovery_fail(
+                        "chain_not_ready", "exact funding input not indexed within 30s"
+                    )
                 sample = self._recovery_sample(payment, winner_hash, ready_until)
                 if not self._recovery_ready(sample):
                     time.sleep(max(0, min(0.25, ready_until - time.monotonic())))
@@ -1420,11 +1855,16 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
             assert t_ready <= ready_until
             self.recovery_evidence["t_ready"] = t_ready
             self._recovery_record("chain_ready", sample=sample)
-            print(f"SPEC-09 T committed; exact input indexed; observing 330s: {winner_hash}", flush=True)
+            print(
+                f"SPEC-09 T committed; exact input indexed; observing 330s: {winner_hash}",
+                flush=True,
+            )
 
             # 4. 每个完整样本均核对链与恢复状态，保留整个扫描窗口和至少十秒稳定期。
             phase = "recovery"
-            recovery_due, hard_due = t_ready + 330, min(self.recovery_until, t_ready + 340)
+            recovery_due, hard_due = t_ready + 330, min(
+                self.recovery_until, t_ready + 340
+            )
             recovered = None
             previous = None
             progress = []
@@ -1433,60 +1873,129 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
                 now = sample["finished"]
                 complete = self._recovery_complete(sample, winner_hash)
                 if recovered is not None and not complete:
-                    self._recovery_fail("recovery_regression", "A regressed after complete remote recovery")
+                    self._recovery_fail(
+                        "recovery_regression",
+                        "A regressed after complete remote recovery",
+                    )
                 if not self._recovery_ready(sample):
-                    self._recovery_fail("chain_health_failure", "confirmed funding input lost index visibility")
+                    self._recovery_fail(
+                        "chain_health_failure",
+                        "confirmed funding input lost index visibility",
+                    )
                 tip = int(sample["tip"], 16)
                 index_tip = int(sample["indexer_tip"]["block_number"], 16)
                 if previous:
-                    assert now - previous["finished"] <= 5, "complete sample gap exceeded 5 seconds"
-                    assert tip >= int(previous["tip"], 16), "chain height went backwards"
-                    assert index_tip >= int(previous["indexer_tip"]["block_number"], 16), "index height went backwards"
+                    assert (
+                        now - previous["finished"] <= 5
+                    ), "complete sample gap exceeded 5 seconds"
+                    assert tip >= int(
+                        previous["tip"], 16
+                    ), "chain height went backwards"
+                    assert index_tip >= int(
+                        previous["indexer_tip"]["block_number"], 16
+                    ), "index height went backwards"
                 progress.append((now, tip))
                 older = [p for p in progress if p[0] <= now - 30]
                 if older:
-                    assert tip > older[-1][1], "no chain progress in a rolling 30-second window"
-                assert abs((time.time() - payment["wall"]) - (time.monotonic() - payment["monotonic"])) < 0.5, "wall clock jumped"
+                    assert (
+                        tip > older[-1][1]
+                    ), "no chain progress in a rolling 30-second window"
+                assert (
+                    abs(
+                        (time.time() - payment["wall"])
+                        - (time.monotonic() - payment["monotonic"])
+                    )
+                    < 0.5
+                ), "wall clock jumped"
                 if complete and recovered is None:
                     if now > recovery_due:
-                        self._recovery_fail("recovery_timeout", "first complete recovery was later than 330 seconds")
+                        self._recovery_fail(
+                            "recovery_timeout",
+                            "first complete recovery was later than 330 seconds",
+                        )
                     recovered = now
                     self.recovery_evidence["t_recover"] = recovered
-                    self._recovery_record("A_recovered", after_ready=recovered - t_ready)
-                    print(f"SPEC-09 A recovered after {recovered - t_ready:.3f}s; continuing full window", flush=True)
+                    self._recovery_record(
+                        "A_recovered", after_ready=recovered - t_ready
+                    )
+                    print(
+                        f"SPEC-09 A recovered after {recovered - t_ready:.3f}s; continuing full window",
+                        flush=True,
+                    )
                 if recovered is not None and now >= max(recovery_due, recovered + 10):
                     with self._recovery_budget(hard_due, 1):
                         logs = self._recovery_logs(payment)
-                        assert logs, "correct business state lacks Hosted A recovery attribution logs"
+                        assert (
+                            logs
+                        ), "correct business state lacks Hosted A recovery attribution logs"
                         self._recovery_health()
                         self._recovery_broadcasts(payment, hard_due)
                         self._recovery_timing(payment, accepted, rejected, t_commit)
-                        self.recovery_evidence.update({"result": "passed", "hosted_recovery": logs,
-                            "observation_finished": now, "observed_seconds": now - t_ready,
-                            "stable_seconds": now - recovered, "last_sample": sample})
-                        self._recovery_record("passed", observed_seconds=now - t_ready, stable_seconds=now - recovered)
+                        self.recovery_evidence.update(
+                            {
+                                "result": "passed",
+                                "hosted_recovery": logs,
+                                "observation_finished": now,
+                                "observed_seconds": now - t_ready,
+                                "stable_seconds": now - recovered,
+                                "last_sample": sample,
+                            }
+                        )
+                        self._recovery_record(
+                            "passed",
+                            observed_seconds=now - t_ready,
+                            stable_seconds=now - recovered,
+                        )
                     break
                 if recovered is None and time.monotonic() >= recovery_due:
-                    self._recovery_fail("recovery_timeout", "A failed to recover within the full 330-second scan window")
+                    self._recovery_fail(
+                        "recovery_timeout",
+                        "A failed to recover within the full 330-second scan window",
+                    )
                 if time.monotonic() >= hard_due:
-                    self._recovery_fail("evidence_failure", "insufficient full-window/stability evidence by 340 seconds")
+                    self._recovery_fail(
+                        "evidence_failure",
+                        "insufficient full-window/stability evidence by 340 seconds",
+                    )
                 if now - logged >= 30:
-                    print(f"SPEC-09 observed={now-t_ready:.1f}s A={sample['local']['state']} tip={tip}", flush=True)
+                    print(
+                        f"SPEC-09 observed={now-t_ready:.1f}s A={sample['local']['state']} tip={tip}",
+                        flush=True,
+                    )
                     logged = now
                 previous = sample
-                next_due = min(hard_due, recovery_due if recovered is None else hard_due)
-                time.sleep(max(0, min(2 - (time.monotonic() - sample["started"]), next_due - time.monotonic())))
+                next_due = min(
+                    hard_due, recovery_due if recovered is None else hard_due
+                )
+                time.sleep(
+                    max(
+                        0,
+                        min(
+                            2 - (time.monotonic() - sample["started"]),
+                            next_due - time.monotonic(),
+                        ),
+                    )
+                )
                 if recovered is None and time.monotonic() >= recovery_due:
-                    self._recovery_fail("recovery_timeout", "A failed to recover within 330 seconds")
+                    self._recovery_fail(
+                        "recovery_timeout", "A failed to recover within 330 seconds"
+                    )
                 sample = self._recovery_sample(payment, winner_hash, next_due)
         except BaseException as error:
             if self.recovery_evidence["result"] in ("incomplete", "passed"):
                 self.recovery_evidence["result"] = "evidence_or_fixture_failure"
-                if (isinstance(error, _RecoveryBudgetExpired) and phase == "acquisition"
-                        and time.monotonic() >= acquisition_until):
+                if (
+                    isinstance(error, _RecoveryBudgetExpired)
+                    and phase == "acquisition"
+                    and time.monotonic() >= acquisition_until
+                ):
                     self.recovery_evidence["result"] = "scenario_not_acquired"
-                elif (isinstance(error, _RecoveryBudgetExpired) and phase == "recovery"
-                      and recovered is None and time.monotonic() >= recovery_due):
+                elif (
+                    isinstance(error, _RecoveryBudgetExpired)
+                    and phase == "recovery"
+                    and recovered is None
+                    and time.monotonic() >= recovery_due
+                ):
                     self.recovery_evidence["result"] = "recovery_timeout"
             if "sample" in locals():
                 self.recovery_evidence["last_sample"] = sample
@@ -1509,18 +2018,28 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         # TLC-B: an independent TLC provides the pending request that reaches D.
         second = self._to_checkpoint_b(self._prepare_payment())
         assert second["expiry"] < first["expiry"]
-        assert first["expiry"] - second["expiry"] > 5_000, (
-            "TLC-A must remain outside ordinary expiry handling until TLC-B protects the channel"
-        )
+        assert (
+            first["expiry"] - second["expiry"] > 5_000
+        ), "TLC-A must remain outside ordinary expiry handling until TLC-B protects the channel"
         funding = self._funding_outpoint(self._channel(self.client))
         expected = self._commitment_hash(self.client)
         records = self.signer_control(self.tenant, "records")
-        signed = [r for r in records if r["complete"] and not r["for_remote"]
-                  and r["transaction_hash"] == expected]
+        signed = [
+            r
+            for r in records
+            if r["complete"]
+            and not r["for_remote"]
+            and r["transaction_hash"] == expected
+        ]
         assert len(signed) == 1, records
-        assert all(any(t["payment_hash"] == payment["hash"]
-                       and t["expiry"] == payment["expiry"] for t in signed[0]["tlcs"])
-                   for payment in (first, second)), signed
+        assert all(
+            any(
+                t["payment_hash"] == payment["hash"]
+                and t["expiry"] == payment["expiry"]
+                for t in signed[0]["tlcs"]
+            )
+            for payment in (first, second)
+        ), signed
         self._wait_past_deadline(second)
         self._assert_force_close_uses(funding, expected)
         assert self._invoice_status(first["hash"]) == "Received"
@@ -1534,5 +2053,7 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         assert self._invoice_status(first["hash"]) == "Received", self._invoice_status(
             first["hash"]
         )
-        assert int(self._channel_view(self.client)["local_balance"], 16) == balance_before
+        assert (
+            int(self._channel_view(self.client)["local_balance"], 16) == balance_before
+        )
         print(f"no-preimage outcome kept invoice Received: {first['hash']}")
