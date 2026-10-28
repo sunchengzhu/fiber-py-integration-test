@@ -1,4 +1,4 @@
-# Gate1：SSE 签名通知的租户隔离与连接恢复
+# 历史 Gate1：签名通知的租户隔离与连接恢复（4028884）
 
 > 历史范围：对应 4028884 的旧事件传输。当前迁移见 [签名订阅 Gate1](signing-subscriptions-scope.md)及 [Gate2 用例](signing-subscriptions.md)；历史通过不代表当前版本通过。
 
