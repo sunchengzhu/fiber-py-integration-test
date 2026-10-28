@@ -11,3 +11,5 @@
 - model: unavailable | cases: LSP 签名订阅命名 | feedback: 现有条目名称带有明显的SSE 要改造一下
 - model: unavailable | cases: LSP 签名订阅 ID 与映射迁移 | feedback: ID 也改为 LSP-SUB-*，同步迁移映射
 - model: unavailable | cases: LSP-SUBSCRIPTION-01～07、10～13 完整前缀选择（侧边对话转达，替换此前 SUB 选择） | feedback: 那还是长一点吧
+- model: unavailable | cases: LSP-WATCHTOWER-02 | feedback: 接受02的分段验证边界，但不能标为原Agent自动恢复已覆盖。
+- model: unavailable | cases: LSP-SUBSCRIPTION-14～19 及签名订阅命名 | feedback: 可以推进 记得把「SSE」相关的名字改一下

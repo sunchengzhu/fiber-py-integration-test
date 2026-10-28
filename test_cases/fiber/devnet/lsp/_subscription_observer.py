@@ -43,7 +43,7 @@ class SubscriptionRpcError(RuntimeError):
 class SubscriptionObserver:
     """One read-only connection, with independent subscriptions and bounded waits."""
 
-    def __init__(self, url, headers=None):
+    def __init__(self, url, headers=None, *, subprotocols=None, open_timeout=10):
         assert urlsplit(url).scheme == "ws", "local devnet WS only"
         self.started = time.monotonic()
         self.errors = []
@@ -57,9 +57,10 @@ class SubscriptionObserver:
         self.client = connect(
             url,
             additional_headers=headers or {},
+            subprotocols=subprotocols,
             compression=None,
             proxy=None,
-            open_timeout=10,
+            open_timeout=open_timeout,
             close_timeout=2,
             ping_interval=None,
             max_size=MAX_MESSAGE_SIZE,

@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import socket
 import subprocess
 import time
@@ -22,8 +23,13 @@ from test_cases.fiber.devnet.lsp._signer_gate import SignatureGate
 from test_cases.fiber.devnet.lsp._retry_signer_gate import RetrySignatureGate
 from test_cases.fiber.devnet.lsp._subscription_observer import SubscriptionProxy
 
-REVISION = "24b5c38bc098aeb29de5f6af7ac28dc667f218e3"
-BUNDLE = Path(get_project_root()) / "download/fiber/pr-1623"
+REVISION = os.environ.get(
+    "LSP_TEST_REVISION", "04c206465b48da85b99aa58e80afe9801a2cb2db"
+)
+assert len(REVISION) == 40 and all(
+    c in "0123456789abcdef" for c in REVISION
+), "LSP_TEST_REVISION must be a full lowercase commit SHA"
+BUNDLE = Path(get_project_root()) / "download/fiber" / f"pr-1623-{REVISION[:7]}"
 BISCUIT_PUBLIC_KEY = (
     "ed25519/17b172749be74276f0ed35a5d0685752684a3c5722114bba447a2f301136db79"
 )
@@ -96,6 +102,12 @@ class LspTestBase(FiberTest):
                 Path(__file__).with_name("_sdk_driver.rs").read_bytes()
             ).hexdigest()
         ), "Rebuild the LSP test driver after changing its source"
+        assert (
+            manifest["chain_source_sha256"]
+            == hashlib.sha256(
+                Path(__file__).with_name("_watchtower_chain.rs").read_bytes()
+            ).hexdigest()
+        ), "Rebuild the watchtower adapter after changing its source"
         version = subprocess.check_output([str(BUNDLE / "fnn"), "--version"], text=True)
         assert REVISION[:7] in version and "dirty" not in version, version
         print(f"LSP integration binaries: {version.strip()}, SDK source {REVISION}")
@@ -439,6 +451,54 @@ class LspTestBase(FiberTest):
             )
             assert tenant["state"]["state_name"] != "ChannelReady"
         print(f"LSP tenants ready: {time.monotonic() - started:.2f}s")
+
+    def _archive_run(self):
+        """Keep successful-run evidence too, before the framework removes nodes."""
+        destination = Path(os.environ["LSP_RUN_ARTIFACTS"]) / self._testMethodName
+        destination.mkdir(parents=True, exist_ok=False)
+        for tenant in getattr(self, "tenants", []):
+            proxy = tenant["subscription_proxy"]
+            with proxy.lock:
+                streams = [
+                    {
+                        "started": link.started,
+                        "requests": link.requests,
+                        "responses": link.responses,
+                        "subscriptions": link.subscriptions,
+                        "delivered_events": link.delivered_events,
+                        "errors": link.errors,
+                    }
+                    for link in proxy.connections()
+                ]
+                (destination / f"{tenant['label']}-ws.json").write_text(
+                    json.dumps(streams, indent=2) + "\n"
+                )
+            if isinstance(tenant["gate"], RetrySignatureGate):
+                (destination / f"{tenant['label']}-http.json").write_text(
+                    json.dumps(tenant["gate"].audit_snapshot(), indent=2) + "\n"
+                )
+        for index, fiber in enumerate(getattr(self, "fibers", []), 1):
+            if Path(fiber.tmp_path).exists():
+                shutil.copytree(fiber.tmp_path, destination / f"fiber-{index}")
+        for relative, name in (
+            ("data/logs/run.log", "ckb.log"),
+            ("node.log", "ckb-node.log"),
+            ("ckb.miner.log", "ckb-miner.log"),
+        ):
+            source = Path(self.node.ckb_dir) / relative
+            if source.exists():
+                shutil.copy2(source, destination / name)
+
+    def teardown_method(self, method):
+        if not os.environ.get("LSP_RUN_ARTIFACTS"):
+            return super().teardown_method(method)
+        # Do not let the generic failure archiver replace an older report/<method>.
+        try:
+            self._archive_run()
+        finally:
+            for fiber in getattr(self, "fibers", []):
+                fiber.force_stop()
+                fiber.clean()
 
     def _channel_state(self, client, channel_id):
         channels = client.list_channels({})["channels"]

@@ -13,7 +13,6 @@ from urllib.parse import urlsplit
 
 from test_cases.fiber.devnet.lsp._commitment_broadcast_gate import _hash, _outpoint
 
-
 MAX_BODY_BYTES = 10 * 1024 * 1024
 MAX_LOG_BYTES = 32 * 1024 * 1024
 MAX_SEND_EVENTS = 4096
@@ -58,6 +57,7 @@ class CompetingCloseObserver:
                     length = int(self.headers.get("Content-Length", "0"))
                     if not 0 < length <= MAX_BODY_BYTES:
                         raise ValueError("invalid CKB RPC Content-Length")
+
                     def stop_reading():
                         try:
                             self.connection.shutdown(socket.SHUT_RD)
@@ -75,7 +75,9 @@ class CompetingCloseObserver:
                         raise ValueError("incomplete CKB RPC request body")
                     payload = json.loads(raw)
                     if not isinstance(payload, dict):
-                        raise ValueError("CKB RPC batch/non-object request is unsupported")
+                        raise ValueError(
+                            "CKB RPC batch/non-object request is unsupported"
+                        )
                     entry = observer._entry(payload, raw, received)
                     status, content_type, body = observer._forward(
                         raw, self.headers, entry
@@ -96,7 +98,10 @@ class CompetingCloseObserver:
                             delayed["response_written_monotonic"] = written
                             release_at = observer.timing_episode["release_at"]
                             if not release_at <= written <= release_at + 0.100:
-                                observer._failure("A query response write missed fixed release tolerance", entry)
+                                observer._failure(
+                                    "A query response write missed fixed release tolerance",
+                                    entry,
+                                )
                     observer._persist(entry)
                 except Exception as error:
                     observer._failure(
@@ -106,7 +111,9 @@ class CompetingCloseObserver:
                         try:
                             observer._persist(entry)
                         except OSError as log_error:
-                            observer._failure(f"cannot persist CKB observer failure: {log_error}")
+                            observer._failure(
+                                f"cannot persist CKB observer failure: {log_error}"
+                            )
                     # This is a transport/fixture failure, never a fabricated
                     # JSON-RPC result or a CKB rejection such as RBFRejected.
                     self.close_connection = True
@@ -126,7 +133,9 @@ class CompetingCloseObserver:
         self.server.daemon_threads = True
         self.url = f"http://127.0.0.1:{self.server.server_port}"
         self.thread = threading.Thread(
-            target=self.server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
+            target=self.server.serve_forever,
+            kwargs={"poll_interval": 0.05},
+            daemon=True,
         )
         self.thread.start()
 
@@ -137,7 +146,9 @@ class CompetingCloseObserver:
                 entry["failure"] = message
                 entry["outcome"] = "error"
 
-    def configure_query_timing(self, log_path, channel_id, remote_pubkey, deadline_monotonic):
+    def configure_query_timing(
+        self, log_path, channel_id, remote_pubkey, deadline_monotonic
+    ):
         """Bind A once, before D; only its real unknown replies may be delayed."""
         channel_id = _hash(channel_id)
         peer = remote_pubkey.removeprefix("0x").lower()
@@ -146,34 +157,59 @@ class CompetingCloseObserver:
         bytes.fromhex(peer)
         with self.lock:
             if self.stopped or self.timing_rule is not None:
-                raise AssertionError("query timing already configured or observer stopped")
+                raise AssertionError(
+                    "query timing already configured or observer stopped"
+                )
             if time.monotonic() > deadline_monotonic - 5:
-                raise AssertionError("less than 5 seconds left to configure query timing")
+                raise AssertionError(
+                    "less than 5 seconds left to configure query timing"
+                )
             self.timing_rule = {
-                "log_path": str(log_path), "channel_id": channel_id,
-                "remote_pubkey": peer, "deadline_monotonic": deadline_monotonic,
-                "delay_ms": 250, "configured_monotonic": time.monotonic(),
+                "log_path": str(log_path),
+                "channel_id": channel_id,
+                "remote_pubkey": peer,
+                "deadline_monotonic": deadline_monotonic,
+                "delay_ms": 250,
+                "configured_monotonic": time.monotonic(),
             }
 
     def snapshot(self):
         with self.lock:
-            return copy.deepcopy({"armed": None, "events": self.events, "errors": self.errors})
+            return copy.deepcopy(
+                {"armed": None, "events": self.events, "errors": self.errors}
+            )
 
     def timing_snapshot(self):
         with self.lock:
-            return copy.deepcopy({"rule": self.timing_rule, "episode": self.timing_episode,
-                                  "delayed_queries": self.delayed_queries})
+            return copy.deepcopy(
+                {
+                    "rule": self.timing_rule,
+                    "episode": self.timing_episode,
+                    "delayed_queries": self.delayed_queries,
+                }
+            )
 
     def _entry(self, payload, raw, received):
         entry = {
-            "request": payload, "raw_request": raw.decode(), "transaction": None,
-            "inputs": [], "funding_outpoint": None, "message": None,
-            "classification": "observed", "received_monotonic": received[0],
-            "received_wall_ms": received[1], "forwarded_monotonic": None,
-            "forwarded_wall_ms": None, "upstream_response_monotonic": None,
-            "response_monotonic": None, "response_wall_ms": None,
-            "response_written_monotonic": None, "response": None,
-            "raw_response": None, "actual_hash": None, "outcome": "received",
+            "request": payload,
+            "raw_request": raw.decode(),
+            "transaction": None,
+            "inputs": [],
+            "funding_outpoint": None,
+            "message": None,
+            "classification": "observed",
+            "received_monotonic": received[0],
+            "received_wall_ms": received[1],
+            "forwarded_monotonic": None,
+            "forwarded_wall_ms": None,
+            "upstream_response_monotonic": None,
+            "response_monotonic": None,
+            "response_wall_ms": None,
+            "response_written_monotonic": None,
+            "response": None,
+            "raw_response": None,
+            "actual_hash": None,
+            "outcome": "received",
         }
         with self.lock:
             if self.stopped:
@@ -196,8 +232,11 @@ class CompetingCloseObserver:
 
     def _forward(self, raw, request_headers, entry):
         upstream = self._upstream
-        connection_type = (http.client.HTTPSConnection if upstream.scheme == "https"
-                           else http.client.HTTPConnection)
+        connection_type = (
+            http.client.HTTPSConnection
+            if upstream.scheme == "https"
+            else http.client.HTTPConnection
+        )
         connection = connection_type(upstream.hostname, upstream.port, timeout=5)
         until = time.monotonic() + 5
         timed_out = threading.Event()
@@ -220,7 +259,9 @@ class CompetingCloseObserver:
             connection.connect()
             active_socket[0] = connection.sock
             connection.sock.settimeout(max(0.001, until - time.monotonic()))
-            headers = {"Content-Type": request_headers.get("Content-Type", "application/json")}
+            headers = {
+                "Content-Type": request_headers.get("Content-Type", "application/json")
+            }
             if request_headers.get("Authorization") is not None:
                 headers["Authorization"] = request_headers["Authorization"]
             path = upstream.path or "/"
@@ -238,25 +279,37 @@ class CompetingCloseObserver:
             if len(body) > MAX_BODY_BYTES:
                 raise ValueError("CKB upstream response body exceeded limit")
             with self.lock:
-                entry.update({"upstream_response_monotonic": done,
-                              "response_monotonic": done,
-                              "response_wall_ms": int(time.time() * 1000),
-                              "http_status": response.status,
-                              "raw_response": body.decode(errors="replace"),
-                              "outcome": "forwarded"})
+                entry.update(
+                    {
+                        "upstream_response_monotonic": done,
+                        "response_monotonic": done,
+                        "response_wall_ms": int(time.time() * 1000),
+                        "http_status": response.status,
+                        "raw_response": body.decode(errors="replace"),
+                        "outcome": "forwarded",
+                    }
+                )
                 try:
                     reply = json.loads(body)
                     entry["response"] = reply
                     if not isinstance(reply, dict):
                         raise ValueError("expected one CKB JSON-RPC response object")
                     if entry["request"].get("method") == "send_transaction":
-                        if response.status == 200 and "result" in reply and "error" not in reply:
+                        if (
+                            response.status == 200
+                            and "result" in reply
+                            and "error" not in reply
+                        ):
                             entry["actual_hash"] = _hash(reply["result"])
                 except (ValueError, TypeError) as error:
                     # Audit invalid upstream output, but return those exact
                     # bytes/status rather than changing what FNN receives.
                     self._failure(f"invalid CKB upstream response: {error}", entry)
-            return response.status, response.getheader("Content-Type", "application/json"), body
+            return (
+                response.status,
+                response.getheader("Content-Type", "application/json"),
+                body,
+            )
         finally:
             timer.cancel()
             connection.close()
@@ -266,19 +319,29 @@ class CompetingCloseObserver:
             rule = copy.deepcopy(self.timing_rule)
             episode = copy.deepcopy(self.timing_episode)
         payload = entry["request"]
-        if (rule is None or payload.get("method") != "get_transaction"
-                or entry["received_monotonic"] < rule["deadline_monotonic"]
-                or entry["http_status"] != 200
-                or (episode and time.monotonic() >= episode["release_at"])):
+        if (
+            rule is None
+            or payload.get("method") != "get_transaction"
+            or entry["received_monotonic"] < rule["deadline_monotonic"]
+            or entry["http_status"] != 200
+            or (episode and time.monotonic() >= episode["release_at"])
+        ):
             return None
         reply = entry["response"]
-        if (not isinstance(reply, dict) or "error" in reply or
-                (reply.get("result") or {}).get("tx_status", {}).get("status") != "unknown"):
+        if (
+            not isinstance(reply, dict)
+            or "error" in reply
+            or (reply.get("result") or {}).get("tx_status", {}).get("status")
+            != "unknown"
+        ):
             return None
         pattern = (
             r"Spawning InFlightCkbTxActor: tx_hash=Hash256\((0x[0-9a-f]{64})\), "
-            r"tx_kind=Closing\(Pubkey\(" + re.escape(rule["remote_pubkey"]) +
-            r"\), Hash256\(" + re.escape(rule["channel_id"]) + r"\), true\)"
+            r"tx_kind=Closing\(Pubkey\("
+            + re.escape(rule["remote_pubkey"])
+            + r"\), Hash256\("
+            + re.escape(rule["channel_id"])
+            + r"\), true\)"
         )
         with Path(rule["log_path"]).open("rb") as stream:
             log_bytes = stream.read(MAX_LOG_BYTES + 1)
@@ -294,19 +357,25 @@ class CompetingCloseObserver:
             now = time.monotonic()
             if self.timing_episode is None:
                 self.timing_episode = {
-                    "transaction_hash": payload["params"][0], "started_at": now,
-                    "window_start": now, "release_at": now + 0.250,
+                    "transaction_hash": payload["params"][0],
+                    "started_at": now,
+                    "window_start": now,
+                    "release_at": now + 0.250,
                     "source_log_match": matches[0].group(0),
                 }
             release_at = self.timing_episode["release_at"]
             if now >= release_at:
                 return None
-            delayed = {"request": copy.deepcopy(payload), "response": copy.deepcopy(reply),
-                       "raw_response": entry["raw_response"],
-                       "received_monotonic": entry["received_monotonic"],
-                       "upstream_response_monotonic": entry["upstream_response_monotonic"],
-                       "release_at": release_at, "released_monotonic": None,
-                       "response_written_monotonic": None}
+            delayed = {
+                "request": copy.deepcopy(payload),
+                "response": copy.deepcopy(reply),
+                "raw_response": entry["raw_response"],
+                "received_monotonic": entry["received_monotonic"],
+                "upstream_response_monotonic": entry["upstream_response_monotonic"],
+                "release_at": release_at,
+                "released_monotonic": None,
+                "response_written_monotonic": None,
+            }
             self.delayed_queries.append(delayed)
             entry["timing_release_at"] = release_at
         # A and T share this proxy. Never sleep with its lock held, and never
@@ -339,7 +408,8 @@ class CompetingCloseObserver:
         self.server.server_close()
         self.thread.join(timeout=max(0, until - time.monotonic()))
         with self.lock:
-            drained = self.lock.wait_for(lambda: self.active == 0,
-                                         timeout=max(0, until - time.monotonic()))
+            drained = self.lock.wait_for(
+                lambda: self.active == 0, timeout=max(0, until - time.monotonic())
+            )
             if not drained or self.thread.is_alive() or stopper.is_alive():
                 self._failure("CKB observer did not stop within cleanup budget")

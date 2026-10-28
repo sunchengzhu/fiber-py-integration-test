@@ -5,14 +5,16 @@
 上一轮完整已执行基线：FNN/SDK `4028884`，测试仓库基于 `v0.10.0 / 6088115`；已有 16 条核心用例已全部回归通过，见 [运行说明](../test_cases/fiber/devnet/lsp/README.md)。
 `24b5c38` 签名订阅迁移批次：[已通过的 Gate1 范围](lsp/signing-subscriptions-scope.md)、[已确认的 Spec、测试树与用例表](lsp/signing-subscriptions.md)。原事件 01～07改造为 LSP-SUBSCRIPTION 前缀，旧 08/09 已删除；该版本已同源构建并完成 Gate3 实现：核心 16 条与订阅 14 条全部通过；当轮完整 LSP 40 条为 38 通过、2 失败。普通开通计时器缺口及旧强关夹具竞争风险见 [运行记录](../test_cases/fiber/devnet/lsp/README.md)，历史通过不转记。
 
+当前新增范围为固定 `04c2064` 的 [浏览器鉴权 Gate2](lsp/signing-subscriptions.md#浏览器鉴权-gate2共同断言输入与预算04c2064)，14～19六行及预算已获用户确认，Gate3已实现并完成正式1+3共44/44、相关旧14/14回归，GPT6.1 sol复核通过，见 [浏览器鉴权记录](../test_cases/fiber/devnet/lsp/README.md#04c2064-浏览器鉴权-gate32026-10-26)。现有 Bearer 14方法已在04通过，见 [运行记录](../test_cases/fiber/devnet/lsp/README.md#04c2064-websocket-既有订阅回归与下一步2026-10-26)。旧事件传输仅保留为 [4028884历史范围](lsp/legacy-signing-events-scope.md)，不代表当前协议。
+
 **已知问题入口：** `LSP-TIMEOUT-04/05` 的普通开通计时器缺口已由
 [Fiber #1674](https://github.com/nervosnetwork/fiber/issues/1674) 跟踪，2026-10-23 核实时为 Open；
 `24b5c38` 的两轮回归仍可复现。新会话先读 [既有归因与日志](../test_cases/fiber/devnet/lsp/README.md#已知问题关联1674)，
 相同版本和失败特征沿用该 issue；目标版本或现象变化时先核对修复与差异，再决定针对性验证，避免重复建 issue 或从头定位。
 
-[Hosted 通道开通限制与延迟签名（Gate1 范围）](lsp/hosted-channel-guards-scope.md)保留为候选，尚未选定或进入 Gate2。下文旧版本分析保留历史依据，不表示其超时、watchtower 场景已在新版通过。
+[真实付款的延迟签名恢复](lsp/delayed-payment-recovery.md)展开 `LSP-PAYMENT-01～03` 的完整用例、时间预算和共同断言；[Gate1](lsp/hosted-channel-guards-scope.md)的在线延迟、SDK 完全离线、A 等签时 B 收款三个方向已获用户确认。固定 `24b5c38`，跨普通 ACK 的 30 秒阈值并保留业务安全余量；用户已明确通过三行、预算与共同断言，2026-10-24 进入 Gate3；Python 自动化及 TEST-MAP 已接入，冻结后聚焦一轮与固定三轮合计 12/12 通过，首轮断言补齐与全部执行、复核记录见[运行记录](../test_cases/fiber/devnet/lsp/README.md#24b5c38真实付款延迟签名恢复2026-10-24)。2026-10-23 核实 PR HEAD 为 `04c2064`，相对固定基线新增浏览器 WS 认证及 token 编码调整，未把旧结果转记为新 HEAD 通过。反向开通仍为候选；下文旧版本分析保留历史依据。
 
-当前批次为 [SPEC-09：LSP-TIMEOUT-12 完整用例、预算与断言](lsp/channel-signing-deadline.md#lsp-timeout-12检查点-b-独立败方恢复)：[Gate1 范围](lsp/channel-signing-deadline-scope.md#spec-09-独立败方恢复回归gate1-范围)及 Gate2 均获用户确认，基于 `24b5c38`，仅 B 的受控查询时序恢复，保留真实 T 获胜/A RBF、精确索引就绪及完整扫描窗口。Gate3 的 Python 测试及 TEST-MAP 已接入，修复后聚焦与固定 3 次复跑 **4/4 通过**，相关 08/10 回归 **2/2 通过**；初始夹具失败、全部运行结果及独立复核见 [SPEC-09 记录](../test_cases/fiber/devnet/lsp/README.md#24b5c38-spec-09lsp-timeout-12-独立败方恢复2026-10-23)，历史诊断不转记为本条通过。
+上一批 [SPEC-09：LSP-TIMEOUT-12 完整用例、预算与断言](lsp/channel-signing-deadline.md#lsp-timeout-12检查点-b-独立败方恢复)：[Gate1 范围](lsp/channel-signing-deadline-scope.md#spec-09-独立败方恢复回归gate1-范围)及 Gate2 均获用户确认，基于 `24b5c38`，仅 B 的受控查询时序恢复，保留真实 T 获胜/A RBF、精确索引就绪及完整扫描窗口。Gate3 的 Python 测试及 TEST-MAP 已接入，修复后聚焦与固定 3 次复跑 **4/4 通过**，相关 08/10 回归 **2/2 通过**；初始夹具失败、全部运行结果及独立复核见 [SPEC-09 记录](../test_cases/fiber/devnet/lsp/README.md#24b5c38-spec-09lsp-timeout-12-独立败方恢复2026-10-23)，历史诊断不转记为本条通过。
 
 `LSP-TIMEOUT-08/10` 的 [稳定性改造 Gate1](lsp/channel-signing-deadline-scope.md#0810-稳定性改造范围)与 [Gate2 完整用例及断言](lsp/channel-signing-deadline.md)均已获用户确认，本轮 Gate3 已完成。Python CKB RPC 门禁隔离 T 的竞争广播，仍要求 A 指定承诺真实确认；聚焦加固定 3 轮复跑共 8/8 通过，GPT 6.1 sol 独立复核无阻断项，原始失败与修正见[运行记录](../test_cases/fiber/devnet/lsp/README.md)。后续[自然竞争独立诊断](../test_cases/fiber/devnet/lsp/README.md#24b5c38-自然竞争后的恢复诊断2026-10-23)已证实检查点 A：T 真实确认、A 真实 RBF 后约 264.6 秒通过 Hosted 扫描恢复，完整观察 331.8 秒；B 三次无额外时序控制的尝试均由 A 获胜。[B 的受控查询时序续查](../test_cases/fiber/devnet/lsp/README.md#24b5c38-检查点-b-的竞争与恢复诊断续查2026-10-23)取得 T 真实胜出、A 真实 RBF，并在确认后约 261.8 秒观察到 Hosted A 恢复，完整观察 330.7 秒。这个结果证明所取得的 B 路径能收敛；250 ms 时序控制不证明无干预竞态的概率，也不覆盖链上结算及资金取回。
 
@@ -28,13 +30,16 @@ Hosted LSP 区域依据 `nervosnetwork/fiber#1623`；上方超时诊断与当前
 
 当前 Python 通过项、未解决问题、待回归及未覆盖项见
 2026-10-20 功能测试汇总（本地证据：`report/lsp-python-status-20261020/summary.md`）。
-后续候选见 [Hosted watchtower 签名与结算 Gate1](lsp/watchtower-settlement-scope.md)，尚未展开用例表或修改自动化；当前批次为上方 SPEC-09 Gate3。
+2026-10-24 用户批准切至 `04c2064`；最小兼容回归 `LSP-RECOVERY-01` / `LSP-SUBSCRIPTION-02` 共 2/2 通过，原 `24b5c38` 产物与历史结果保留，详见[新版运行记录](../test_cases/fiber/devnet/lsp/README.md#04c2064-最小兼容回归2026-10-24)。[Hosted watchtower Gate1](lsp/watchtower-settlement-scope.md) 三个方向已获用户确认，[Gate2 四条完整用例、预算与资金断言](lsp/watchtower-settlement.md) 及 02 分段边界已获确认，现已进入 Gate3 并建立四条映射。原合约字节阻断已于 2026-10-27 在用户批准的隔离链中修复。修正后自检及聚焦 4/4 通过，首轮固定复跑 3 通过/02 失败，后两轮未运行；后续独立诊断已确认 FNN 产品 bug：旧首项遮蔽已通过 SDK 校验的新请求，显式批准后完整 240.356s 仍未恢复，详见 [最新归因与证据](../test_cases/fiber/devnet/lsp/README.md#04c2064-watchtower-02-陈旧请求遮蔽与批准后恢复诊断2026-10-27)。02 不计原 Agent 自动恢复覆盖；单租户暂停和 SDK 掉线另批保留。
+
+2026-10-28 修复定点验证：固定 `3ce369e5c4b224638817ab99aec8c3e0fcb85d3a` 的适配自检及普通 watchtower 四条单轮共 **5/5 通过**，02 已取得 `R0<R1` 的原遮蔽条件并完成结算。详见 [修复版本记录](../test_cases/fiber/devnet/lsp/README.md#3ce369e1706-修复定点验证2026-10-28)；不转记为 04、当前 PR head 或完整 1+3 通过。
+
 
 | 区域 | 职责 | 边界 | 入口 | 可观察结果 | 评审文档 |
 | --- | --- | --- | --- | --- | --- |
 | 通道签名请求的租户隔离 | 隔离租户的签名查询和提交 | 两个租户各开通一条私有通道；沿用首批范围 | 租户 Biscuit、签名查询/提交、通道查询 | 本租户能签名；跨租户操作失败；原请求保持不变；双方通道就绪 | [通道签名请求的租户隔离](lsp/channel-signing-isolation.md) |
 | 通道签名的重试与恢复 | 在重复请求、连接中断、进程重启和超时后保持签名及业务状态一致 | 覆盖私有通道开通、单笔支付更新、协作关闭的相关签名阶段；超时涉及的安全强关纳入分析；完整 watchtower 专项另行分析 | 所属租户的签名 RPC、SDK 存储、FNN 生命周期、通道及支付/发票查询、CKB 交易 | 能恢复时继续原流程，不能恢复时明确拒绝并进入正确终态；不重复应用、不丢请求、不重复扣款或结算 | [提交重试与短暂断线](lsp/channel-signing-retry.md)；其余两组见下文 |
-| Hosted watchtower 签名与结算 | 强关后由所属租户 SDK 批准签名并完成结算 | 首批限无 pending TLC 的私有 CKB 通道；结算到事先批准的 LSP 费用钱包，尚不证明租户自托管取回 | watchtower 事件、租户查询/提交、SDK 本地授权与独立链验证、CKB 交易 | 正常结算；租户隔离；单租户暂停不阻塞另一租户；签名端短暂掉线恢复 | [Gate1 范围草案](lsp/watchtower-settlement-scope.md) |
+| Hosted watchtower 签名与结算 | 强关后由所属租户 SDK 批准签名并完成结算 | 首批限无 pending TLC、A 非零份额的私有 CKB 通道；结算到事先批准的 LSP 费用钱包，尚不证明租户自托管取回 | watchtower 事件、租户查询/提交、SDK 本地授权与独立链验证、CKB 交易 | 正常授权结算；原 Agent 拒签及批准后适配结算（仅分段证据）；跨租户读取和提交被拒绝 | [Gate1 范围](lsp/watchtower-settlement-scope.md)、[Gate2 用例](lsp/watchtower-settlement.md) |
 
 ## 通道签名的重试与恢复：Gate1 范围分析
 

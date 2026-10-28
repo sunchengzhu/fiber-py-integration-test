@@ -9,7 +9,6 @@ import time
 
 import requests
 
-
 MAX_REQUEST_BYTES = 10 * 1024 * 1024
 MAX_SEND_EVENTS = 4096
 REMOTE_ERROR = {
@@ -71,7 +70,9 @@ class CommitmentBroadcastGate:
                     # This client uses single requests. Reject the entire batch,
                     # rather than letting a target send bypass classification.
                     if not isinstance(payload, dict):
-                        raise ValueError("CKB RPC batch/non-object request is unsupported")
+                        raise ValueError(
+                            "CKB RPC batch/non-object request is unsupported"
+                        )
                     status, content_type, body = gate._request(
                         payload, raw, self.headers.get("Authorization"), received
                     )
@@ -81,11 +82,16 @@ class CommitmentBroadcastGate:
                     self.end_headers()
                     self.wfile.write(body)
                 except Exception as error:
-                    gate._failure(f"CKB proxy request failed: {type(error).__name__}: {error}")
-                    body = _error_reply(None, {
-                        "code": -32098,
-                        "message": "LSP_TEST_CKB_PROXY_FAILED",
-                    })
+                    gate._failure(
+                        f"CKB proxy request failed: {type(error).__name__}: {error}"
+                    )
+                    body = _error_reply(
+                        None,
+                        {
+                            "code": -32098,
+                            "message": "LSP_TEST_CKB_PROXY_FAILED",
+                        },
+                    )
                     try:
                         self.send_response(200)
                         self.send_header("Content-Type", "application/json")
@@ -124,7 +130,9 @@ class CommitmentBroadcastGate:
         funding = _outpoint(funding_outpoint)
         local, remote = _hash(local_message), _hash(remote_message)
         with self.lock:
-            assert not self.stopped and self.armed is None, "gate already armed or stopped"
+            assert (
+                not self.stopped and self.armed is None
+            ), "gate already armed or stopped"
             assert not self.errors, self.errors
             assert local != remote, "local and remote commitment messages must differ"
             wall_ms = int(time.time() * 1000)
@@ -143,11 +151,13 @@ class CommitmentBroadcastGate:
 
     def snapshot(self):
         with self.lock:
-            return copy.deepcopy({
-                "armed": self.armed,
-                "events": self.events,
-                "errors": self.errors,
-            })
+            return copy.deepcopy(
+                {
+                    "armed": self.armed,
+                    "events": self.events,
+                    "errors": self.errors,
+                }
+            )
 
     def _request(self, payload, raw, authorization, received):
         event = None
@@ -200,13 +210,17 @@ class CommitmentBroadcastGate:
                     raise ValueError("target funding spend received before arming")
                 decoded = subprocess.run(
                     [self.decoder_path, "commitment-message"],
-                    input=json.dumps(event["transaction"]), text=True,
-                    capture_output=True, check=True, timeout=2,
+                    input=json.dumps(event["transaction"]),
+                    text=True,
+                    capture_output=True,
+                    check=True,
+                    timeout=2,
                 )
                 message = _hash(decoded.stdout.strip())
                 classification = (
-                    "local" if message == rule["local_message"] else
-                    "remote" if message == rule["remote_message"] else "unknown"
+                    "local"
+                    if message == rule["local_message"]
+                    else "remote" if message == rule["remote_message"] else "unknown"
                 )
                 with self.lock:
                     event["message"] = message
@@ -214,12 +228,20 @@ class CommitmentBroadcastGate:
                 if classification == "unknown":
                     raise ValueError("unknown commitment spends target funding")
                 if received[1] < rule["deadline_wall_ms"]:
-                    raise ValueError("target commitment broadcast before its TLC deadline")
+                    raise ValueError(
+                        "target commitment broadcast before its TLC deadline"
+                    )
             except Exception as error:
-                self._failure(f"target transaction classification failed: {error}", event)
-                reply = _error_reply(payload.get("id"), {
-                    "code": -32098, "message": "LSP_TEST_TARGET_COMMITMENT_INVALID",
-                })
+                self._failure(
+                    f"target transaction classification failed: {error}", event
+                )
+                reply = _error_reply(
+                    payload.get("id"),
+                    {
+                        "code": -32098,
+                        "message": "LSP_TEST_TARGET_COMMITMENT_INVALID",
+                    },
+                )
                 self._record_response(event, 200, reply, "error")
                 return 200, "application/json", reply
             if classification == "remote":
@@ -243,10 +265,19 @@ class CommitmentBroadcastGate:
                     self.upstream_url, data=raw, headers=headers, timeout=(1, 4)
                 )
             if event is not None:
-                self._record_response(event, response.status_code, response.content, "forwarded")
-            return response.status_code, response.headers.get("Content-Type", "application/json"), response.content
+                self._record_response(
+                    event, response.status_code, response.content, "forwarded"
+                )
+            return (
+                response.status_code,
+                response.headers.get("Content-Type", "application/json"),
+                response.content,
+            )
         except Exception as error:
-            self._failure(f"CKB upstream forwarding failed: {type(error).__name__}: {error}", event)
+            self._failure(
+                f"CKB upstream forwarding failed: {type(error).__name__}: {error}",
+                event,
+            )
             raise
 
     def _record_response(self, event, status, raw, outcome):

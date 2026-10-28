@@ -1,5 +1,7 @@
 # Gate1：将现有 LSP 签名用例迁移到 WebSocket 订阅
 
+本文前半部分保留 `24b5c38` 的已批准迁移记录；最新推进范围见文末「2026-10-26：浏览器鉴权补充 Gate1」。新增范围已获用户明确确认，进入 [浏览器鉴权 Gate2](signing-subscriptions.md#浏览器鉴权-gate2共同断言输入与预算04c2064)；新增完整行集也已获用户明确通过，Gate3已完成新44/44及旧14/14验证，结果见测试目录运行记录。
+
 建议下一批先改造现有用例，恢复当前 PR 版本的 Python 验证基础；删除已被产品移除的 SSE 专属行为。随后优先补无 pending TLC 的 watchtower 强关结算，再处理带 TLC 的超时取回。
 
 沿用本对话的阶段：Gate1 评审范围及取舍，Gate2 评审完整用例行，Gate3 实现及执行。本文记录已获用户明确通过的 Gate1 范围；[Gate2 完整行集](signing-subscriptions.md)也已获用户明确通过，Gate3 已完成本批自动化迁移与验证，实际执行及完整回归中的残余问题见测试目录 README。用户进一步要求迁移 ID，并最终选择完整前缀 LSP-SUBSCRIPTION-*；以下历史旧 ID 仅用于定位迁移来源。
@@ -117,3 +119,37 @@ watchtower 仍优先选私有 CKB、无 pending TLC、公共 T 强关：跟踪�
 - 仓库当前没有 `scripts/check_test_design.py`，映射检查器也没有 `--review` 选项。Gate1 尚无正式用例行，设计结构检查留到 Gate2，届时使用 skill 提供的检查器核对适配方式。
 
 已获用户确认的 Gate1 范围：**迁移现有 16 条核心业务及事件 01～07（包括重试/恢复检查点）；删除事件 08/09 和 04 的旧 URL、会话头、operator 拒绝分支；另列最小的 operator host 隔离及独立订阅/取消行为。** 该完整改/删/新增行集也已获用户明确确认，后续实施与当前版本结果见签名订阅评审及测试目录 README。
+
+## 2026-10-26：浏览器鉴权补充 Gate1
+
+用户收到开发者“方案稳定”的反馈后要求优先推进 WebSocket。当天只读查询 PR #1623：仍为 open，head 为 `04c206465b48da85b99aa58e80afe9801a2cb2db`；本地产品 checkout 与构建清单同源，无需再次切换版本。开发者反馈作为优先级依据，不代替源码契约或运行结果。
+
+### 环境阻断的适用范围
+
+watchtower 适配自检发现当前 devnet 中 CommitmentLock Type ID 所指向的 live 合约字节与固定 04 可信模板不一致（107,784 对 80,880 字节），因此在 `watchtower-configure` 阶段拒绝。完整原始证据和摘要见 [运行记录](../../test_cases/fiber/devnet/lsp/README.md#04c2064-watchtower-gate3合约预检阻断2026-10-25)。这属于尚未满足的验证环境前提，未确定链上二进制的源码版本，也未据此认定 Fiber 产品 bug。
+
+现有 `test_signing_subscriptions.py` 不调用该链验证配置；已有 14 个方法覆盖 11 个签名订阅行为。本轮先运行这些已批准方法，当前版本结果单独记入 [LSP 测试说明](../../test_cases/fiber/devnet/lsp/README.md)，不将 24 版结果转记。普通签名订阅通过也不能证明强关结算合约兼容。
+
+watchtower 的恢复方案另行处理：仅在隔离的临时 devnet 中准备与固定模板一致的合约，再执行原适配自检和正式 1+3 批次。原 Gate2 明确禁止字节不符时自动部署/升级，本轮不改变该边界，不通过换信任源或跳过校验消除错误。它不作为下面浏览器鉴权范围的前置条件。
+
+### 本批建议：只补浏览器鉴权入口
+
+Gate1核对时观察器仅支持Bearer header；Gate3已增加可选浏览器子协议参数。普通订阅的初始工作、实时下一请求、租户/host 隔离、SDK 重连和独立取消已有批准用例；复用这些行为判据，不重新迁移 ID，也不把 SSE 语义带回来。
+
+固定源码依据：[浏览器入口及权限说明](https://github.com/nervosnetwork/fiber/blob/04c206465b48da85b99aa58e80afe9801a2cb2db/crates/fiber-lib/src/rpc/subscription.rs#L44)、[握手凭证归一化](https://github.com/nervosnetwork/fiber/blob/04c206465b48da85b99aa58e80afe9801a2cb2db/crates/fiber-lib/src/rpc/middleware.rs#L25)。以下是范围拆分，尚未创建正式用例行或新增 TEST-MAP。
+
+- 正常浏览器凭证接入 [pending]：使用真实注册返回的未填充 base64url token，同时提供 `fiber-rpc` 和 `base64url.bearer.authorization.fiber.<token>`；核对协商结果仅为 `fiber-rpc`，不回显凭证协议；建立订阅后接收真实完整 R1/R2，再由原 SDK 完成原通道。兼容输入包括旧格式 token 去掉尾部填充后用于子协议、Bearer header 对带/不带填充的接受；不能对 token 再做一次 base64 编码。
+- 握手拒绝及故障隔离 [pending]：提供凭证子协议却缺少 `fiber-rpc`、多个凭证、同时提供 Authorization header 与凭证子协议、空或非法 base64url 编码，均在服务端握手阶段拒绝。普通 Bearer 连接不要求 `fiber-rpc`，不误判为拒绝输入。必须证明请求实际送到服务器，不能把 Python 客户端本地参数校验异常算通过；错误连接之后合法原订阅仍收到主动产生的新事件。
+- 同一鉴权与租户边界 [pending]：子协议归一化后仍须通过 Biscuit 与 `write("subscriptions")`、topic 读取权限检查。编码合法但签名/内容无效的 Biscuit，以及缺写/缺读权限，区分为 subscribe 的真实 JSON-RPC 拒绝，不能混写为握手失败。合法 A/B 浏览器凭证各收到所属初始与新事件；不能只检查没有事件的静默窗口。
+
+### 验证方式与边界
+
+仍是 Python 功能测试：通过真实 WS 握手头和消息测试服务器提供给浏览器的入口，保留握手响应、订阅响应、事件及最终通道证据；不生成假事件或模拟 FNN 成功响应。必要时仅为现有本地观察器增加子协议参数及握手证据获取，不修改 FNN/SDK 产品代码。此方式不声称已覆盖某一浏览器引擎、页面集成、TLS 或反向代理配置。
+
+Gate2 再展开完整行集、各失败层次、有限等待与共同断言，展示后仍须用户明确确认该行集，才可进入 Gate3 实现；本轮范围确认不授权新增自动化。新独立行为使用 `LSP-SUBSCRIPTION-14` 起的 ID，不复用已退休的 08/09。已批准且预期不变的 01～07、10～13 保持原 ID 和映射。首次聚焦通过后再按 Gate2 的固定次数复跑，不能通过重试筛掉失败。
+
+后续候选依次为 `channel_ids` 过滤/非法参数、凭证过期与换证重连、每连接 32 个订阅的功能边界。凭证到期不终止既有流，但新的 subscribe/unsubscribe 必须重新鉴权，不能预设到期自动断流。全局容量压测、慢消费者压力、真实 watchtower 待签事件和链上结算不混入本批；watchtower 的空订阅也不能当成真实事件链通过。
+
+以上三个方向及 Python 线级验证边界已获用户确认；当前 [Gate2 完整行集、共同断言及预算](signing-subscriptions.md#浏览器鉴权-gate2共同断言输入与预算04c2064)已获用户明确通过，新增方向Gate3已完成，正式44/44及相关旧14/14通过，GPT6.1 sol已复核代码和结果。
+
+GPT 6.1 sol 已只读复核固定源码、现有覆盖与本节范围，未触发 Daybreak；未发现方向性阻塞。已按反馈限定“带凭证子协议时缺少 fiber-rpc”，并明确完整 Gate2 行集仍须再次确认。服务端握手拒绝有真实 HTTP 400 依据；后续 Python 输入应使用 HTTP 合法但 base64url 非法的值并保存服务器响应，避免客户端先拒绝。旧 padding 仅验证固定 04 版本的输入兼容，不宣称跨版本迁移通过。此复核不代表新增用例或浏览器入口已执行。

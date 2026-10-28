@@ -1,4 +1,6 @@
 //! Local test controls around the unmodified, checked SDK agent.
+#[path = "_watchtower_chain.rs"]
+mod watchtower_chain;
 use anyhow::{anyhow, ensure, Context, Result};
 use ckb_types::{core::TransactionBuilder, packed::*, prelude::*};
 use clap::Parser;
@@ -34,6 +36,8 @@ struct Args {
     /// Tests save real signatures for explicit submission by Python.
     #[arg(long)]
     ack_held_events: bool,
+    #[arg(long)]
+    watchtower_check_only: bool,
 }
 
 #[derive(Deserialize)]
@@ -41,6 +45,7 @@ struct Args {
 enum MissingPermission {
     SubscriptionsWrite,
     ChannelSigningRead,
+    None,
 }
 
 #[derive(Deserialize)]
@@ -66,13 +71,42 @@ fn subscription_token() -> Result<()> {
     // Default queries trust authority facts only, matching FNN's scope routing.
     let tenants: Vec<(String,)> = authorizer.query("data($id) <- tenant($id)")?;
     let nodes: Vec<(String,)> = authorizer.query("data($id) <- node($id)")?;
-    ensure!(tenants.len() == 1 && nodes.len() == 1, "expected tenant token");
+    ensure!(
+        tenants.len() == 1 && nodes.len() == 1,
+        "expected tenant token"
+    );
     let builder = Biscuit::builder()
-        .fact(Fact::new("tenant".into(), &[Term::Str(tenants[0].0.clone())]))?
+        .fact(Fact::new(
+            "tenant".into(),
+            &[Term::Str(tenants[0].0.clone())],
+        ))?
         .fact(Fact::new("node".into(), &[Term::Str(nodes[0].0.clone())]))?;
+    if matches!(input.missing_permission, MissingPermission::None) {
+        // Read-only browser fixture: preserve the verified tenant/node identity.
+        // A neutral fact gives three consecutive serialized lengths; require
+        // actual base64 padding rather than accepting a vacuous padding check.
+        let builder = builder
+            .fact("read(\"channels\")")?
+            .fact("write(\"subscriptions\")")?;
+        for length in 1..=3 {
+            let token = builder.clone()
+                .fact(Fact::new(
+                    "lsp_test_encoding_pad".into(),
+                    &[Term::Str("x".repeat(length))],
+                ))?
+                .build(&root)?
+                .to_base64()?;
+            if token.ends_with('=') {
+                println!("{}", json!({"token": token}));
+                return Ok(());
+            }
+        }
+        anyhow::bail!("could not produce a valid padded browser test credential");
+    }
     let builder = match input.missing_permission {
         MissingPermission::SubscriptionsWrite => builder.fact("read(\"channels\")")?,
         MissingPermission::ChannelSigningRead => builder.fact("write(\"subscriptions\")")?,
+        MissingPermission::None => unreachable!(),
     };
     println!("{}", json!({"token": builder.build(&root)?.to_base64()?}));
     Ok(())
@@ -103,15 +137,10 @@ fn operator_subscription_token() -> Result<()> {
 
 // The fee template is fixed by the devnet contracts, not a signing response.
 fn transaction_size(lock: Script, close: Option<Script>, dep_count: usize) -> u64 {
-    let first_lock = if close.is_some() {
-        lock
-    } else {
-        lock.as_builder().args(vec![0u8; 57].pack()).build()
-    };
     let mut builder = TransactionBuilder::default()
         .cell_deps(vec![CellDep::default(); dep_count].pack())
         .input(CellInput::default())
-        .output(CellOutput::new_builder().lock(first_lock).build())
+        .output(CellOutput::new_builder().lock(lock).build())
         .output_data(Bytes::default())
         .witness(vec![0u8; 16 + 32 + 64].pack());
     if let Some(lock) = close {
@@ -191,7 +220,12 @@ fn opening() -> Result<()> {
         remote_funding_key: state.local_channel_public_keys.funding_pubkey,
         remote_settlement_key: state.local_channel_public_keys.tlc_base_key,
         remote_shutdown_script: state.local_shutdown_script.clone(),
-        commitment_fee: transaction_size(lock.clone(), None, deps),
+        commitment_fee: transaction_size(
+            lock.clone().as_builder()
+                .args(vec![0u8; state.commitment_contract_features.lock_args_len()].pack())
+                .build(),
+            None, deps,
+        ),
         commitment_lock: lock,
         delay_epoch: (state.commitment_delay_epoch | 0xa000000000000000).to_le_bytes(),
         epoch_duration_ms: 2000,
@@ -222,7 +256,13 @@ struct Open {
     ckb_rpc_url: String,
 }
 
-async fn control(agent: &mut Agent<HttpFiberRpc, FileSignerStore>, value: Value) -> Result<Value> {
+async fn control(
+    agent: &mut Agent<HttpFiberRpc, FileSignerStore>,
+    rpc: &HttpFiberRpc,
+    store: &std::path::Path,
+    chain: &mut Option<watchtower_chain::Chain>,
+    value: Value,
+) -> Result<Value> {
     let operation = value["operation"].as_str().context("operation")?;
     if operation == "open" {
         let open: Open = serde_json::from_value(value)?;
@@ -239,10 +279,41 @@ async fn control(agent: &mut Agent<HttpFiberRpc, FileSignerStore>, value: Value)
             .await?;
         return Ok(serde_json::to_value(opened)?);
     }
+    if operation == "watchtower-configure" {
+        *chain = Some(
+            watchtower_chain::Chain::new(serde_json::from_value(value["config"].clone())?).await?,
+        );
+        let configured = chain.as_ref().unwrap();
+        return Ok(json!({"configured":true,
+            "funding_deps":configured.funding_deps.iter().cloned().map(ckb_jsonrpc_types::CellDep::from).collect::<Vec<_>>(),
+            "settlement_deps":configured.deps.iter().cloned().map(ckb_jsonrpc_types::CellDep::from).collect::<Vec<_>>()
+        }));
+    }
     let channel: Hash256 = value["channel_id"]
         .as_str()
         .context("channel id")?
         .parse()?;
+    if operation == "watchtower-authorize" {
+        agent
+            .authorize(fiber_lsp_sdk_agent::FixtureAuthorization::Watchtower {
+                channel_id: channel,
+                destination: serde_json::from_value(value["destination"].clone())?,
+                max_fee: value["max_fee"].as_u64().context("fee cap")?,
+            })
+            .await?;
+        return Ok(json!({"saved":true}));
+    }
+    if operation == "watchtower-process" || operation == "watchtower-check" {
+        return watchtower_chain::process(
+            agent,
+            rpc,
+            store,
+            chain.as_ref().context("adapter not configured")?,
+            channel,
+            operation == "watchtower-check",
+        )
+        .await;
+    }
     let signer = agent
         .open_channel(agent.binding(channel).context("unbound channel")?)
         .await?;
@@ -277,6 +348,25 @@ async fn control(agent: &mut Agent<HttpFiberRpc, FileSignerStore>, value: Value)
                 })
                 .await?;
         }
+        "watchtower-records" => {
+            let mut result = vec![];
+            for r in signer.recovery_records().await? {
+                ensure!(
+                    r.settlement.data.tlcs.is_empty(),
+                    "watchtower fixture requires no TLCs"
+                );
+                result.push(json!({
+                    "reference":r.reference, "complete":r.complete_signature.is_some(),
+                    "transaction":ckb_jsonrpc_types::Transaction::from(r.transaction.clone()),
+                    "local_amount":r.settlement.data.local_amount.to_string(),
+                    "remote_amount":r.settlement.data.remote_amount.to_string(),
+                    "local_key":format!("0x{}",hex::encode(r.settlement.local_settlement_key.serialize())),
+                    "remote_key":format!("0x{}",hex::encode(r.settlement.remote_settlement_key.serialize())),
+                    "witness":format!("0x{}", hex::encode(fiber_types::settlement_data_to_witness(&r.settlement.data, r.reference.for_remote, fiber_types::CommitmentContractFeatures::from_lock_args(&r.transaction.raw().outputs().get(0).context("output")?.lock().args().raw_data()).map_err(anyhow::Error::msg)?, r.settlement.local_settlement_key, r.settlement.remote_settlement_key))),
+                }));
+            }
+            return Ok(json!(result));
+        }
         "records" => {
             return Ok(json!(signer.recovery_records().await?.iter().map(|r| json!({
                 "version": r.reference.version, "for_remote": r.reference.for_remote,
@@ -308,6 +398,29 @@ async fn main() -> Result<()> {
     if std::env::args().nth(1).as_deref() == Some("operator-subscription-token") {
         return operator_subscription_token();
     }
+    if std::env::args().nth(1).as_deref() == Some("inspect-onchain") {
+        let value: Value = serde_json::from_reader(std::io::stdin())?;
+        let tx: Transaction =
+            serde_json::from_value::<ckb_jsonrpc_types::Transaction>(value["transaction"].clone())?
+                .into();
+        let message = fiber_types::compute_tx_message(&tx);
+        let mut result = json!({"tx_hash":format!("{:#x}",tx.calc_tx_hash()),
+            "request_id":format!("0x{}",hex::encode(fiber_types::blake2b_hash_with_salt(tx.as_slice(), &[]))),
+            "size":tx.serialized_size_in_block()});
+        if let Some(s) = value["signature"].as_str() {
+            let sig = hex::decode(s.trim_start_matches("0x"))?;
+            ensure!(sig.len() == 65, "signature length");
+            let sig = secp256k1::ecdsa::RecoverableSignature::from_compact(
+                &sig[..64],
+                secp256k1::ecdsa::RecoveryId::try_from(sig[64] as i32)?,
+            )?;
+            let key = secp256k1::SECP256K1
+                .recover_ecdsa(&secp256k1::Message::from_digest(message), &sig)?;
+            result["recovered_key"] = json!(format!("0x{}", hex::encode(key.serialize())));
+        }
+        println!("{result}");
+        return Ok(());
+    }
     if std::env::args().nth(1).as_deref() == Some("commitment-message") {
         let transaction: ckb_jsonrpc_types::Transaction =
             serde_json::from_reader(std::io::stdin())?;
@@ -322,6 +435,8 @@ async fn main() -> Result<()> {
         return opening();
     }
     let args = Args::parse();
+    let store = args.store.clone();
+    let mut chain = None;
     let rpc = HttpFiberRpc::new(&args.rpc, args.operator_token)?;
     let mut agent = Agent::open(
         rpc.clone(),
@@ -341,10 +456,18 @@ async fn main() -> Result<()> {
                 let mut stream = BufReader::new(stream);
                 let mut line = String::new();
                 stream.read_line(&mut line).await?;
-                let response = match serde_json::from_str(&line) {
-                    Ok(value) => match control(&mut agent, value).await {
-                        Ok(result) => json!({"result": result}),
-                        Err(error) => json!({"error": format!("{error:#}")}),
+                let response = match serde_json::from_str::<Value>(&line) {
+                    Ok(value) => {
+                        let watchtower = value["operation"].as_str().is_some_and(|op| op.starts_with("watchtower-"));
+                        let action = control(&mut agent, &rpc, &store, &mut chain, value);
+                        let result = if watchtower {
+                            tokio::time::timeout(std::time::Duration::from_secs(9), action).await
+                                .unwrap_or_else(|_| Err(anyhow!("watchtower control deadline exceeded")))
+                        } else { action.await };
+                        match result {
+                            Ok(result) => json!({"result": result}),
+                            Err(error) => json!({"error": format!("{error:#}")}),
+                        }
                     },
                     Err(error) => json!({"error": error.to_string()}),
                 };
@@ -352,12 +475,25 @@ async fn main() -> Result<()> {
             }
             delivery = events.next() => {
                 let delivery = delivery.context("tenant event reader stopped")?;
-                let result = agent.handle_event(delivery.event).await;
+                let event = delivery.event;
+                let event_evidence=serde_json::to_value(&event)?;
+                let approved_channel = if let fiber_json_types::SubscriptionEvent::WatchtowerSigning(ref work) = event {
+                    let id: Hash256 = work.channel_id.into();
+                    let policies: Value = std::fs::read(store.join("watchtower-approvals.json")).ok()
+                        .and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(Value::Null);
+                    (chain.is_some() && policies.get(format!("{id:#x}")).is_some()).then_some(id)
+                } else { None };
+                let result = if let Some(id) = approved_channel {
+                    tokio::time::timeout(std::time::Duration::from_secs(9), watchtower_chain::process(&agent, &rpc, &store, chain.as_ref().unwrap(), id, args.watchtower_check_only)).await.unwrap_or_else(|_| Err(anyhow!("watchtower event deadline exceeded"))).map(|_| ())
+                } else { agent.handle_event(event).await };
                 // A deliberately held, already saved signature is a test
                 // checkpoint, not a broken subscription. Real RPC/SDK errors
                 // still use the upstream reconnect path, including HTTP timeout.
                 let held_by_test = args.ack_held_events && result.as_ref().err()
                     .is_some_and(|error| format!("{error:#}") == "test driver pauses this submission");
+                if event_evidence["type"]=="watchtower_signing" {
+                    eprintln!("watchtower-event: {}",json!({"event":event_evidence,"error":result.as_ref().err().map(|e|format!("{e:#}")),"adapted":approved_channel.is_some()}));
+                }
                 let _ = delivery.processed.send(result.is_ok() || held_by_test);
                 if held_by_test {
                     eprintln!("event: saved signature held by test; subscription stays connected");

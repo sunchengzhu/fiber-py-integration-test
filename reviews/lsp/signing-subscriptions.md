@@ -1,10 +1,12 @@
-# LSP 通道签名订阅用例评审
+# LSP WebSocket 签名订阅用例评审
 
-本批沿用已通过的 [Gate1 范围](signing-subscriptions-scope.md)，将现有事件与恢复用例迁移到 WebSocket 签名订阅。固定目标为 [PR #1623](https://github.com/nervosnetwork/fiber/pull/1623) 的 `24b5c38bc098aeb29de5f6af7ac28dc667f218e3`；用户已明确通过 Gate2；FNN/SDK/测试驱动已在该提交同源构建，本批核心与订阅 30 个方法已在该版本通过；完整 40 条回归为 38 通过、2 失败，残余问题见测试目录 README，历史结果不转记为本版本通过。
+当前实施的是文末浏览器鉴权 Gate3：`LSP-SUBSCRIPTION-14～19`，固定 `04c206465b48da85b99aa58e80afe9801a2cb2db`，Gate1/Gate2 已获用户确认；新六行已接入映射，正式1+3共44/44通过，相关既有14方法回归14/14通过，见 [浏览器鉴权运行记录](../../test_cases/fiber/devnet/lsp/README.md#04c2064-浏览器鉴权-gate32026-10-26)。01～07、10～13 保留已批准行为；2026-10-26 在 04 上的 14 方法回归通过见 [运行记录](../../test_cases/fiber/devnet/lsp/README.md#04c2064-websocket-既有订阅回归与下一步2026-10-26)。以下迁移经过和24版结果保留历史依据，不替代本次固定04的实际结果。
+
+历史迁移批次沿用已通过的 [Gate1 范围](signing-subscriptions-scope.md)，将现有事件与恢复用例迁移到 WebSocket 签名订阅。固定目标为 [PR #1623](https://github.com/nervosnetwork/fiber/pull/1623) 的 `24b5c38bc098aeb29de5f6af7ac28dc667f218e3`；用户已明确通过 Gate2；FNN/SDK/测试驱动已在该提交同源构建，本批核心与订阅 30 个方法已在该版本通过；完整 40 条回归为 38 通过、2 失败，残余问题见测试目录 README，历史结果不转记为本版本通过。
 
 用户先要求同时迁移 ID 与映射，随后选择完整前缀 `LSP-SUBSCRIPTION-*`：原 01～07 对应迁移为 `LSP-SUBSCRIPTION-01～07`；原 08/09 退休，不复用；新行为从 10 开始。Gate3 已将 Python 文件和测试名称迁移为签名订阅，并同步 TEST-MAP；本表勾选只表示映射存在，执行结果见测试目录 README。
 
-## 共同前提与观察口径
+## 既有行为的共同前提与观察口径
 
 - T 是启用认证的公共 FNN，A/B 是两个不同的 Hosted 租户，P 是独立普通节点。各行使用独立环境，A–T/B–T 为私有 CKB 通道，真实 SDK 完成批准、注资验证、绑定及签名。只读观察器不生成签名。
 - 专用 `rpc.ws_listening_addr` 从 WS 握手的 `Authorization: Bearer <token>` 保存凭证，认证在随后 RPC 调用时执行；不能把携带凭证等同于握手阶段拒绝。通过 `subscribe` 订阅 `channel_signing`。凭证须允许 `write("subscriptions")` 及对应 topic 读取，身份来自凭证。常规环境重新签发当前 token，不拿旧版缺少订阅权限的 token 冒充当前协议故障。
@@ -47,6 +49,30 @@ Basis: [订阅注册与按连接取消](https://github.com/nervosnetwork/fiber/b
 Source: explicit
 Testing: required
 
+### SPEC-05：浏览器子协议接入及编码兼容
+Condition: 固定 04 的专用 WS listener 开启认证；连接提供 fiber-rpc 与凭证子协议，或使用普通 Bearer header。
+Expected: 当前注册 token 是未填充 base64url，可原样用作凭证子协议后缀；旧格式去除尾部填充后可用于该后缀；Bearer 接受带/不带填充的同一 token。浏览器握手成功仅选择 fiber-rpc，不回显凭证协议。
+Observable: 实际 HTTP 101、Sec-WebSocket-Protocol 响应值、相同 token 字节及完整当前/实时签名状态，最终原通道就绪。
+Basis: [固定 04 浏览器鉴权契约](https://github.com/nervosnetwork/fiber/blob/04c206465b48da85b99aa58e80afe9801a2cb2db/crates/fiber-lib/src/rpc/subscription.rs#L44)、[注册 token 编码](https://github.com/nervosnetwork/fiber/blob/04c206465b48da85b99aa58e80afe9801a2cb2db/crates/fiber-lib/src/lsp/token.rs#L59)。
+Source: explicit
+Testing: required
+
+### SPEC-06：歧义和编码错误在握手阶段拒绝
+Condition: 携带凭证子协议但缺 fiber-rpc、多个凭证、同时携带 Authorization header 与凭证子协议，或凭证后缀为空/非法 base64url。
+Expected: 服务端返回 HTTP 400，不升级为有效 WS 连接；已有合法订阅继续接收新工作。普通 Bearer 不要求 fiber-rpc。
+Observable: 真实服务端握手响应、未获得订阅 ID、原连接的完整新 R2 与最终原通道状态。
+Basis: [凭证归一化拒绝条件](https://github.com/nervosnetwork/fiber/blob/04c206465b48da85b99aa58e80afe9801a2cb2db/crates/fiber-lib/src/rpc/middleware.rs#L25)、[握手拒绝响应](https://github.com/nervosnetwork/fiber/blob/04c206465b48da85b99aa58e80afe9801a2cb2db/crates/fiber-lib/src/rpc/mod.rs#L254)。
+Source: observation
+Testing: required
+
+### SPEC-07：浏览器入口保留 RPC 权限和租户范围
+Condition: 编码及协议组合合法，浏览器凭证已通过握手归一化；随后订阅 channel_signing。
+Expected: 无效 Biscuit、缺订阅写权限或缺 topic 读取权限仍在 RPC 阶段拒绝；有效 A/B 凭证只收到各自私有状态，拒绝请求不影响合法订阅。
+Observable: HTTP 101 后的真实 JSON-RPC 拒绝及无事件、权限正向对照、A/B 完整 R1/R2 归属和原通道终态。
+Basis: [同一 Biscuit 权限规则](https://github.com/nervosnetwork/fiber/blob/04c206465b48da85b99aa58e80afe9801a2cb2db/crates/fiber-lib/src/rpc/subscription.rs#L54)、[RPC 授权及范围](https://github.com/nervosnetwork/fiber/blob/04c206465b48da85b99aa58e80afe9801a2cb2db/crates/fiber-lib/src/rpc/subscription.rs#L249)。
+Source: explicit
+Testing: required
+
 ## 测试树
 
 <!-- TEST-TREE-BEGIN -->
@@ -65,6 +91,13 @@ Testing: required
   - 同租户不同连接并存 LSP-SUBSCRIPTION-11 [primary] -> SPEC-04
   - 本连接取消一个订阅 LSP-SUBSCRIPTION-12 [primary] -> SPEC-04
   - 外连接和未知 ID 不可取消 LSP-SUBSCRIPTION-13 [primary] -> SPEC-04
+- 浏览器凭证接入（04 新批次）
+  - 当前注册 token 原样接入及协商响应 LSP-SUBSCRIPTION-14 [primary] -> SPEC-05
+  - 同一 token 的三种编码/入口兼容 LSP-SUBSCRIPTION-15 [primary] -> SPEC-05
+  - 五种握手拒绝输入及原连接存活 LSP-SUBSCRIPTION-16 [primary] -> SPEC-06
+  - 合法编码但无效 Biscuit 的 RPC 拒绝 LSP-SUBSCRIPTION-17 [primary] -> SPEC-07
+  - 缺写/缺读分别拒绝且互补权限可用 LSP-SUBSCRIPTION-18 [primary] -> SPEC-07
+  - 两个有效浏览器租户的初始及实时隔离 LSP-SUBSCRIPTION-19 [primary] -> SPEC-07
 - 后续范围
   - watchtower 事件及链上结算 [unanalysed] — 已有独立范围草稿；本批完成后回到 watchtower Gate1。
   - topic 参数、过滤组合、容量及 token 运行中到期 [pending] — 当前批次聚焦迁移；后续单独确认范围，不将其算作本批覆盖。
@@ -86,6 +119,12 @@ Testing: required
 | `LSP-SUBSCRIPTION-11` | - [x] A 有冻结 R1；用同一 token 在 C1、C2 各建立一个订阅，待两者收到 R1 后应用 S1 并冻结 R2，再完成原通道 | 两个连接各自的订阅都收到完整 R1 及新 R2；新订阅不替换旧订阅、不导致旧连接退出；原通道完成且只有一次签名推进 | 错把并存客户端当成旧式接管，导致原客户端失去工作 | P1 |
 | `LSP-SUBSCRIPTION-12` | - [x] A 在同一连接建立 U1/U2，另一个连接建立 U3，三者已收到冻结 R1；取消 U1 并取得成功响应后才应用 S1 产生 R2，继续收集事件并完成原通道 | 取消 U1 返回 true；该连接仍可使用，U2/U3 均收到完整新 R2；U1 在观察期内不收到取消后产生的 R2；原通道正常完成 | 取消一个订阅误断整个连接或其他客户端，或已取消订阅继续接收新工作 | P1 |
 | `LSP-SUBSCRIPTION-13` | - [x] A 在 C1/U1 与 C2/U2（两个 ID 不同）均收到冻结 R1；从 C2 尝试取消 C1 的 U1 及一个确定未知的 ID，然后应用 S1 产生 R2 并完成原通道 | 两次取消均返回 false；C1/U1 和 C2/U2 仍各自收到完整新 R2，原通道正常完成 | 仅凭订阅 ID 跨连接取消工作，或无效取消误伤合法订阅 | P1 |
+| `LSP-SUBSCRIPTION-14` | - [x] A–T 冻结 R1，使用当前注册返回的原始 token，经浏览器凭证子协议建立订阅，应用真实 S1 后在原订阅等待 R2，再恢复原 SDK | token 为未填充 base64url；握手返回 101 且只协商 fiber-rpc、不回显凭证；订阅收到完整 R1/R2，R2 到达前不靠查询推进，原通道最终双方就绪且注资不变 | 新浏览器入口无法接入、泄露凭证或只有握手成功而不能收到工作 | P0 |
+| `LSP-SUBSCRIPTION-15` | - [x] A–T 冻结 R1，取确有尾部填充的有效 A token，以去填充的浏览器子协议、带填充 Bearer、去填充 Bearer 在三连接订阅，再应用一次 S1 并完成原通道 | 三种输入解码为同一 token 字节；三连接各收到完整 R1/R2；浏览器仅协商 fiber-rpc 且不回显凭证，两个 Bearer 均无需提供该协议；原通道双方就绪、注资不变 | 旧编码输入不兼容、重复编码 token，或仅测没有实际填充的伪边界 | P1 |
+| `LSP-SUBSCRIPTION-16` | - [x] A 的合法订阅已收到冻结 R1；分别以带凭证但缺 fiber-rpc、重复凭证、同时带 Bearer 和凭证子协议、空后缀、非法 base64url 后缀请求新握手，每种独立场景随后推进 A 到 R2 并恢复签名 | 五种请求实际送达服务端并返回 HTTP 400，不建立订阅；原合法订阅仍收到完整 R2，原通道双方就绪且注资不变；客户端本地拒绝不算通过 | 歧义凭证被接受、错误输入绕过握手检查，或误伤合法订阅 | P1 |
+| `LSP-SUBSCRIPTION-17` | - [x] A 的合法订阅已有冻结 R1；另一连接使用 fiber-rpc 和编码合法但内容不是有效 Biscuit 的凭证子协议完成握手后订阅，再推进 A 的 R2 并完成原通道 | 错误凭证连接握手为 101 且仅协商 fiber-rpc；subscribe 返回 JSON-RPC 错误、无订阅 ID、无签名事件；A 原订阅收到完整 R2，原通道就绪且注资不变 | 把编码校验误当 token 认证，或错误地要求此输入在握手失败 | P1 |
+| `LSP-SUBSCRIPTION-18` | - [x] A 的合法订阅已有冻结 R1；分别用签名有效且身份正确、仅缺订阅写权限或仅缺通道读取权限的浏览器凭证握手，证明互补权限可用后订阅，再各自推进 A 的 R2 并完成通道 | 两种输入均握手 101 且仅协商 fiber-rpc；缺写者签名查询成功、缺读者未知 ID 取消返回 false 而签名查询拒绝；subscribe 均 RPC 拒绝且无事件；原订阅收到 R2、原通道就绪且注资不变 | 浏览器入口绕过任一权限，或用全无权限 token 掩盖未执行另一项检查 | P1 |
+| `LSP-SUBSCRIPTION-19` | - [x] A/B 各有冻结 R1，分别用各自有效浏览器凭证订阅；核对初始工作后依次应用各自 S1，在同一订阅收取各自 R2，再恢复两方原 SDK | 两连接握手 101 且仅协商 fiber-rpc；初始及实时事件只含所属租户完整 R1/R2，不出现对方私有状态；两个原订阅均收到正向 R2，两条原通道就绪且各自注资不变 | 凭证归一化丢失身份导致跨租户泄露，或用空连接静默掩盖隔离失败 | P0 |
 <!-- TEST-CASES-END -->
 
 ## 已移除的旧行为
@@ -116,3 +155,48 @@ Testing: required
 ## 本轮交接
 
 用户已确认本表 11 条、原 08/09 删除及原 04 三个废弃输入，以及重试表 04/05、恢复表 02～07。Gate3 已按该行集同步自动化、文件/类/方法名称、TEST-MAP 及勾选。超时强关、watchtower 与链上资金取回仍按后续独立 Gate1 推进，未因本次迁移被计为覆盖。
+
+
+## 浏览器鉴权 Gate2：共同断言、输入与预算（04c2064）
+
+本节适用于已获用户明确确认的14～19及共同断言、预算。本批Gate3已实现并完成正式1+3及相关旧回归，实际证据见测试目录README；复选框本身只表示映射存在；前文旧迁移记录独立保留。
+
+### 准备与可观察证据
+
+复用已有私有 CKB 通道和真实 SDK 冻结 R1/S1 的夹具。C/U、R1/R2、S1/S2 沿用前文定义。浏览器连接不设置 Authorization header，协议列表是 `fiber-rpc` 与 `base64url.bearer.authorization.fiber.<token>`；16 的冲突输入除外。14 必须直接使用真实注册原文；15 是固定 04 上同一有效 token 的编码兼容，不代表历史版本/身份存储迁移。
+
+15 的 padded 字符串必须实际含 1 或 2 个尾部 `=`，去填充后必须不同且解码字节一致；不能盲目追加无效填充。如当前注册 token 长度恰好不需要填充，Gate3 可最小扩展已有测试专用 token 夹具：保留从真实 token 验证得到的 A tenant/node，签发 subscriptions 写与 channels 读权限，加入不参与授权的长度控制 fact，以至多三种连续长度取得有效且需要填充的序列化 token。中性 fact 名称和值避开所有授权规则，仅用于控制编码长度。只使用本地公开 devnet 测试私钥，不改产品签发逻辑；未取得有效夹具则报告夹具失败，不跳过或伪称兼容通过。该 token 仅供只读观察器；真实签名仍由原 SDK 身份/存储完成。
+
+16 的五个输入各自使用独立准备和收尾，不在同一冻结窗口内循环累积：缺 fiber-rpc 时其余凭证有效；重复相同凭证两次；同一有效 token 同时放 header 和子协议；后缀为空；后缀为 HTTP/subprotocol 合法但 base64url 非法的 `!`。HTTP 400 是固定 04 源码观察，随本行提交人工确认，不绑定错误响应正文。必须取得真实服务器 HTTP 400；Python 参数校验异常、连接失败、超时或其他状态码均不能代替。17 使用对 `not a Biscuit` 字节的一次无填充 base64url 编码，编码合法但认证无效，必须先取得 101 再断言 RPC 错误。
+
+18 的两种输入各自独立；复用已有 token 权限夹具，保留有效签名及唯一 A tenant/node。缺写者先在同连接查询完整 R1 成功；缺读者先以避开所有活动 ID 的未知取消请求证明写权限，再证明签名查询失败，最后验证 subscribe 拒绝。不能因为握手成功就宣称身份或权限正确。
+
+### 共同断言
+
+- 成功浏览器握手记录真实 101 与响应协议头，协商值恰为 `fiber-rpc`，不包含凭证子协议或 token；禁止只依赖客户端构造成功。Bearer 不传该协议。RPC 拒绝检查 error/整数 code、无 result 订阅 ID，不绑定非契约错误文案。
+- 对全部成功订阅保留 ID 的 JSON 类型并比较完整 typed notification。先收 R1 并核对独立保存的当前状态；应用真实 S1 只得到一次 Applied，再先收新 request ID 的 R2、后直连查询交叉核对。消息由真实 FNN 产生，不由观察器伪造；读订阅本身不提交签名或推进 R1。
+- 负向输入不得获得签名事件；保留原合法订阅，错误发生后主动产生 R2 并在原连接收到，以证明故障隔离。19 收齐双方 R1 后观察 5 秒，再依次产生各自 R2；持续检查所有事件归属，直到双方 R2 到达后再观察 5 秒，不能仅依赖静默窗口。
+- 所有行恢复原 SDK 存储完成原通道，验证双方 ChannelReady、NoSignatureRequired、同一原始 channel ID/注资 outpoint、注资交易 committed。无额外通道、无 pending TLC，双方 local/remote 余额互相对应；最终连续 5 秒状态、注资、余额及 TLC 不再变化。不把“余额等于开通前”作为断言，因为正常开通有费用。
+- 证据包括版本和构建校验、请求输入类别、真实握手响应、RPC/WS 帧、R1/S1/R2、原 SDK 与节点日志和终态。新测试使用 `test_browser_*`/`TestBrowserSigningSubscriptions` 等清晰名称及完整 `LSP-SUBSCRIPTION-*` 映射；不恢复旧事件传输名称。
+
+### 时间预算与 Gate3 执行顺序
+
+| 阶段 | 上限与判据 |
+| --- | --- |
+| 环境及 R1 准备 | 单租户 180 秒、双租户 240 秒；独立节点/SDK 就绪且真实 R1/S1 已冻结后才进入行为阶段；超时记环境/夹具证据，不算产品行为通过 |
+| 连接及请求 | 每次 WS 握手最多 10 秒、每次 RPC 最多 10 秒；共享外层截止，禁止自动重试替换拒绝、超时或失败 |
+| 当前/新事件 | 每个阶段共享最多 60 秒，15 的三连接和19 的双租户均共用阶段截止，不能按连接倍增；检查 SDK 实际已保存 S2，不用轮询触发推送 |
+| 负向及终态稳定 | 负向观察 5 秒并继续收集到正向 R2 后 5 秒；最终状态稳定 5 秒，期间 0.1～0.2 秒轮询；这是有限观察结论 |
+| 完成原通道 | 所有涉及通道共用最多 120 秒，不按租户累加；超时完整留证 |
+| 行为阶段与总预算 | 行为阶段共用 300 秒，子阶段取自身上限和剩余预算的较小值；进入阶段时每条通道业务截止余量至少 360 秒，提交 S1 及恢复 SDK 两处放行前均复核至少 180 秒。不延长产品配置或借重建环境刷新失败。含准备及最多30秒清理，单租户单输入总上限540秒、双租户600秒 |
+
+Gate3 拟实现 6 个行为行、11 个独立执行实例：14/15/17/19 各1，16 五种输入，18 两种输入。15 的三种入口在一个实例内使用同一 token 字节及同一真实状态推进，不是三次成功计数。先静态收集/映射检查，再聚焦一轮11实例；冻结实现后固定复跑3轮11实例，共44个预定实例，不通过补跑凑成功数。修复夹具须保留原失败、单独记录修正后新批次；产品失败留证交用户处理。共用观察器/凭证夹具若被修改，另对既有14条回归一次并单列，不计入新44个实例。全批理论串行上限每轮100分钟、四轮400分钟，实际耗时按原始结果记录；超时是执行失败，不是产品 SLA。
+
+Python 仅验证服务器对浏览器线协议的行为，不宣称真实浏览器页面、TLS/代理、全局压力或 watchtower 链上取回通过。watchtower 字节预检仍独立保留，不在本批升级合约。用户已明确通过14～19完整行集、共同断言及预算，Gate3已完成；运行结果单独记入测试目录README。
+
+
+Gate2 复核与检查：GPT 6.1 sol 已只读复核六行、源码、输入夹具和预算，未发现阻断项，未触发 Daybreak。实现时新批次需明确传递共享截止及两处180秒放行余量，不盲目复用旧 `_submit_saved/_finish_channels` 的固定300秒判断，也不改变旧用例默认行为。
+
+映射检查 `python3 scripts/check_test_map.py`：103个评审ID/93个有映射，退出1；新增14～19未映射符合当前Gate2阶段，报错仍为既有6个孤儿映射与历史报告overlay的16个重复ID。设计检查使用 skill 的 `scripts/check_test_design.py --root <仓库> --review reviews/lsp/signing-subscriptions.md`：识别17行，退出1，报告相同历史重复ID、保留的后续分支及SPEC-06源码观察待人工确认；不代表本批新增了结构错误或功能已通过。`git diff --check` 通过。仅文档/命名及一条注释调整，本轮未启动节点或执行功能测试。
+
+Gate3最终交接：14～19的11个方法及全部TEST-MAP已同步；聚焦和固定三轮44/44通过，既有14方法回归14/14通过，GPT6.1 sol代码/结果复核无阻断。初版探索轮因补outpoint索引断言被人工中断（5通过、退出2），全部证据保留，不计入正式结果。无产品代码或合约改动，watchtower验证边界不变。
