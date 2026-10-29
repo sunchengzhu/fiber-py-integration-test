@@ -1,6 +1,6 @@
 # Gate1：将现有 LSP 签名用例迁移到 WebSocket 订阅
 
-本文前半部分保留 `24b5c38` 的已批准迁移记录；最新推进范围见文末「2026-10-26：浏览器鉴权补充 Gate1」。新增范围已获用户明确确认，进入 [浏览器鉴权 Gate2](signing-subscriptions.md#浏览器鉴权-gate2共同断言输入与预算04c2064)；新增完整行集也已获用户明确通过，Gate3已完成新44/44及旧14/14验证，结果见测试目录运行记录。
+调整后的[过滤参数Gate1](#2026-10-28过滤参数补充-gate1)及[Gate2行集、数组兼容和预算](signing-subscriptions.md#过滤参数-gate2输入断言预算与最小适配04c2064)均已获用户确认。Gate3实现后04产物准备因缓存版本不匹配停止；用户随后明确授权更新LSP分支，本批固定 `84333ee` 独立重编并完成相关3/3及正式1+3共48/48，见[最新运行记录](../../test_cases/fiber/devnet/lsp/README.md#84333ee-订阅过滤-gate3完成2026-10-29)。历史24迁移及04浏览器结果保留，不合并为843全量通过；同身份多通道严格子集仍是覆盖缺口。
 
 建议下一批先改造现有用例，恢复当前 PR 版本的 Python 验证基础；删除已被产品移除的 SSE 专属行为。随后优先补无 pending TLC 的 watchtower 强关结算，再处理带 TLC 的超时取回。
 
@@ -153,3 +153,91 @@ Gate2 再展开完整行集、各失败层次、有限等待与共同断言，�
 以上三个方向及 Python 线级验证边界已获用户确认；当前 [Gate2 完整行集、共同断言及预算](signing-subscriptions.md#浏览器鉴权-gate2共同断言输入与预算04c2064)已获用户明确通过，新增方向Gate3已完成，正式44/44及相关旧14/14通过，GPT6.1 sol已复核代码和结果。
 
 GPT 6.1 sol 已只读复核固定源码、现有覆盖与本节范围，未触发 Daybreak；未发现方向性阻塞。已按反馈限定“带凭证子协议时缺少 fiber-rpc”，并明确完整 Gate2 行集仍须再次确认。服务端握手拒绝有真实 HTTP 400 依据；后续 Python 输入应使用 HTTP 合法但 base64url 非法的值并保存服务器响应，避免客户端先拒绝。旧 padding 仅验证固定 04 版本的输入兼容，不宣称跨版本迁移通过。此复核不代表新增用例或浏览器入口已执行。
+
+
+## 2026-10-28：过滤参数补充 Gate1
+
+本轮只评审普通 `channel_signing` 的过滤与非法参数范围。继续遵守本会话的 **Gate1 范围 → Gate2 完整行集、预算与适配方案 → Gate3 实现及验证**；本节不新增正式用例 ID、复选框或 TEST-MAP，已有 01～07、10～19 不变。退款夜间专项仍由用户手动运行，本轮没有启动测试、VM 或其他批次。
+
+### 基线、现有覆盖与前提修正
+
+2026-10-28 只读核对 PR #1623 仍为 open，最新 head 为 `84333eea8488a8afc7e4474aa4bbd0e7e973cee9`。实际分析与后续建议验证继续固定 `04c206465b48da85b99aa58e80afe9801a2cb2db`：原仓库 `download/fiber/source-pr-1623` 为该提交且干净，现有 `pr-1623-04c2064/fnn --version` 输出 `Fiber v0.10.0-rc1 (04c2064 2026-10-23)`。没有切换源码或重新构建，也没有把其他版本通过算入本批。
+
+评审编辑位置为干净起始的 `codex/lsp-reviewed-regressions` worktree（起点 `c85da0b`）；原 `codex/lsp-core-regressions` 工作区的未提交内容、快照及全部运行证据保留。两处 checkout 不同步或重置。
+
+**更正此前建议：不能在固定 04 上准备“同一 Hosted 租户两条私有待签通道”。** [SDK session](https://github.com/nervosnetwork/fiber/blob/04c206465b48da85b99aa58e80afe9801a2cb2db/crates/fiber-lsp-sdk/src/session.rs#L279) 在已有 binding 时只允许原开通请求重入；[registry](https://github.com/nervosnetwork/fiber/blob/04c206465b48da85b99aa58e80afe9801a2cb2db/crates/fiber-lib/src/lsp/registry.rs#L245) 也限制租户绑定唯一私有通道。不能通过复制 SDK 存储、换身份、改产品或重复尝试绕过。A/B 各一条可证明隔离，不能证明同一授权集合内排除另一条通道。
+
+已有 Python 订阅用例覆盖默认订阅、A/B 隔离、host 范围、重连和独立取消，没有显式过滤参数行。上游固定 04 的 `rpc/subscription/service/tests.rs` 已有内存源的过滤/去重测试，`rpc/subscription/tests.rs` 已有部分非法选项/未知 ID 测试；这些是既有源码证据，本轮未执行，也不替代 Python 真实 SDK/节点集成。现有 operator 用例仅以普通 host 通道的 `NoSignatureRequired` 验证正向事件，不能声称已有两个 SDK 待签通道的初始与实时过滤测试准备逻辑。
+
+### Spec：本批依据
+
+#### SPEC-04：过滤集合与默认值
+
+Condition: 有效租户凭证订阅 `channel_signing`，可选参数为 `channel_ids`。
+Expected: 省略过滤选择全部授权通道，空数组选择零通道；指定 ID 约束初始待签与后续状态。省略 options、`{}`、options 为 `null`、`channel_ids` 为 `null` 在固定 04 均走默认全集；重复 ID 不扩增同一待签工作。
+Observable: 订阅 ID、按该 ID 归属的完整 R1/R2 与空集窗口；最终原通道双方就绪、注资不变。
+Basis: [RPC 文档](https://github.com/nervosnetwork/fiber/blob/04c206465b48da85b99aa58e80afe9801a2cb2db/crates/fiber-lib/src/rpc/subscription.rs#L114)、[Options 类型](https://github.com/nervosnetwork/fiber/blob/04c206465b48da85b99aa58e80afe9801a2cb2db/crates/fiber-json-types/src/subscription.rs#L20)、[初始及实时过滤](https://github.com/nervosnetwork/fiber/blob/04c206465b48da85b99aa58e80afe9801a2cb2db/crates/fiber-lib/src/rpc/subscription/service.rs#L84)。null 和重复 ID 为固定实现的兼容性观察，Gate2 单列输入，不扩大为跨版本保证。
+Source: explicit / observation
+Testing: required
+
+#### SPEC-05：输入格式与长度限制
+
+Condition: 有效凭证通过 WS 调用 subscribe，变更 topic、options 或 channel_ids。
+Expected: 未知 topic/字段、明确非法的参数类型（例如 options 数字/布尔/字符串）和不能解码为 32 字节的 Hash256 被 RPC 拒绝；已列 null 兼容形式不属于非法输入。原始 ID 数组最多 256 项，去重前的 257 项也拒绝。
+Observable: 请求确实发出，服务端 JSON-RPC 错误且无订阅 ID；同连接原合法订阅仍能收到真实新请求。256 个重复合法 ID 可建立订阅但只表示一条通道的工作。
+Basis: [JSON 类型约束](https://github.com/nervosnetwork/fiber/blob/04c206465b48da85b99aa58e80afe9801a2cb2db/crates/fiber-json-types/src/subscription.rs#L11)、[长度检查在去重之前](https://github.com/nervosnetwork/fiber/blob/04c206465b48da85b99aa58e80afe9801a2cb2db/crates/fiber-lib/src/rpc/subscription/service.rs#L69)、[Hash 解码](https://github.com/nervosnetwork/fiber/blob/04c206465b48da85b99aa58e80afe9801a2cb2db/crates/fiber-json-types/src/serde_utils.rs#L11)。不把可接受的无前缀、`0X` 或大写十六进制误列为非法。
+Source: explicit / observation
+Testing: required
+
+#### SPEC-06：过滤不扩大授权，列表整体建立或拒绝
+
+Condition: A 凭证指定未知 ID、B 的真实私有 channel ID，或与 A 自有 ID 混合。
+Expected: 身份由凭证决定；不能读取的 ID 使整个 subscribe 失败，不能静默跳过、建立部分订阅或泄露 B 的待签状态。
+Observable: B 的通道和 R1 确实存在；A 的非法请求无订阅 ID，完整连接记录中无孤立或越权通知；随后 A 原合法订阅仍收到新 R2。
+Basis: [租户 store 来源](https://github.com/nervosnetwork/fiber/blob/04c206465b48da85b99aa58e80afe9801a2cb2db/crates/fiber-lib/src/rpc/subscription.rs#L288)、[逐项读取失败即返回](https://github.com/nervosnetwork/fiber/blob/04c206465b48da85b99aa58e80afe9801a2cb2db/crates/fiber-lib/src/rpc/subscription/service.rs#L208)、[完整初始化后才接受订阅](https://github.com/nervosnetwork/fiber/blob/04c206465b48da85b99aa58e80afe9801a2cb2db/crates/fiber-lib/src/rpc/subscription.rs#L343)。整体拒绝按固定实现提出；不将错误文案或耗时相同提升为防探测保证。
+Source: explicit / observation
+Testing: required
+
+### 测试树：范围分解
+
+- 合法选择（SPEC-04）
+  - 默认全集 [pending]：A 唯一私有通道冻结 R1，分别省略 options、传 `{}`、options `null`、`channel_ids: null`，各订阅收到 R1 及主动推进的 R2。
+  - 显式全集 [pending]：`[A]` 与 `[A, A]` 可订阅，完整 R1/R2 属于 A；同一冻结工作不因重复 ID 增发。只证明唯一通道的显式选择，不称多通道子集。
+  - 空集合 [pending]：`[]` 获得有效订阅 ID，初始窗口和真实 R1→R2 推进后均无该 ID 的通知；同连接默认订阅收到 R2，空订阅随后取消返回 true。
+- 非法输入（SPEC-05）
+  - 解析拒绝 [pending]：未知 topic、非字符串 topic、未知 options 字段、options 为数字/布尔/字符串、channel_ids 为既非数组也非 null 的值、数组项非字符串、错误长度/奇数长度/非十六进制 Hash，逐个独立请求被拒绝且不破坏原合法订阅。
+  - 数组上限 [pending]：256 个重复 A 接受并只发一份冻结工作；257 个重复 A 拒绝，证明限制作用于原数组。接受与拒绝是两个判据，Gate2 分开展开。
+- 授权与原子性（SPEC-06）
+  - 单个不可见 ID [pending]：未知 ID、真实 B ID 分别拒绝；B 自己能收到该待签状态作为存在性对照。
+  - 有效/不可见 ID 混合 [pending]：`[A, unknown]`、`[unknown, A]`、`[A, B]`、`[B, A]` 均整体拒绝，无部分工作泄露，A 原合法订阅仍推进。
+- 明确保留的缺口
+  - options 数组形态 [pending]：文档约定对象，但 serde 的结构体顺序反序列化可能接受某些数组；本批不笼统承诺所有数组均拒绝。Gate2 先沿完整 RPC 参数反序列化路径核实，再决定兼容行为或待确认预期，不修改产品来满足测试。
+  - 同一授权范围内多条真实待签通道的严格子集/全集过滤 [pending]：Hosted 固定 04 单通道限制；以后单独核对支持多通道的产品版本，或另提 host 外部签名拓扑与契约。不能用 A/B 或 host 无待签事件替代。
+  - 凭证到期/换证、每连接 32/33 限制 [pending]：另批范围；本批 256/257 是 channel_ids 项数，不是订阅配额。
+  - watchtower topic 过滤、慢消费者/全局压力、订阅和写入的瞬时竞态 [pending]：需要各自源、负载或并发判据，不在本批作覆盖承诺。
+
+### 用例：Gate1 取舍与验证边界
+
+本轮不改正式五列表；Gate2 在范围获确认后为上述独立行为分配 `LSP-SUBSCRIPTION-20` 起的新 ID（不复用 08/09），展开完整输入、优先级、共同断言、逐阶段及绝对总预算。仅增加未映射行，不把源码观察写成执行通过。
+
+- **真实业务对照**：复用已确认的测试准备逻辑，冻结真实 SDK 的 R1/S1，建立观察订阅，再应用真实 S1 产生不同 request ID 的 R2；收到事件后才查询交叉核对，最后恢复原 SDK 完成原通道。需 A/B 的分支各自核对其原通道完成及注资；不为负向输入制造假事件。
+- **有限负向证据**：无快照结束标记，以冻结的已知待签集合和有界观察判定；按每个订阅 ID 保存全量通知，不能只检查 socket 活着。空订阅不可能收到正向事件，因此用同连接对照订阅的 R2 加空订阅自身取消 true，证明业务源推进和注册存活；仍只证明观察窗口内为空。
+- **拒绝必须来自服务端**：客户端送出原始 JSON 后检查实际 RPC 错误；本地参数异常、握手失败、过期凭证均不能算本批参数拒绝通过。非法请求前后保留整条连接的响应与通知，检查没有失败请求残留的孤立事件；不以“没有拿到订阅 ID”代替泄露检查。
+- **最小适配**：现有 `_subscription_observer.py` 已支持 options 和原始 `request`；显式 `null` 用原始请求避免被 helper 变为省略。优先新增普通 LSP 测试文件，复用现有单租户及 A/B 测试准备逻辑、签名 gate 和通道终态断言。Gate2 再核对局部 helper，暂不承诺修改 SDK driver 或公共框架；不绕过单通道限制。
+- **普通任务边界**：本批不发起付款、TLC 或强关，不需要 VM、时间跳变或等待链上成熟。256/257 用重复真实 A 测请求长度，不准备 256 条通道，也不称吞吐或容量压测；不加入夜间专项。实际测试时长和固定复跑数留 Gate2 依据既有开通窗口确定，不能由本次源码阅读宣称快速通过。
+- **失败与证据**：以后执行时，前提未成立、环境失败、服务端拒绝与断言失败分别记录；固定批次遇产品失败即停，沿用已知归因，不更换版本或反复取样。现有运行记录和 TEST-MAP 保持事实含义，本轮没有新映射或测试结果。
+
+本次下一门禁是确认上述收窄后的 Gate1 范围，尤其接受多通道严格子集仍未覆盖，再进入 Gate2 完整用例评审；不是批准现在写自动化或执行。
+
+
+### 本轮静态核验
+
+GPT 6.1 sol 的独立复核已纠正两个前提：单租户两私有通道不可构造；不能将 null 或所有 options 数组一概视为非法。已纳入上述范围和待确认项；修订后复核未发现剩余 Gate1 阻塞，可交用户确认。复核是文档/源码检查，不代表行为运行通过。
+
+- `git diff --check`：退出 0，仅三个评审 Markdown 文件变更。
+- `python3 /Users/sunchengzhu/project/ai-test-agent/scripts/check_test_design.py --root . --review reviews/lsp/signing-subscriptions.md`：17 条既有用例，退出 0；只验证原正式行与树的结构，不替代本节 Gate1 或未来 Gate2 的语义评审。
+- `python3 scripts/check_test_map.py`：103 条评审、99 条映射，退出 1；仅既有 `PMP-01～05`、`SETTLE-01` 六个孤立映射，无重复评审 ID。本批没有映射变化，数量不是功能覆盖率。
+- 未运行 pytest、节点、VM 或夜间批次；未修改产品、版本或宿主时间。
+
+
+2026-10-28 后续：用户明确确认本节调整后的Gate1，并要求展开Gate2。现已在[主评审文档](signing-subscriptions.md#过滤参数-gate2输入断言预算与最小适配04c2064)新增20～28九行及完整预算；options数组静态核实为[null]/[[]]/[[A]]兼容，[]/[null,null]/[A]拒绝，兼容回归选择随28交人工确认。保留本节历史待核记录，不把静态核实当运行通过。

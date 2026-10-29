@@ -16,7 +16,10 @@
 | `test_signing_subscriptions.py` | 当前工作补发、实时状态、租户及 host 范围、真实 SDK 重连、独立订阅与按连接取消 | [LSP-SUBSCRIPTION-01～07、10～13](../../../../reviews/lsp/signing-subscriptions.md) |
 | `test_browser_signing_subscriptions.py` | 浏览器子协议鉴权、token 编码兼容、握手/RPC 拒绝及双租户隔离 | [LSP-SUBSCRIPTION-14～19](../../../../reviews/lsp/signing-subscriptions.md) |
 | `test_channel_signing_deadline.py` | 开通超时、支付截止保护、指定承诺强关及受控 B 败方恢复 | [LSP-TIMEOUT-01～08、10～12](../../../../reviews/lsp/channel-signing-deadline.md) |
+| `test_signing_subscription_filters.py` | 默认、显式及空过滤，参数拒绝与256/257边界；843正式48/48次执行通过 | [LSP-SUBSCRIPTION-20～28](../../../../reviews/lsp/signing-subscriptions.md) |
 | `test_delayed_payment_recovery.py` | 真实付款在在线延迟、SDK 完全离线和其他租户先结算后恢复 | [LSP-PAYMENT-01～03](../../../../reviews/lsp/delayed-payment-recovery.md) |
+
+订阅过滤20～28：固定 `84333ee` 的匹配产物已完成相关3/3与正式1+3共48/48次 pytest 执行；九个评审ID对应12个方法，历史04准备失败另行保留。详见[843运行记录](#84333ee-订阅过滤-gate3完成2026-10-29)。这不等于843全量LSP通过。
 
 ## 准备环境
 
@@ -1053,3 +1056,79 @@ GPT 6.1 sol 已独立复核修复源码、版本选择、5 个方法的原始日
 独立工作树的提交前检查：普通LSP `pytest --collect-only -q` 收集60条、退出0；全仓 `black --check --no-cache .` 通过413个文件、退出0；Python格式化前后AST一致。4个既有LSP文件的格式修正单独提交，未修改用例语义。映射检查为103评审/99映射、退出1，只剩原PMP-01～05与SETTLE-01六个孤儿；本工作树不含本地report副本，无重复评审ID。三份相关评审的设计检查识别24行、退出0，已批准的分段观察与保留分支提示继续保留。
 
 精简后的driver在独立临时manifest及APFS复制缓存中执行 `cargo build --locked --offline --manifest-path <临时目录>/Cargo.toml`，退出0，实际编译17.90秒；只读取原固定04源码，没有覆盖原产品产物。原仓库本地证据 `report/lsp-reviewed-pr-validation-eeh9jcij/` 保存构建和检查输出。GPT6.1 sol独立复核依赖、版本、源码范围及格式语义，未发现阻断；本次没有重新运行节点、业务回归或夜间样本，收集与编译不算新的产品通过。
+
+## 04c2064 订阅过滤 Gate3：准备失败（2026-10-28）
+
+用户已批准20～28九行、28的固定版本数组兼容及150分钟执行预算；实现位于 `test_signing_subscription_filters.py`，共12方法，23有四处TEST-MAP，其余各一处。GPT 6.1 sol代码复核发现清理失败/超时的保留和停进程问题，已改为每方法独立且带唯一批次的目录、始终保留原数据、精确自有进程紧急停止；完整pytest生命周期由执行器外层截止覆盖。修正后代码和执行器复核均无剩余阻塞，未触发Daybreak。
+
+**只执行了一次，已停止：环境产物版本校验失败，不是产品行为失败。** 本地证据根为当时工作树的 `report/lsp-filters-04c2064-20261028T203635/`；该worktree为 `/Users/sunchengzhu/.codex/worktrees/lsp-reviewed-regressions/fiber-py-integration-test`，不是原脏工作区。启动北京时间2026-10-28 20:36:35，150分钟起点 `788486.062594041`、绝对截止 `797486.062594041`；环境阶段截止 `789386.067535583`，实际约29.41秒失败，未到预算上限，也未重置或重启。
+
+执行命令为原已有Python环境运行 `report/.../runner.py` 的启动原件 `/private/tmp/lsp_filters_gate3_run.py`。准备中的失败命令：
+
+```text
+/Users/sunchengzhu/project/fiber-py-integration-test/venv/bin/python scripts/build_lsp_test_binaries.py   --source /Users/sunchengzhu/project/fiber-py-integration-test/download/fiber/source-pr-1623   --revision 04c206465b48da85b99aa58e80afe9801a2cb2db   --target-dir /private/tmp/lsp-filter-target-20261028T203635
+```
+
+原始关键输出及退出码：
+
+```text
+Finished `dev` profile [unoptimized] target(s) in 0.94s
+Compiling lsp-integration-driver v0.1.0 (.../driver-build)
+Finished `dev` profile [unoptimized] target(s) in 16.83s
+AssertionError: fnn Fiber v0.10.0-rc1 (3ce369e 2026-10-28)
+build-matched-bundle.exit: 1
+runner exit: 1
+```
+
+| 阶段 | 实际结果 |
+| --- | --- |
+| 固定源码/原状态核对、独立缓存克隆、CKB复制 | 已完成，单步退出0；产品checkout为干净完整04 |
+| 本地driver编译尝试 | Cargo编译退出成功；不等于匹配bundle建立完成或任何业务通过 |
+| 产物版本校验 | 失败，构建脚本退出1；自报3ce而非04，无有效build.json交付 |
+| 适配自检、pytest收集 | 未运行；执行器在构建失败处停止 |
+| 相关聚焦3条 | 0执行；不是0/3断言失败 |
+| 正式1+3，预定48实例 | 0执行；没有正式通过结果 |
+
+只读复核确认：原source目录下target、APFS克隆target、新worktree复制出的fnn三个SHA256完全相同，为 `8c318cf67563846c1883cbc98cf66b34550a7ec7b3c6e3c49fb76c34cf42e5b3`；原04 bundle的fnn仍自报04，SHA256为 `d7d60aaba98120db740412a4ca4f7cf26e2973f1f5d5d9ad93b229d62ddb1d22`。这证明沿用了已有缓存中的不匹配FNN，不能据此断言仅版本字符串过期，也不能认可其余缓存内容正确。不得改版本字符串或绕过现有断言来取通过。
+
+原产品源码仍干净固定04；原工作区Git状态前后完全一致，原bundle及退款夜跑未动。本次无pytest/节点启动；停止后默认测试端口无监听，未发现本次runner或构建遗留进程。失败产物保留在当时工作树 `download/fiber/pr-1623-04c2064/`，**未通过版本校验、不可用于验证**；独立缓存及CKB副本也保留，不覆盖原产物。
+
+证据包括 `run.json`（实际阶段/命令/截止/源码哈希）、`runner.py`、各命令 `.log/.exit`、`stop.txt`、`post-stop-artifacts.log`、`original-status-after.log`、`failed-attempt-sources/`（源码、构建脚本、执行时评审快照）及 `review.txt`。GPT 6.1 sol对停止与环境归因再次独立复核，确认未运行后续批次；没有把#1674/#1706或24/3ce历史通过套到本批。
+
+映射勾选只表示这九行已有实现，不能解释为验证通过。本轮按“失败即停”结束，不自动重建或续跑。后续若另行批准，应在新的独立输出中可信重建固定04所需上游产物，重新核对版本/清单/源码摘要后再按新批次执行；本次失败记录与产物继续保留。
+
+停止后仅做文档/映射维护检查：`git diff --check`退出0；设计检查26行、退出0；`python3 scripts/check_test_map.py`为112评审/108映射，退出1仍只因既有PMP-01～05、SETTLE-01六个孤立映射，无重复ID。20～28全部有映射，23对应四个方法。原始输出保存在本次证据根的 `post-stop-design.log/.exit`、`post-stop-map.log/.exit`；这些是停止后的维护检查，不是恢复执行适配自检或功能验证。
+
+## 84333ee 订阅过滤 Gate3：完成（2026-10-29）
+
+用户明确授权更新到LSP分支最新代码后，查询PR #1623的 `chenyukang/fiber:lsp-support` 并独立fetch，固定 `84333eea8488a8afc7e4474aa4bbd0e7e973cee9` 执行，不在批次中追随head变化。仅本批选择843，原04源码、bundle、脏工作区及退款夜跑保持原样；此前04准备失败不转记通过。GPT 6.1 sol已复核04→843差异：订阅RPC/types/鉴权、相关SDK核心及Cargo.lock未变，已批准20～28预期继续适用，无需修改行集或产品。
+
+**结果：相关3/3，正式固定1+3共48/48通过；无失败、错误或跳过。** 从北京时间2026-10-28 23:51:36准备开始，到2026-10-29约01:11:26执行结束，共4789.563秒（79.83分钟），未触及150分钟上限。单调时钟起点800187.207479708、总截止809187.207479708；各阶段预算不重置，实际完整pytest进程含类初始化和清理均在阶段截止内。
+
+| 阶段 | 实际结果 | 进程墙钟秒 | 退出码 |
+| --- | --- | --- | --- |
+| 独立产物与适配自检 | 版本/摘要、语法、格式、设计和12方法收集完成；映射检查只有既有六个孤立映射 | 92.548 | 构建/其他检查0；映射1，既有集合精确校验通过 |
+| 相关订阅回归 | 3/3：真实R2、独立取消、双租户initial/live隔离 | 275.544 | 0 |
+| focus | 12/12 | 1106.447 | 0 |
+| stability-1 | 12/12 | 1110.384 | 0 |
+| stability-2 | 12/12 | 1101.383 | 0 |
+| stability-3 | 12/12 | 1103.249 | 0 |
+
+本地证据根为当时工作树的 `report/lsp-filters-84333ee-20261028T235136/`；`run.json` 保存完整实际命令、固定顺序、各命令PID/起止/截止/退出码和冻结源码摘要，最终status=passed；所有命令的.log/.exit、每批.xml/.html、48份.filters.json、各方法SDK/FNN/CKB证据及原始数据目录完整保留。入口是 `venv/bin/python /private/tmp/lsp_filters_latest_run.py`（实际Python为原仓库venv绝对路径），执行器原文已复制为证据根的 `runner.py`。各pytest实际均使用 `-x -vv -s -o addopts=`、独立HTML/JUnit路径、`LSP_TEST_REVISION=84333eea8488a8afc7e4474aa4bbd0e7e973cee9` 和阶段/整批绝对截止；逐项argv以run.json为准，不用默认report覆盖历史。
+
+匹配构建实际命令为：
+
+```bash
+/Users/sunchengzhu/project/fiber-py-integration-test/venv/bin/python scripts/build_lsp_test_binaries.py \
+  --source /Users/sunchengzhu/.codex/worktrees/lsp-reviewed-regressions/fiber-py-integration-test/download/fiber/source-pr-1623-84333ee \
+  --revision 84333eea8488a8afc7e4474aa4bbd0e7e973cee9 \
+  --target-dir /private/tmp/lsp-filter-84333ee-target-20261028T235136
+```
+
+构建退出0，FNN实际输出 `fnn Fiber v0.10.0-rc1 (84333ee 2026-10-28)`。新target由原缓存APFS复制后，仅在该副本清理七个本地包并实际重新编译；Cargo警告忽略pkgid的URL/version限定，同名registry版本也被清理/重编，共移除13,871文件、9.7GiB，不能称全部第三方缓存未动。原target未清理。七包均有新源码路径的实际Compiling记录，五个交付文件、两份锁文件和驱动源码摘要与manifest一致，源码构建前后干净；批次前后19个LSP Python/Rust源码摘要一致。
+
+TEST-MAP：20～28九个ID均已映射，23有四个方法，其余各一，共12方法；每轮12实例，共48，不等于48个独立行为ID。设计检查26行退出0；项目映射检查112评审/108映射、退出1，仅既有PMP-01～05与SETTLE-01六个孤立映射，无重复ID。本批未扩改其他评审文档，映射数和勾选不代表功能覆盖率。
+
+GPT 6.1 sol产物、首轮及最终证据复核均通过，未触发Daybreak。最终独立审计确认48份完整快照、52条租户R1/R2与签名匹配、304条正确归属通知、8个空订阅零通知并取消、24项目标typed work恰一、64个非法输入精确-32602以及52条正确原通道终态，详情在 `independent-review.txt`。证据边界：filters JSON保存完整输入/响应、全连接通知、R1/S1/R2及终态，但没有逐次保存每个Applied响应、中间查询、committed查询或5秒稳定窗口的全部原始RPC；这些由冻结源码中已执行的断言及通过JUnit支持，不能表述为全量RPC重放证明。21/26去重仅证明有界窗口；同身份多通道严格子集、命名参数运行入口、跨重连exactly-once未覆盖。资金检查证明原通道正常完成、原funding outpoint、余额镜像与无pending TLC，不代表TLC强关退款守恒。未运行退款夜跑、watchtower或全量普通LSP；旧#1674/#1706归因与历史结果保持原样。
+
+收尾维护：`git diff --check`退出0，设计26行退出0，映射检查退出1仍为上述既有六个孤立项。原工作区Git状态与启动快照一致，原04和本次843产品源码均干净；19个冻结源码摘要一致，无当时工作树残留节点进程。最初只读进程列表检查遇到非UTF-8字节解码错误，改为替换解码完成核验，不涉及产品测试重跑；见 `final-integrity.json`。

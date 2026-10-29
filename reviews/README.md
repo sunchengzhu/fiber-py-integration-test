@@ -7,6 +7,8 @@
 
 当前新增范围为固定 `04c2064` 的 [浏览器鉴权 Gate2](lsp/signing-subscriptions.md#浏览器鉴权-gate2共同断言输入与预算04c2064)，14～19六行及预算已获用户确认，Gate3已实现并完成正式1+3共44/44、相关旧14/14回归，GPT6.1 sol复核通过，见 [浏览器鉴权记录](../test_cases/fiber/devnet/lsp/README.md#04c2064-浏览器鉴权-gate32026-10-26)。现有 Bearer 14方法已在04通过，见 [运行记录](../test_cases/fiber/devnet/lsp/README.md#04c2064-websocket-既有订阅回归与下一步2026-10-26)。旧事件传输仅保留为 [4028884历史范围](lsp/legacy-signing-events-scope.md)，不代表当前协议。
 
+订阅过滤20～28九个评审ID、12个测试方法已建立映射；固定 `84333ee` 独立构建后相关3/3、正式1+3共48/48次 pytest 执行通过。04准备失败单独保留，具体预算和证据见[过滤运行记录](../test_cases/fiber/devnet/lsp/README.md#84333ee-订阅过滤-gate3完成2026-10-29)；同身份多通道严格子集仍未覆盖。
+
 **已知问题入口：** `LSP-TIMEOUT-04/05` 的普通开通计时器缺口已由
 [Fiber #1674](https://github.com/nervosnetwork/fiber/issues/1674) 跟踪，2026-10-23 核实时为 Open；
 `24b5c38` 的两轮回归仍可复现。新会话先读 [既有归因与日志](../test_cases/fiber/devnet/lsp/README.md#已知问题关联1674)，
