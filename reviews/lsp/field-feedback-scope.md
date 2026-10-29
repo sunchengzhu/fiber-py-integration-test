@@ -1,6 +1,6 @@
-# LSP 实测反馈 Gate1：Watchtower 方向 1/2 摘录
+# LSP 实测反馈 Gate1：Watchtower 方向 1/2 与发票取消方向 9/10/11 摘录
 
-2026-10-29 用户已确认完整 Gate1；本文件仅保存本分支所需的 Watchtower 两个方向，完整候选范围由后续独立变更维护。来源：[LusoCryptoLabs 实测反馈](https://github.com/nervosnetwork/fiber/pull/1623#issuecomment-6418454010)。分析固定产品 `84333eea8488a8afc7e4474aa4bbd0e7e973cee9`；评论者的结果不是本地复现结论。
+2026-10-29 用户已确认完整 Gate1；本文件仅保存 #4 所需的 Watchtower 两个方向及本分支的发票取消三个方向，完整候选范围由后续独立变更维护。来源：[LusoCryptoLabs 实测反馈](https://github.com/nervosnetwork/fiber/pull/1623#issuecomment-6418454010)。分析固定产品 `84333eea8488a8afc7e4474aa4bbd0e7e973cee9`；评论者的结果不是本地复现结论。
 
 | 序号与候选场景 | 前提与操作 | 要验证的结果或待确认点 | 建议优先级 |
 | --- | --- | --- | --- |
@@ -8,3 +8,13 @@
 | 2. 金额守恒但目的地被换 | 固定原批准，仅把合法候选 payout 换成 S/D_B，check-only | 仍须拒签且零提交，不因金额/费用正确放过错付；不广播变异交易 | P1 |
 
 正式 ID、条件、资金公式和实现边界见[Watchtower Gate2](watchtower-settlement.md#独立收款与目的地替换gate22026-10-29)。
+
+## Hosted 租户发票取消：方向 9/10/11
+
+这三个方向已展开为[取消 Gate2 用例](hosted-invoice-cancellation.md)。固定 843 的真实 A tenant token 在 `cancel_invoice` 入口被白名单拒绝；01 只复现入口缺口，02 虽已映射但未运行，03 的 `Received` 无节点 preimage 取消契约仍待确认。
+
+| 序号与候选场景 | 前提与操作 | 要验证的结果或待确认点 | 建议优先级 |
+| --- | --- | --- | --- |
+| 9. 租户取消自己的发票 | A 合法凭证取消自己的 Open 发票，再尝试支付它 | 入口可达并正确取消，已取消发票不能完成收款；权限错误不算通过 | P1 |
+| 10. 不能取消其他租户发票 | B 用有效凭证取消 A 发票，之后 A 正常处理原发票 | B 被拒，A 状态与资金不变；A 的正向操作仍有效 | P0 |
+| 11. 取消后不被恢复复活 | 在真实未完成投递中取消，再触发恢复/原数据重启；选择一处与结算竞争的边界 | 若取消成功则不能再 Paid；不可取消时明确拒绝并保持真实终态；Received/Expired/preimage 规则待确认 | P0 |

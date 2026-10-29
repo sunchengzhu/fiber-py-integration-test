@@ -1140,3 +1140,41 @@ GPT6.1sol已独立核对本次schema自检、固定版本与复用产物、旧02
 TEST-MAP仍为02～05已映射，新01/06未映射；本次新增执行结论仅为旧02一次相关回归、05一次有限诊断，不累计成1+3或全PR通过。成功/失败分目录保留，冻结证据使用`.snapshot`后缀，不参与活跃评审/映射扫描。
 
 本批文档/映射核验：`python3 scripts/check_test_map.py`输出114条评审、108条映射、无重复ID，退出1仍仅因既有PMP-01～05及SETTLE-01六个孤立映射；本批没有新增孤立映射。设计检查`cases: 6`、退出0（工具仍提示历史/推断Spec需要人工决定，本批行集与费用已获明确批准）。`git diff --check`退出0。前后两批各21份冻结源码均按原摘要核对一致；没有覆盖上次停止证据。
+
+## 84333ee Hosted租户发票取消：真实入口拒绝（2026-10-30）
+
+用户已授权按顺序持续推进，无需逐阶段确认。01/02已实施并建立TEST-MAP，03的Received取消契约仍未确定且未映射。本次仅对固定84333ee执行01单次诊断，15分钟总上限、完整pytest进程最多480秒；失败即停，不运行02/03。真实Agent链配置与安全预像释放控制入口经GPT 6 sol复核，但本次在取消入口前即被产品阻断，没有执行正向释放。
+
+证据为 `report/lsp-invoice-cancel-84333ee-20261030T003644/`：`runner.py/run.json`保存实际命令、源码与产物摘要、绝对截止和退出码。独立driver-only构建命令21.60秒退出0（阶段25.29秒）、收集退出0；01运行93.55秒退出1，非预算到期；最终收尾通过、`residual-processes.json=[]`，产品仍干净843、原工作区及旧产物未变。
+
+真实A tenant token先创建仅含payment hash的发票，客户端保留preimage，`get_invoice=Open`且SDK授权保存；随后A自己的 `cancel_invoice` 收到JSON-RPC `-32999 Unauthorized`。原始 `cancel-01.log:107`、用例 `observations.jsonl` 第151～155条及 `fiber-1/node.log:1246` 一致，节点明确输出 `tenant token is not allowed to call cancel_invoice`。固定源码 `crates/fiber-lib/src/rpc/tenant.rs` 的允许列表缺少该方法，与Luso报告一致，归为产品租户入口缺口。
+
+入口拒绝后按规则停止，没有send_payment/get_payment或后置资金快照；只能证明真实租户取消入口失败，不能把基线无TLC/镜像余额说成取消前后资金已验证。01的旧付款失败、资金回基线和新付款成功步骤未运行，02/03未运行。GPT 6 sol独立审计原始请求、发票、身份、节点日志、退出码和边界；本次不重跑已知拒绝，不使用operator token绕过。
+
+### 复现实参
+
+固定源码 SHA 为 `84333eea8488a8afc7e4474aa4bbd0e7e973cee9`。下面的 `SOURCE` 必须是该提交的干净源码；`BASE_BUNDLE` 必须是与该提交匹配且清单摘要通过验证的既有基础 bundle。两者及 Cargo 缓存由执行环境提供，不依赖本 PR 中的本地 `report/`。`BUNDLE` 必须在当前测试 checkout 内，满足 `_lsp_test.py` 的路径约束；每次使用新的 `RUN_DIR` 和 `TARGET`。
+
+```bash
+REVISION=84333eea8488a8afc7e4474aa4bbd0e7e973cee9
+SOURCE=/absolute/path/to/clean/fiber-84333ee
+BASE_BUNDLE=/absolute/path/to/matching/84333ee/base-bundle
+REVIEWED_TARGET=/absolute/path/to/reviewed/cargo-target
+TARGET=/private/tmp/lsp-invoice-cancel-target-unique
+RUN_DIR="$PWD/report/lsp-invoice-cancel-84333ee-unique"
+BUNDLE="$RUN_DIR/bundle"
+EVIDENCE="$RUN_DIR/cases"
+cp -cR "$REVIEWED_TARGET" "$TARGET"
+venv/bin/python scripts/build_lsp_test_binaries.py \
+  --source "$SOURCE" --revision "$REVISION" --driver-only \
+  --base-bundle "$BASE_BUNDLE" --output "$BUNDLE" --target-dir "$TARGET"
+mkdir "$EVIDENCE"
+LSP_TEST_REVISION="$REVISION" LSP_TEST_BUNDLE="$BUNDLE" \
+LSP_PAYMENT_REPORT_DIR="$EVIDENCE" LSP_RUN_ARTIFACTS="$EVIDENCE" \
+PYTHONPATH="$PWD" CKB_CLI_HOME="$EVIDENCE/ckb-cli-home" \
+venv/bin/python -m pytest -x -vv -s -o addopts= \
+  --junitxml="$EVIDENCE/01.xml" --html="$EVIDENCE/01.html" \
+  test_cases/fiber/devnet/lsp/test_hosted_invoice_cancellation.py::TestHostedInvoiceCancellation::test_open_invoice_cancelled_old_payment_fails_new_payment_succeeds
+```
+
+该命令只选择 01。历史批次使用独立执行器强制 15 分钟总上限及 pytest 进程 480 秒上限；手工复现也须施加同等进程组截止，不得因默认 pytest 无硬截止而无限等待。

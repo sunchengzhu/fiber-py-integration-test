@@ -292,6 +292,12 @@ async fn control(
             "settlement_deps":configured.deps.iter().cloned().map(ckb_jsonrpc_types::CellDep::from).collect::<Vec<_>>()
         }));
     }
+    if operation == "preimage-configure" {
+        let url = value["ckb_rpc_url"].as_str().context("independent CKB URL")?;
+        let contracts = value["contracts_dir"].as_str().context("trusted contract directory")?;
+        agent.configure_chain(url, std::path::Path::new(contracts)).await?;
+        return Ok(json!({"configured": true}));
+    }
     let channel: Hash256 = value["channel_id"]
         .as_str()
         .context("channel id")?
@@ -309,6 +315,19 @@ async fn control(
     if operation == "watchtower-diagnose" {
         return watchtower_chain::diagnose(agent, rpc, store,
             chain.as_ref().context("adapter not configured")?, channel, value["sponsor"].clone()).await;
+    }
+    if operation == "release-preimage" {
+        let payment_hash: Hash256 = value["payment_hash"].as_str()
+            .context("payment hash")?.parse()?;
+        let preimage: Hash256 = value["preimage"].as_str()
+            .context("preimage")?.parse()?;
+        agent.authorize(fiber_lsp_sdk_agent::FixtureAuthorization::ReleasePreimage {
+            channel_id: channel,
+            payment_hash,
+            preimage,
+            target: fiber_lsp_sdk_agent::PreimageTarget::Invoice,
+        }).await?;
+        return Ok(json!({"released": true}));
     }
     if operation == "watchtower-process" || operation == "watchtower-check" {
         return watchtower_chain::process(
