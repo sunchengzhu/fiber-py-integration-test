@@ -13,7 +13,7 @@ Expected: A 的 `cancel_invoice` 请求可到达自己的发票后端并返回 `
 Observable: 真实 RPC 请求与返回、A `get_invoice`、P 付款终态、各通道余额与锁定额、原 Agent 安全预像释放调用审计和后续新付款。
 Basis: [租户 allowlist 缺方法](https://github.com/nervosnetwork/fiber/blob/84333eea8488a8afc7e4474aa4bbd0e7e973cee9/crates/fiber-lib/src/rpc/tenant.rs#L22-L49)；[RPC 已有 tenant context 分派](https://github.com/nervosnetwork/fiber/blob/84333eea8488a8afc7e4474aa4bbd0e7e973cee9/crates/fiber-lib/src/rpc/invoice.rs#L249-L264)；[取消后的状态变更](https://github.com/nervosnetwork/fiber/blob/84333eea8488a8afc7e4474aa4bbd0e7e973cee9/crates/fiber-lib/src/fiber/network.rs#L4978-L5014)。
 Source: inference
-Testing: failed — 固定 843 的真实租户入口已返回 `-32999 Unauthorized`；后续资金和新付款未执行，需修复版回归。
+Testing: required
 
 ### SPEC-02：租户身份不能跨越发票归属
 

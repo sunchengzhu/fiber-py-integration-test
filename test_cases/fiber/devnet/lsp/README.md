@@ -1156,6 +1156,7 @@ TEST-MAP仍为02～05已映射，新01/06未映射；本次新增执行结论仅
 固定源码 SHA 为 `84333eea8488a8afc7e4474aa4bbd0e7e973cee9`。下面的 `SOURCE` 必须是该提交的干净源码；`BASE_BUNDLE` 必须是与该提交匹配且清单摘要通过验证的既有基础 bundle。两者及 Cargo 缓存由执行环境提供，不依赖本 PR 中的本地 `report/`。`BUNDLE` 必须在当前测试 checkout 内，满足 `_lsp_test.py` 的路径约束；每次使用新的 `RUN_DIR` 和 `TARGET`。
 
 ```bash
+TEST_PYTHON=/absolute/path/to/prepared/test-venv/bin/python
 REVISION=84333eea8488a8afc7e4474aa4bbd0e7e973cee9
 SOURCE=/absolute/path/to/clean/fiber-84333ee
 BASE_BUNDLE=/absolute/path/to/matching/84333ee/base-bundle
@@ -1165,14 +1166,14 @@ RUN_DIR="$PWD/report/lsp-invoice-cancel-84333ee-unique"
 BUNDLE="$RUN_DIR/bundle"
 EVIDENCE="$RUN_DIR/cases"
 cp -cR "$REVIEWED_TARGET" "$TARGET"
-venv/bin/python scripts/build_lsp_test_binaries.py \
+"$TEST_PYTHON" scripts/build_lsp_test_binaries.py \
   --source "$SOURCE" --revision "$REVISION" --driver-only \
   --base-bundle "$BASE_BUNDLE" --output "$BUNDLE" --target-dir "$TARGET"
 mkdir "$EVIDENCE"
 LSP_TEST_REVISION="$REVISION" LSP_TEST_BUNDLE="$BUNDLE" \
 LSP_PAYMENT_REPORT_DIR="$EVIDENCE" LSP_RUN_ARTIFACTS="$EVIDENCE" \
 PYTHONPATH="$PWD" CKB_CLI_HOME="$EVIDENCE/ckb-cli-home" \
-venv/bin/python -m pytest -x -vv -s -o addopts= \
+"$TEST_PYTHON" -m pytest -x -vv -s -o addopts= \
   --junitxml="$EVIDENCE/01.xml" --html="$EVIDENCE/01.html" \
   test_cases/fiber/devnet/lsp/test_hosted_invoice_cancellation.py::TestHostedInvoiceCancellation::test_open_invoice_cancelled_old_payment_fails_new_payment_succeeds
 ```
