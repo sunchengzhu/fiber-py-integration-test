@@ -32,8 +32,12 @@ def main():
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.driver_only:
-        if args.upstream_only or not all((args.base_bundle, args.output, args.target_dir)):
-            parser.error("--driver-only requires --base-bundle, --output and --target-dir; incompatible with --upstream-only")
+        if args.upstream_only or not all(
+            (args.base_bundle, args.output, args.target_dir)
+        ):
+            parser.error(
+                "--driver-only requires --base-bundle, --output and --target-dir; incompatible with --upstream-only"
+            )
         if args.output.exists() or args.output.is_symlink():
             parser.error("--output must not already exist")
     elif args.base_bundle or args.output:
@@ -63,17 +67,37 @@ def main():
         "fiber-bin/debug-add-tlc",
     ]
     base_manifest = None
-    reused_files = ("fnn", "fiber-lsp-sdk-agent", "biscuit-private-key", "operator-token")
+    reused_files = (
+        "fnn",
+        "fiber-lsp-sdk-agent",
+        "biscuit-private-key",
+        "operator-token",
+    )
     if args.driver_only:
         base = args.base_bundle.resolve()
         base_manifest = json.loads((base / "build.json").read_text())
         assert base_manifest["revision"] == args.revision, "base revision mismatch"
-        assert base_manifest["cargo_lock_sha256"] == hashlib.sha256((source / "Cargo.lock").read_bytes()).hexdigest(), "base source lock mismatch"
+        assert (
+            base_manifest["cargo_lock_sha256"]
+            == hashlib.sha256((source / "Cargo.lock").read_bytes()).hexdigest()
+        ), "base source lock mismatch"
         for name in reused_files:
-            assert hashlib.sha256((base / name).read_bytes()).hexdigest() == base_manifest["sha256"][name], f"base hash mismatch: {name}"
-        assert hashlib.sha256((base / "driver-build/Cargo.lock").read_bytes()).hexdigest() == base_manifest["driver_lock_sha256"], "base driver lock mismatch"
-        base_version = subprocess.check_output([str(base / "fnn"), "--version"], text=True).strip()
-        assert base_version == base_manifest["fnn_version"] and args.revision[:7] in base_version and "dirty" not in base_version, "base FNN version mismatch"
+            assert (
+                hashlib.sha256((base / name).read_bytes()).hexdigest()
+                == base_manifest["sha256"][name]
+            ), f"base hash mismatch: {name}"
+        assert (
+            hashlib.sha256((base / "driver-build/Cargo.lock").read_bytes()).hexdigest()
+            == base_manifest["driver_lock_sha256"]
+        ), "base driver lock mismatch"
+        base_version = subprocess.check_output(
+            [str(base / "fnn"), "--version"], text=True
+        ).strip()
+        assert (
+            base_version == base_manifest["fnn_version"]
+            and args.revision[:7] in base_version
+            and "dirty" not in base_version
+        ), "base FNN version mismatch"
     else:
         subprocess.run(command, cwd=source, env=env, check=True)
     # Check again so a source change during compilation cannot be silently installed.
@@ -85,7 +109,11 @@ def main():
         == args.revision
     )
 
-    output = args.output.resolve() if args.driver_only else ROOT / "download/fiber" / f"pr-1623-{args.revision[:7]}"
+    output = (
+        args.output.resolve()
+        if args.driver_only
+        else ROOT / "download/fiber" / f"pr-1623-{args.revision[:7]}"
+    )
     output.mkdir(parents=True, exist_ok=not args.driver_only)
     if not args.upstream_only:
         driver_source = ROOT / "test_cases/fiber/devnet/lsp/_sdk_driver.rs"
@@ -117,7 +145,14 @@ def main():
         chain_source = driver_source.with_name("_watchtower_chain.rs")
         shutil.copy2(chain_source, driver_build / chain_source.name)
         if not (driver_build / "Cargo.lock").exists():
-            shutil.copy2(base / "driver-build/Cargo.lock" if args.driver_only else source / "Cargo.lock", driver_build / "Cargo.lock")
+            shutil.copy2(
+                (
+                    base / "driver-build/Cargo.lock"
+                    if args.driver_only
+                    else source / "Cargo.lock"
+                ),
+                driver_build / "Cargo.lock",
+            )
         # Resolve and cache the driver's additional dependencies on a cold host.
         # The following build uses exactly this lock, with no further network access.
         if not args.driver_only:
@@ -129,13 +164,13 @@ def main():
                 timeout=300,
             )
         driver_command = [
-                "cargo",
-                "build",
-                "--locked",
-                "--offline",
-                "--manifest-path",
-                str(driver_build / "Cargo.toml"),
-            ]
+            "cargo",
+            "build",
+            "--locked",
+            "--offline",
+            "--manifest-path",
+            str(driver_build / "Cargo.toml"),
+        ]
         subprocess.run(
             driver_command,
             cwd=source,
@@ -149,17 +184,34 @@ def main():
     if args.driver_only:
         for name in reused_files:
             shutil.copy2(base / name, output / name)
-            assert hashlib.sha256((output / name).read_bytes()).hexdigest() == base_manifest["sha256"][name], f"reused hash mismatch: {name}"
-        subprocess.run(["git", "diff", "--exit-code", "HEAD", "--"], cwd=source, check=True)
-        assert subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip() == args.revision
-        assert hashlib.sha256((source / "Cargo.lock").read_bytes()).hexdigest() == base_manifest["cargo_lock_sha256"]
-        assert hashlib.sha256((driver_build / "Cargo.lock").read_bytes()).hexdigest() == base_manifest["driver_lock_sha256"]
+            assert (
+                hashlib.sha256((output / name).read_bytes()).hexdigest()
+                == base_manifest["sha256"][name]
+            ), f"reused hash mismatch: {name}"
+        subprocess.run(
+            ["git", "diff", "--exit-code", "HEAD", "--"], cwd=source, check=True
+        )
+        assert (
+            subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=source, text=True
+            ).strip()
+            == args.revision
+        )
+        assert (
+            hashlib.sha256((source / "Cargo.lock").read_bytes()).hexdigest()
+            == base_manifest["cargo_lock_sha256"]
+        )
+        assert (
+            hashlib.sha256((driver_build / "Cargo.lock").read_bytes()).hexdigest()
+            == base_manifest["driver_lock_sha256"]
+        )
     else:
         for name in ("fnn", "fiber-lsp-sdk-agent"):
             shutil.copy2(target / "debug" / name, output / name)
         # Public, test-only Biscuit fixtures shipped with this exact upstream revision.
         shutil.copy2(
-            source / "tests/nodes/biscuit-test-private-key", output / "biscuit-private-key"
+            source / "tests/nodes/biscuit-test-private-key",
+            output / "biscuit-private-key",
         )
         environment = (source / "tests/bruno/environments/test.bru").read_text()
         token = next(
@@ -209,7 +261,9 @@ def main():
     }
     if args.driver_only:
         manifest["reused_bundle"] = str(base)
-        manifest["reused_manifest_sha256"] = hashlib.sha256((base / "build.json").read_bytes()).hexdigest()
+        manifest["reused_manifest_sha256"] = hashlib.sha256(
+            (base / "build.json").read_bytes()
+        ).hexdigest()
         manifest["reused_build_command"] = base_manifest["build_command"]
     (output / "build.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"Installed {version} and matching SDK agent in {output}")

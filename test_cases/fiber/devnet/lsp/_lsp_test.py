@@ -29,13 +29,15 @@ REVISION = os.environ.get(
 assert len(REVISION) == 40 and all(
     c in "0123456789abcdef" for c in REVISION
 ), "LSP_TEST_REVISION must be a full lowercase commit SHA"
-BUNDLE = Path(os.environ.get(
-    "LSP_TEST_BUNDLE",
-    str(Path(get_project_root()) / "download/fiber" / f"pr-1623-{REVISION[:7]}"),
-)).resolve()
-assert BUNDLE.is_relative_to(Path(get_project_root()).resolve()), (
-    "LSP_TEST_BUNDLE must stay inside this test checkout"
-)
+BUNDLE = Path(
+    os.environ.get(
+        "LSP_TEST_BUNDLE",
+        str(Path(get_project_root()) / "download/fiber" / f"pr-1623-{REVISION[:7]}"),
+    )
+).resolve()
+assert BUNDLE.is_relative_to(
+    Path(get_project_root()).resolve()
+), "LSP_TEST_BUNDLE must stay inside this test checkout"
 BISCUIT_PUBLIC_KEY = (
     "ed25519/17b172749be74276f0ed35a5d0685752684a3c5722114bba447a2f301136db79"
 )
