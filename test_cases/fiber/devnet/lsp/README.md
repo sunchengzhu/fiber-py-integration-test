@@ -1140,3 +1140,109 @@ GPT6.1sol已独立核对本次schema自检、固定版本与复用产物、旧02
 TEST-MAP仍为02～05已映射，新01/06未映射；本次新增执行结论仅为旧02一次相关回归、05一次有限诊断，不累计成1+3或全PR通过。成功/失败分目录保留，冻结证据使用`.snapshot`后缀，不参与活跃评审/映射扫描。
 
 本批文档/映射核验：`python3 scripts/check_test_map.py`输出114条评审、108条映射、无重复ID，退出1仍仅因既有PMP-01～05及SETTLE-01六个孤立映射；本批没有新增孤立映射。设计检查`cases: 6`、退出0（工具仍提示历史/推断Spec需要人工决定，本批行集与费用已获明确批准）。`git diff --check`退出0。前后两批各21份冻结源码均按原摘要核对一致；没有覆盖上次停止证据。
+
+## 84333ee 接纳一致性 Gate3：资格构建受限停批（2026-10-29）
+
+用户确认 `LSP-DELIVERY-01～06` 行集、逐方资金断言和原 `run_node` 薄包装，授权固定 `84333eea8488a8afc7e4474aa4bbd0e7e973cee9` 做 GPT 6 sol 代码复核、一次资格及六行单次验证，硬上限120分钟，失败即停。Daybreak 限制后改用 GPT 6 sol，薄包装、Python断言及批次脚本的确定性静态问题已修正并复核；这不等于编译或产品通过。
+
+唯一批次的证据根为 `report/lsp-delivery-84333ee-20261029T212218/`，入口为 `scripts/run_lsp_delivery_batch.py`，`run.json` 与 `batch.exit` 是最终阶段和退出码事实来源。预检通过：产品HEAD精确匹配84333ee、工作树干净，复用的基础bundle版本、锁文件和清单摘要匹配，既有目标缓存克隆成功。随后 `build-wrapper` 退出1；其日志显示 `cargo metadata --offline` 在编译前尝试将 `chacha20poly1305 v0.10.1` 解包到 `/Users/sunchengzhu/.cargo/registry/src/...`，系统返回 `Operation not permitted (os error 1)`。这是当前执行环境的 Cargo 缓存写入权限失败，不是 FNN 产品失败；没有取得薄包装运行资格。构建阶段开始后约5.00秒停批，整批单调时钟约7.94秒，远早于120分钟硬上限，没有重跑或换分支。
+
+| 阶段 | 结果 | 证据与边界 |
+| --- | --- | --- |
+| 预检 | 通过 | `product-head/status`、`original-status`、`base-version` 均 exit 0；固定843基础清单/摘要核对通过 |
+| 独立构建 | 停止 | `clone-reviewed-cache.exit=0`；`build-wrapper.exit=1`，内部 Cargo metadata exit 101；`build-wrapper.log` 保存原始EPERM与 Python traceback，尚未编译薄包装 |
+| 传输自检、真实正常付款资格、01～06 | 全部未运行 | 无相应命令、JUnit或产品样本；不可把 TEST-MAP 或旧版本结果记为本批通过 |
+| 收尾 | 部分完成 | 产品与原工作区最终 Git 状态命令 exit 0，原工作区前后 porcelain 字节一致；最终进程清单调用 `ps` 被同一沙盒以 `Operation not permitted` 拒绝，因此 `final-evidence` 失败且未生成进程清单。停批后单独连接检查六个预定端口均返回未监听；不能据此宣称完成进程清单核验 |
+
+`run.json` 最终 `status=stopped`，`batch.exit=1`；`stop.txt` 记录构建断言停批，`run.json.stop_reason` 另保留收尾权限失败。停批后只读核对另存于 `post-stop-integrity.json`：产品仍为干净843、原工作区状态与预检一致、五份冻结代码与基础bundle摘要一致、JUnit文件为空。六个预定端口的 `connect_ex` 原始值均为 **1（EPERM）**，只能说明受限环境不准探测，不能证明端口空闲；`ps` 也不可用。已保存启动前六份源码的原字节 `.snapshot`、独立缓存克隆、部分 `node-build`、全部已执行命令日志及退出码，原bundle和前次运行证据未覆盖。构建前没有启动 FNN、SDK或CKB产品样本，退款夜跑未动。
+
+TEST-MAP：六行均有映射，评审行均为 `[x]`；这一状态只表示测试代码存在，六行实际执行 **0/6**。本次 `check_test_design.py --root . --review reviews/lsp/delivery-acceptance-consistency.md` 识别六行、exit 0，Spec仍有按已确认边界解释的人工提示；`python3 scripts/check_test_map.py` 为120条评审、114个映射、无重复ID，exit 1仍只因既有PMP-01～05与SETTLE-01六个孤立映射。Python AST、Rust 2021格式检查及 `git diff --check` 在启动前均 exit 0。
+
+后续若授权**新的**批次，先准备可写、隔离且带所需锁定依赖的 Cargo 缓存，使离线 metadata 不触碰受限的用户缓存；将进程残留检查改为当前沙盒可执行的方式并重新复核。不能续跑或覆盖本次证据，也不能从本次资格失败推断六行产品行为。
+
+## 84333ee 接纳一致性 Gate3：第二批类型编译失败停批（2026-10-29）
+
+用户要求继续后，在新证据根 `report/lsp-delivery-84333ee-20261029T214529/` 启动唯一新批次，沿用84333ee和120分钟硬上限；前一批 `...T212218/` 原封保留。启动前修正批次脚本：将Cargo registry/git以 APFS 克隆至本批独立 `CARGO_HOME`，端口预检仅接受明确的 `ECONNREFUSED`，收尾只核验本批启动的进程组与六个指定IPv4 TCP端口。这三处经GPT6sol只读复核，无确定阻断；本次在允许本机loopback的执行环境运行。
+
+预检通过，固定产品HEAD精确匹配且工作树干净，基础bundle版本/摘要及六个端口资格通过；目标缓存、Cargo registry和git克隆均 exit0。`build-wrapper` 经过138.7秒退出1：离线 metadata 已通过，Cargo编译到测试薄包装时报告唯一 `E0308 mismatched types`，`fiber.public_key()` 为 tentacle `PublicKey`，测试控制函数却要求 FNN `Pubkey`。这是**测试侧薄包装编译错误**，不是FNN产品失败。按资格失败即停，没有启动传输自检、真实正常付款或01～06，未改产品、锁文件或退款夜跑。
+
+| 阶段 | 结果 | 原始证据 |
+| --- | --- | --- |
+| 预检及独立缓存准备 | 通过 | `run.json`、`product-head/status`、`base-version`、`clone-reviewed-cache`、`clone-cargo-registry/git` 日志和各 `.exit`；均为0 |
+| 构建资格 | 失败即停 | `build-wrapper.exit=1`，`build-wrapper.log` 中原始 Rust `E0308` 及 Cargo build exit101；未生成合格薄包装 |
+| 传输自检、正常付款及六行 | 全部未运行 | 无这些阶段的命令、JUnit或产品样本；实际执行 **0/6** |
+| 收尾 | 通过 | `product-final-status` 和 `original-final-status` exit0；`residual-processes.json` 记录本批全部进程组 absent、六个端口 `connect_ex=61 (ECONNREFUSED)`。此证据只覆盖本批进程组和指定本机TCP端口，不是全系统进程清单 |
+
+`run.json` 为 `status=stopped`，`batch.exit=1`；总单调时钟157.778秒，远低于120分钟。旧报告、当前失败编译日志、独立构建目录、克隆目标及启动前六份源码 `.snapshot` 均保留。停批**之后**，仅修改测试薄包装：先用原 tentacle `PublicKey` 生成与上游一致的 Network actor 注册名，再转为 `Pubkey` 供 `NodeInfo` 身份比较；`rustfmt --edition 2021 --check` exit0，GPT6sol按843源码静态复核类型与注册名一致。此修正未编译或运行，不能把第二批失败重写为通过；第二批冻结快照保留原错误版本。
+
+TEST-MAP仍为六个ID均已映射，场景勾选表示有代码，不表示六行通过。120条评审/114个映射的项目检查退出1仍仅为既有PMP-01～05、SETTLE-01六个孤立映射，无本批新孤立ID或重复评审ID。下一次必须是新的单次批次；不能续跑本次或为挑分支反复重跑。
+
+## 84333ee 接纳一致性 Gate3：第三批控制端未认证停批（2026-10-29）
+
+第二批停下并修正测试薄包装公钥类型后，在新证据根 `report/lsp-delivery-84333ee-20261029T215109/` 启动第三批，固定产品/SDK仍为84333ee。旧两批证据与原快照均保留。预检、独立缓存与薄包装构建通过，`build-wrapper.exit=0`（142.2秒）；进程内回复端口 `transport-selfcheck.exit=0`（约2.0秒），其事件明确标记只测内存传输、不是产品通过。
+
+真实正常付款对照已启动CKB、两台FNN、SDK租户和通道准备；在正式付款前 `_DeliveryBase.setUp()` 请求控制端 `status` 时，Unix socket 已连接但2秒内没有回复，pytest `normal-control.exit=1`，JUnit为1 failed、0 passed，整批 `status=stopped`、`batch.exit=1`。原始 `normal-control.log/.xml`、FNN/CKB/SDK/事件/观察日志在本批证据根。根因有直接证据：薄包装控制端先绑定socket，再以**未携带Biscuit Bearer token** 的 HTTP 客户端循环调用 `node_info`；`fiber-1/node.log` 持续记录 `Biscuit authorization failed ... no authorization header`，`events.jsonl` 为空，控制端未进入socket accept循环，也未发出 `ready`。这属于测试侧控制端鉴权缺陷，不能通过延长Python的2秒socket等待来证明夹具合格，更不是843产品失败。
+
+构建资格158.636秒、自检2.182秒、正常对照到失败89.57秒；总单调时钟253.202秒，未触及120分钟上限。按资格失败即停，`LSP-DELIVERY-01～06` **0/6未运行**，没有真实接纳/重投或付款结果。收尾通过：产品和原工作区状态与预检一致，`residual-processes.json` 的本批进程组全部 absent，指定六个IPv4 TCP端口均为 `ECONNREFUSED`；清理范围不扩写为全系统进程清单。
+
+停批**之后**仅修测试侧控制端：Python传入原bundle中已经用于FNN RPC的 `operator-token` **路径**，Rust用该token为本机 `node_info` 设置 `Authorization: Bearer`，保留90秒有界就绪和后续 `NodeInfo` 邮箱屏障。GPT6sol按843源码及既有夹具复核认证API、token来源和自检分支，未发现确定阻断；`rustfmt --edition 2021 --check`、Python AST与`git diff --check`退出0。此修正尚未重编或运行；第三批冻结的源码 `.snapshot` 保留原未认证版本。六行TEST-MAP及评审复选框不变，映射仍不等于验证通过。
+
+## 84333ee 接纳一致性 Gate3：第四批通道快照序列化停批（2026-10-29）
+
+第三批停下并修正控制端RPC鉴权后，在新证据根 `report/lsp-delivery-84333ee-20261029T215950/` 启动第四批，固定84333ee不变。预检、独立Cargo构建与进程内传输自检均通过，`build-wrapper.exit=0`、`transport-selfcheck.exit=0`；真实CKB/FNN/SDK及租户准备完成，控制端发出带`NodeInfo`邮箱屏障的 `ready`，已对一笔正常资格付款捕获原 `AcceptTrampolineDelivery`。因此本批证明前次鉴权障碍已消除，但正常付款**没有**完成资金与终态资格断言。
+
+正常对照在读取控制端 `snapshot` 时socket由对端关闭，pytest `normal-control.exit=1`、JUnit为1 failed。`fiber-1/node.log` 精确记录测试薄包装 `_delivery_node.rs:310` 的 `serde_json::Value` 序列化 panic：`number out of range`；100ms观察任务先遇同一快照路径，控制请求随后遇到，`events.jsonl`保留ready、armed、captured及StoreChange。源码显示固定843默认通道约束 `max_tlc_value_in_flight=u128::MAX`，而当前serde_json Value不能承载超过u64的整数，故高置信度归因于测试适配器把完整通道状态放进 `json!`；冻结证据不能区分local/remote约束中具体哪一个先触发。此失败不是产品断言失败，正式六行仍 **0/6未运行**。
+
+整批单调时钟248.888秒，`run.json.status=stopped`、`batch.exit=1`；构建155.908秒、自检2.011秒、正常资格到失败88.102秒，均未触及120分钟上限。`final-evidence`通过：固定产品与原工作区状态未变，本批已知进程组全部absent，六个指定端口均明确 `ECONNREFUSED`。第四批的构建、JUnit、事件、节点、CKB、SDK及源码 `.snapshot` 全部保留，与前三批不混写。
+
+停批**之后**只改测试侧快照传输：Rust流式 `serde_json::to_string` 把完整通道状态作为 `channels_json` 文本放入控制/观察事件，Python对直接和100ms事件均以`json.loads`恢复完整通道数组及精确大整数；逐K、逐方资金与终态断言不变。观察任务的变化指纹排除该原始文本，避免通道HashMap键顺序导致伪变化；原K TLC、delivery、session仍触发100ms事件，每次直接快照仍包含所有通道。GPT6sol静态复核了大整数无损路径和两类消费端，未编译或运行该修正。四批原证据保留，TEST-MAP六行仍映射但0/6未验证。
+
+## 84333ee 接纳一致性 Gate3：第五批非字符串通道键停批（2026-10-29）
+
+第四批停下并修改测试侧大整数传输后，在独立证据根 `report/lsp-delivery-84333ee-20261029T220838/` 启动第五批。`run.json` 记录预检、独立构建、传输自检均通过，`build-wrapper.exit=0`、`transport-selfcheck.exit=0`。正常对照启动真实CKB、FNN、SDK与通道，并捕获、转发、缓冲原 `AcceptTrampolineDelivery`。失败前的一份完整采样显示四条通道均为 `ChannelReady`、各有一条待处理TLC；A与T-A各为1,000,000 Shannon，P与T-P各为1,005,000 Shannon，当前费用为5,000 Shannon。中途路径与资金断言已通过，但这不是最终结算或费用归属通过。
+
+正常对照在 `_held_checkpoint` 读取首次快照时收到控制端 `{"ok":false,"error":"channel serialization: key must be a string"}`，`normal-control.exit=1`，JUnit为1 failed。事件保留 ready、armed、captured、forwarded、buffered，随后五次 `snapshot_failed` 为同一错误；本批没有节点panic。固定843源码中完整持久化通道状态含以 `TLCId`、`NonceSlot` 等结构类型为键的Map，不能作为JSON对象直接序列化；它还包含不应导出到控制事件的签名私钥。因此归因为测试薄包装快照设计错误，不是已证实的产品行为失败。真实资格付款未取得最终资金和终态证明，正式 `LSP-DELIVERY-01～06` **0/6未运行**。
+
+本批 `run.json.status=stopped`、`batch.exit=1`；正常对照约91.858秒后停，总单调时钟约250.477秒，未触及120分钟上限。`final-evidence`通过：产品仍为干净84333ee，原工作区的既有改动与预检一致，本批记录的进程组在归档时全部absent，指定六个本机TCP端口均为 `ECONNREFUSED`。本批源码 `.snapshot`、构建、JUnit、事件、观察、CKB/FNN/SDK日志和原始退出码均保留，前四批证据未覆盖。
+
+停批**之后**仅修测试侧快照：逐通道导出ID、状态、双方余额与锁定额，以及TLC的ID、方向、hash、金额、状态与完成类别；所有 `u128` 金额为精确十进制字符串，排除原始signer、onion和shared secret。100ms观察仍以原K捕获、delivery、session变化为指纹，直接快照另含通道摘要。Python直接和事件路径同步使用 `channels`，逐K与逐方资金断言未降低；原始RocksDB证据仍保留完整持久化状态。GPT6sol对固定843类型、序列化边界及两类Python消费路径静态复核未见确定阻断；该修正尚未重编或运行，不能改写第五批结果。
+
+## 84333ee 接纳一致性 Gate3：第六批费用字段误用停批（2026-10-29）
+
+第五批停下并改为安全通道字段投影后，新批证据根为 `report/lsp-delivery-84333ee-20261029T221906/`。固定84333ee产品树干净，独立构建 `build-wrapper.exit=0`，传输自检 `transport-selfcheck.exit=0`；正常付款资格对照的真实请求被捕获并转发，快照与签名保持/放行路径已越过前次失败点。最终采样显示付款 `Success`、发票 `Paid`，原K的上游TLC为 `RemoveTlcFulfill`，delivery 为 `Succeeded`，下游session及唯一attempt为 `Success`。上游P支出1,005,000 Shannon、T-P收入1,005,000，T-A支出1,000,000、A收入1,000,000，LSP净差额5,000；四条通道最终均无待处理TLC、锁定额为0。`events.jsonl` 无 `snapshot_failed`。这些是资格对照中的观测事实，尚未通过完整资金与稳定期断言。
+
+`normal-control.exit=1`、JUnit为1 failed：`_assert_key_outcomes` 错把 `request.previous_tlc.forwarding_fee=0` 当作T本次费用，断言 `1,005,000 == 1,000,000 + 0`。固定843源码在 `network.rs` 要求上游额与 `amount_to_forward` 的差额等于本次 `build_max_fee_amount`；该请求分别为1,005,000、1,000,000、5,000。`previous_tlc.forwarding_fee` 属于外层普通转发路径，本次为0。因此失败归因于**测试判据字段误用**，不是已证实的产品异常。该失败发生在后续 `_funds` 最终账本断言和30秒稳定采样之前，资格不能记通过，正式 `LSP-DELIVERY-01～06` 仍 **0/6未运行**。
+
+`run.json.status=stopped`、`batch.exit=1`；预检1.875秒、构建154.637秒、自检1.990秒、正常对照至失败89.403秒、收尾0.995秒，总单调时钟248.903秒，未触及120分钟上限。收尾保留原工作区的既有改动，产品仍为干净843；本批记录的进程组归档时全部absent，指定六个TCP端口均为 `ECONNREFUSED`。源码 `.snapshot`、JUnit、事件、观察、节点与链日志和退出码均保留，前五批不覆盖。
+
+停批**之后**只把该测试断言改为核对 `原上游TLC额 == amount_to_forward + build_max_fee_amount`，仍由 `_funds` 独立验证实际付款费 `f=U−M`、逐通道余额、锁定额和净收入，不把最大预算普遍当成实收费用。GPT6sol按固定843源码和第六批事实只读复核字段语义；该修正尚未运行，不改写第六批结果或已确认的六行用例预期。
+
+## 84333ee 接纳一致性 Gate3：第七批01终态判据未过（2026-10-30）
+
+固定843的新批证据根为 `report/lsp-delivery-84333ee-20261030T002446/`。预检、独立wrapper构建及传输自检均通过；真实正常付款对照 `normal-control.exit=0`、JUnit 1 passed，用时127.3秒，证明原入口、SDK签名、双腿资金和终态资格可达。随后只启动正式01，`delivery-01.exit=1`、JUnit 1 failed，用时211.1秒；整批 `status=stopped`、`batch.exit=1`，02～06按失败即停未运行。
+
+01的原K为 `(incoming_channel_id=0x19d3c8a0c19a87f4ac6d52b62616b911e47c5bba302c1a4f07be6802daa560bb, incoming_tlc_id=0)`。薄包装事件依次显示：69,707ms捕获并暂存原请求；74,711ms记录原调用超时（耗时4,999ms，原回复端口已关闭）；74,713ms才转交原请求；74,724ms服务返回 `Ok(Ok(Buffered))`。同一K在74,799ms快照中为 `Failed(upstream TLC was removed before hosted delivery dispatch)`、`attempt_count=0`。此时原上游TLC为1,005,000 Shannon，后来成为 `RemoveTlcFail/RemoveAckConfirmed`；下游session始终为0，T–A无目标TLC。P付款为 `Failed`、费用0，A发票仍 `Open`；最终四端余额与准备时基线完全一致，所有锁定额为0。**原caller超时与延迟接纳顺序已证实，但没有原K失败后下游成功或资金损失的样本。**
+
+01在120秒有界恢复内没有通过测试的终态谓词，抛出 `_PaymentBudgetExpired: late payment result is diagnostic only`。最后样本的付款和delivery均已Failed，原K TLC已记录失败完成；但P/T-P的 `list_channels.pending_tlcs` 各仍列一条 `RemoveAckConfirmed`，现有 `_finish` 以列表非空判未终态，未执行 `_assert_final` 与30秒稳定期。该表现需核对843的RPC/通道状态契约后才能调整测试判据；本批不能判01通过，也不能凭测试超时判定产品恢复超时或错付。`run.json`、`events.jsonl`、`observations.jsonl`、JUnit及原始日志保留；六行正式完整通过仍为0/6。未改产品、原工作区或退款夜跑。
+
+待清理列表的固定843源码依据：[RPC 投影](https://github.com/nervosnetwork/fiber/blob/84333eea8488a8afc7e4474aa4bbd0e7e973cee9/crates/fiber-lib/src/rpc/channel.rs#L565)、[失败确认语义](https://github.com/nervosnetwork/fiber/blob/84333eea8488a8afc7e4474aa4bbd0e7e973cee9/crates/fiber-types/src/channel.rs#L581)和[后续清理](https://github.com/nervosnetwork/fiber/blob/84333eea8488a8afc7e4474aa4bbd0e7e973cee9/crates/fiber-lib/src/fiber/channel.rs#L8442)。本地后续仅调整测试辅助代码的活跃TLC资金视图，要求RPC条目与原始T侧通道TLC逐字段匹配，并验证失败移除和确认序号；原始样本不删改。任何未证明的条目仍按活跃处理。第七批原始退出码和0/6结论不变；新谓词的离线证据核对不算产品重测。
+
+只读离线核对第七批冻结样本：新活跃视图只排除P/T-P两条匹配原始T通道的确认失败历史，父类资金断言可在该视图执行；未过滤样本仍触发原断言。九个内存负向分别破坏hash、金额、状态及原始移除/确认/方向/通道/唯一性，均保持阻断。此检查未启动节点或编译，不能补记01通过。
+
+## 84333ee 接纳一致性 Gate3：第八批逐K完成采样缺口停批（2026-10-30）
+
+固定843新批的独立证据根为 `report/lsp-delivery-84333ee-20261030T004329/`。预检约1.9秒、独立构建约152.3秒、自检约2.0秒均通过；第七批后仅针对确认失败历史的活跃TLC判据修正已在本批运行。真实正常付款对照约211.8秒后 `normal-control.exit=1`、JUnit 1 failed，`_PaymentBudgetExpired: payment operation exceeded ...` 出现在120秒恢复截止；整批 `status=stopped`、`batch.exit=1`。按资格失败即停，正式01～06没有启动，完整正式通过仍0/6。
+
+正常对照的最后原始样本显示付款 `Success`、发票 `Paid`、delivery `Succeeded`、下游唯一session/attempt `Success`；四端RPC `pending_tlcs=[]`、offered/received锁定额0，T侧原始通道TLC列表也为空。阻断来自测试对**原K移除原因的逐次观察要求**：730份直接快照中，前5份 `upstream_tlc` 仍是 `Inbound Committed` 且 `removed_reason=None`，从第6份起725份为 `None`；4份100ms事件快照同样未见移除原因。薄包装在当前Store里查 `get_all_received_tlcs().find(id)`，清理后即返回空；观察指纹不含通道字段，完成瞬态没有被事件持久记录。`_finish` 因无 `removed_reason` 不进入终态，`_assert_key_outcomes` 的完成证据也因此未满足；后续逐K/资金断言及30秒稳定期未完成。不能以聚合Success或列表清空替代已确认用例的逐K证据，也不能把测试的采样缺口归因产品。
+
+`run.json`、`normal-control.log/.xml/.exit`、`events.jsonl`、730份直接快照所在 `observations.jsonl` 及版本/清理材料保留。第七批01的原caller超时后转交事实和安全失败样本仍独立有效，但两批均不能转记01通过。本组暂停，不继续重跑竞态分支；本批未修改产品或退款环境。
+
+## 84333ee 接纳一致性 Gate3：第九批02复现上下游不一致（2026-10-30）
+
+固定84333ee的新批证据根为 `report/lsp-delivery-84333ee-20261030T013955/`。`run.json` 记录预检、已验证wrapper复用和传输自检均通过；真实正常付款资格 `normal-control.exit=0`、正式01 `delivery-01.exit=0`，两条均通过各自逐K、四端资金和30秒稳定断言。随后只运行正式02，`delivery-02.exit=1`、JUnit 1 failed，约91.2秒停止；整批 `batch.exit=1`，收尾证据检查通过。03～06按失败即停没有启动；六行中只有01完整通过，02为产品安全不变量失败，余四行未运行。
+
+02在 `drop_reply` 模式捕获原 `AcceptTrampolineDelivery`，69,675ms转交真实服务，69,684ms收到 `Ok(Ok(Buffered))`，事件中的持久记录为 `Deferred`、原回复端口未关闭。74,671ms记录来自原NetworkActor的 `caller_timeout`（距捕获约4,996ms，原端口已关闭）；故障解除并放行原SDK签名后，T原始通道快照中同一K `(0xbd3cd3989da95dc72de4eb77052a40b4c1c38bc8e2fb79878eccdf6145f57fd2, 0)` 的入站TLC，hash `0x5dfd61fb19b9f3b610f54af9d7cf450c8df6e6d7eeeda4df052cf68b1d23952c`、金额1,005,000 Shannon，变为 `RemoveTlcFail/RemoveAckConfirmed`，`removed_confirmed_at=3`。直接快照随后显示唯一下游session和一次成功attempt向A支付1,000,000 Shannon，session的 `trampoline_context.previous_tlcs` 精确绑定原K，成功preimage与A发票一致；同K delivery为 `Succeeded`。原事件、RPC与持久快照交叉核对了K、hash和金额；不是另一K的成功或测试侧历史视图误判。
+
+断言在 `_finish` 的逐K冲突检查处立即报 `product inconsistency: original K failed but downstream paid`。最后完整采样中P付款 `Failed`、fee=0，A发票 `Paid`，相对开通后基线的本地余额变化为 `ΔP=0`、`ΔT-P=0`、`ΔT-A=-1,000,000`、`ΔA=+1,000,000` Shannon；四端锁定额均0，通道保持 `ChannelReady`，采样期间检查的funding仍live。P/T-P的RPC `pending_tlcs` 残留 `RemoveAckConfirmed` 失败历史，但原始T通道记录已确认移除，不能将该列表当作仍锁定资金。**本次已实测原K确认失败后，同一执行的下游成功与T单边支出；这是产品一致性失败。** 测试立即停在冲突断言，未执行后续 `_assert_final` 四端终态断言和30秒稳定观察，故不宣称长期稳定或链上不可逆的最终损失。
+
+固定843源码解释与该样本一致：`service.rs:519` 接纳后异步安排恢复并返回Buffered；`network.rs:5312` 原调用超时后失败；`service.rs:866` 的上游Pending检查与后续 `:909` dispatch分离；`network.rs:8842` 的成功结算跳过已移除原TLC，`service.rs:276` 根据下游成功把delivery标为Succeeded。原始证据见本批 `events.jsonl`、`observations.jsonl`、`delivery-02.xml/.log/.exit` 和冻结源码；前八批记录不改写。复用的基础bundle包含当前真实SDK测试驱动，本组仅调用此前已有的发票、授权和记录接口，未打包或调用取消专项的新控制入口。此结论不扩大为取消或退款测试结果。
