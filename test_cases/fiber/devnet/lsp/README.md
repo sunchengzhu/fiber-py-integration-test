@@ -1179,3 +1179,10 @@ PYTHONPATH="$PWD" CKB_CLI_HOME="$EVIDENCE/ckb-cli-home" \
 ```
 
 该命令只选择 01。历史批次使用独立执行器强制 15 分钟总上限及 pytest 进程 480 秒上限；手工复现也须施加同等进程组截止，不得因默认 pytest 无硬截止而无限等待。
+
+
+### 固定843的普通兼容回归（2026-10-30）
+
+取消测试新增的两个 SDK driver 控制入口与既有普通 LSP 行为做了独立向后兼容回归。固定 `84333eea8488a8afc7e4474aa4bbd0e7e973cee9` 的干净 FNN 源码、同一新 driver-only bundle 下，核心16、延迟付款3、浏览器11按顺序分别 `16/16`、`3/3`、`11/11 passed`，共30个测试方法，对应25个不重复正式ID；三个JUnit均无失败、错误或跳过，阶段及整批退出码均0。60分钟同一总预算内实际用时2828.229秒，最终清理通过、无本批残留进程。原始 `runner.py/run.json`、JUnit、日志与节点证据保存在分离测试工作树的本地 `report/lsp-invoice-cancel-regression-84333ee-20261030T005117/`，不随本PR提交；三组实际命令、bundle摘要及清理边界以该报告为准。
+
+本回归验证新增测试 driver 对上述普通路径的兼容性，**不消除**取消01在真实A tenant `cancel_invoice` 入口的 `-32999 Unauthorized`；取消后旧付款资金和新付款步骤未执行，02未运行，03的 `Received` 契约仍待产品明确。
