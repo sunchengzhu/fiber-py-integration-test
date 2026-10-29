@@ -2,6 +2,8 @@
 
 本文标为“本地证据”的路径均相对仓库根目录；原始报告保留在本机 `report/`，不随 Git 提交或推送。其他会话可先读已提交的 [LSP 运行说明](../test_cases/fiber/devnet/lsp/README.md)，需要原始日志时再到本机按路径核对。
 
+2026-10-29 [实测反馈方向 1/2 的范围](lsp/field-feedback-scope.md)已展开为[Watchtower 独立收款 Gate2](lsp/watchtower-settlement.md#独立收款与目的地替换gate22026-10-29)。01/02/05/06 行集、费用及预算已确认；本分支实现 05 的真实 SDK 只验证诊断，旧 02 作一次相关回归。固定 84333ee 的首批因测试适配缺陷停批，修正后批次在 570.293 秒内完成；05 的拒绝发生在 sponsor 约束，不能视作输出目的地验证或独立到账。新 01/06 待产品修复，详见[运行记录](../test_cases/fiber/devnet/lsp/README.md#84333ee-独立收款诊断-gate3修正后单次批次完成2026-10-29)。
+
 上一轮完整已执行基线：FNN/SDK `4028884`，测试仓库基于 `v0.10.0 / 6088115`；已有 16 条核心用例已全部回归通过，见 [运行说明](../test_cases/fiber/devnet/lsp/README.md)。
 `24b5c38` 签名订阅迁移批次：[已通过的 Gate1 范围](lsp/signing-subscriptions-scope.md)、[已确认的 Spec、测试树与用例表](lsp/signing-subscriptions.md)。原事件 01～07改造为 LSP-SUBSCRIPTION 前缀，旧 08/09 已删除；该版本已同源构建并完成 Gate3 实现：核心 16 条与订阅 14 条全部通过；当轮完整 LSP 40 条为 38 通过、2 失败。普通开通计时器缺口及旧强关夹具竞争风险见 [运行记录](../test_cases/fiber/devnet/lsp/README.md)，历史通过不转记。
 

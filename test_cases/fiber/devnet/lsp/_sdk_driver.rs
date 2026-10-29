@@ -38,6 +38,9 @@ struct Args {
     ack_held_events: bool,
     #[arg(long)]
     watchtower_check_only: bool,
+    /// Gate3/05: observe watchtower events without invoking any signing handler.
+    #[arg(long)]
+    watchtower_diagnostic_only: bool,
 }
 
 #[derive(Deserialize)]
@@ -303,6 +306,10 @@ async fn control(
             .await?;
         return Ok(json!({"saved":true}));
     }
+    if operation == "watchtower-diagnose" {
+        return watchtower_chain::diagnose(agent, rpc, store,
+            chain.as_ref().context("adapter not configured")?, channel, value["sponsor"].clone()).await;
+    }
     if operation == "watchtower-process" || operation == "watchtower-check" {
         return watchtower_chain::process(
             agent,
@@ -392,6 +399,11 @@ async fn control(
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("watchtower-diagnostic-selfcheck") {
+        let value: Value = serde_json::from_reader(std::io::stdin())?;
+        println!("{}", watchtower_chain::diagnostic_selfcheck(value)?);
+        return Ok(());
+    }
     if std::env::args().nth(1).as_deref() == Some("subscription-token") {
         return subscription_token();
     }
@@ -459,7 +471,13 @@ async fn main() -> Result<()> {
                 let response = match serde_json::from_str::<Value>(&line) {
                     Ok(value) => {
                         let watchtower = value["operation"].as_str().is_some_and(|op| op.starts_with("watchtower-"));
-                        let action = control(&mut agent, &rpc, &store, &mut chain, value);
+                        let operation = value["operation"].as_str().unwrap_or("");
+                        let forbidden = (operation == "watchtower-diagnose" && !args.watchtower_diagnostic_only)
+                            || (args.watchtower_diagnostic_only && matches!(operation, "watchtower-process" | "watchtower-check"));
+                        let action = async {
+                            ensure!(!forbidden, "diagnostic-only control boundary violated");
+                            control(&mut agent, &rpc, &store, &mut chain, value).await
+                        };
                         let result = if watchtower {
                             tokio::time::timeout(std::time::Duration::from_secs(9), action).await
                                 .unwrap_or_else(|_| Err(anyhow!("watchtower control deadline exceeded")))
@@ -483,7 +501,11 @@ async fn main() -> Result<()> {
                         .and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(Value::Null);
                     (chain.is_some() && policies.get(format!("{id:#x}")).is_some()).then_some(id)
                 } else { None };
-                let result = if let Some(id) = approved_channel {
+                let diagnostic_event = args.watchtower_diagnostic_only && event_evidence["type"] == "watchtower_signing";
+                let result = if diagnostic_event {
+                    eprintln!("watchtower-diagnostic-observed: {}", event_evidence);
+                    Ok(())
+                } else if let Some(id) = approved_channel {
                     tokio::time::timeout(std::time::Duration::from_secs(9), watchtower_chain::process(&agent, &rpc, &store, chain.as_ref().unwrap(), id, args.watchtower_check_only)).await.unwrap_or_else(|_| Err(anyhow!("watchtower event deadline exceeded"))).map(|_| ())
                 } else { agent.handle_event(event).await };
                 // A deliberately held, already saved signature is a test
@@ -492,7 +514,7 @@ async fn main() -> Result<()> {
                 let held_by_test = args.ack_held_events && result.as_ref().err()
                     .is_some_and(|error| format!("{error:#}") == "test driver pauses this submission");
                 if event_evidence["type"]=="watchtower_signing" {
-                    eprintln!("watchtower-event: {}",json!({"event":event_evidence,"error":result.as_ref().err().map(|e|format!("{e:#}")),"adapted":approved_channel.is_some()}));
+                    eprintln!("watchtower-event: {}",json!({"event":event_evidence,"error":result.as_ref().err().map(|e|format!("{e:#}")),"adapted":approved_channel.is_some() && !diagnostic_event,"diagnostic_only":diagnostic_event}));
                 }
                 let _ = delivery.processed.send(result.is_ok() || held_by_test);
                 if held_by_test {

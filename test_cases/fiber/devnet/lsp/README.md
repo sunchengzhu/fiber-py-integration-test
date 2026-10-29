@@ -1053,3 +1053,90 @@ GPT 6.1 sol 已独立复核修复源码、版本选择、5 个方法的原始日
 独立工作树的提交前检查：普通LSP `pytest --collect-only -q` 收集60条、退出0；全仓 `black --check --no-cache .` 通过413个文件、退出0；Python格式化前后AST一致。4个既有LSP文件的格式修正单独提交，未修改用例语义。映射检查为103评审/99映射、退出1，只剩原PMP-01～05与SETTLE-01六个孤儿；本工作树不含本地report副本，无重复评审ID。三份相关评审的设计检查识别24行、退出0，已批准的分段观察与保留分支提示继续保留。
 
 精简后的driver在独立临时manifest及APFS复制缓存中执行 `cargo build --locked --offline --manifest-path <临时目录>/Cargo.toml`，退出0，实际编译17.90秒；只读取原固定04源码，没有覆盖原产品产物。原仓库本地证据 `report/lsp-reviewed-pr-validation-eeh9jcij/` 保存构建和检查输出。GPT6.1 sol独立复核依赖、版本、源码范围及格式语义，未发现阻断；本次没有重新运行节点、业务回归或夜间样本，收集与编译不算新的产品通过。
+
+## Watchtower05 独立复现输入
+
+历史 `report/lsp-watchtower-05-*` 只保存当时证据，运行不依赖该目录。调用者需准备**干净且精确为 84333eea8488a8afc7e4474aa4bbd0e7e973cee9 的 Fiber 源码**、同版本基础 bundle（含 `build.json`、FNN/agent、凭证与 `driver-build/Cargo.lock`）、可写 Cargo target、以及本测试 checkout 内尚不存在的输出路径。`--driver-only` 校验源码、锁文件、基础产物摘要和 FNN 版本，只构建本地测试驱动并复用基础 FNN/agent：
+
+```bash
+REVISION=84333eea8488a8afc7e4474aa4bbd0e7e973cee9
+python3 scripts/build_lsp_test_binaries.py \
+  --source "$FIBER_SOURCE" --revision "$REVISION" --driver-only \
+  --base-bundle "$LSP_BASE_BUNDLE" --target-dir "$LSP_CARGO_TARGET" \
+  --output "$PWD/download/fiber/watchtower-05-$REVISION"
+LSP_TEST_REVISION="$REVISION" \
+LSP_TEST_BUNDLE="$PWD/download/fiber/watchtower-05-$REVISION" \
+python -m pytest -x -vv -s -o addopts= \
+  test_cases/fiber/devnet/lsp/test_watchtower_settlement.py::TestWatchtowerSettlement::test_missing_approval_then_adapted_settlement \
+  test_cases/fiber/devnet/lsp/test_watchtower_settlement.py::TestWatchtowerDestinationRejection::test_independent_destination_rejects_operator_payout
+```
+
+上述测试需本仓库既有 devnet/CKB 环境与合约配置；命令是复现入口，不代表本独立分支重新执行过节点。
+
+## 84333ee 独立收款诊断 Gate3：因测试适配缺陷停批（2026-10-29）
+
+用户已确认WATCHTOWER-01/02/05/06行集、费用分配和预算，并授权固定`84333eea8488a8afc7e4474aa4bbd0e7e973cee9`先实现、GPT6.1sol复核，再在54分钟内依次执行适配自检、旧02相关回归、05单次诊断；01/06等待修复版。本批未切版本、未改产品、原快照或退款夜跑。
+
+代码已新增05的真实SDK prepare-only诊断、D_A/S独立意图与错付候选核验、零签名/提交和65秒观察；旧02保留D=S分段验证。原01方法仍是历史D=S测试，已移除对新版独立到账01的过时TEST-MAP；当前02～05有映射，01/06未映射。映射不表示本次完成产品验证。
+
+本地证据：`report/lsp-watchtower-05-84333ee-20261029T193040/`。实际命令为`/Users/sunchengzhu/project/fiber-py-integration-test/venv/bin/python /tmp/lsp_watchtower_05_runner.py`；运行时完整执行器保存在该证据目录的`runner.py`，各子命令/绝对截止/退出码见`run.json`。北京时间19:30:40启动，约90秒后停止，未到54分钟上限。
+
+| 实际阶段 | 结果与边界 |
+| --- | --- |
+| 版本/资源预检 | 通过；干净源码与FNN自报均为84333ee，已有bundle摘要匹配 |
+| 独立driver-only构建 | 阶段约26.8秒，构建命令退出0；Cargo原始输出`Finished dev profile ... in 19.85s`。仅构建本地driver及依赖，原FNN/agent复用并核验，新bundle在本次report内，原bundle未覆盖 |
+| 适配静态自检 | 约2.1秒；合法参数退出0，同钱包/扩大费限/未知字段三项各按预期退出1；AST及两方法收集成功。此处未调用真实链上的SDK prepare，不能当05通过 |
+| 旧02相关回归 | 启动后约59.2秒，在准备阶段主动SIGINT中断，退出2；日志`KeyboardInterrupt`、`no tests ran in 58.99s`，JUnit `tests=0, failures=0, errors=0`。不是产品断言失败或通过 |
+| 05单次诊断 | 未启动，未取得真实SDK拒绝样本，未运行65秒观察 |
+| 收尾 | 整批`batch.exit=1`、`status=stopped`；最终核验通过，本批PGID残留列表为空、测试端口空闲，产品源码干净、原工作区Git状态和旧bundle摘要保持不变 |
+
+**停批原因是本地测试实现错误，先前代码复核也漏掉了此项。** 在旧02准备过程中继续核对843接口，发现产品`OnchainSpendAuthorization.destination`使用`EntityHex`序列化；新Rust诊断原样导出的`authorization.destination`因此为packed Script十六进制字符串，但Python05将其与RPC Script对象直接比较。这会导致假失败，所以在05启动前中止本批；操作与归因见`manual-stop.json`，不归产品、#1674或#1706。收集成功、编译成功和参数自检不能证明这项跨语言schema正确。
+
+停批后仅修正代码并静态复核，**没有重建或重跑**：保留原始authorization，另从实际`auth.destination`导出`authorization_destination_rpc`，Python与事先批准D_A完整比较，不删除目的地断言、也不用intent反证自身。无节点selfcheck补入真实授权类型的内存序列化、packed字段与RPC字段一致性检查；不访问链、不签名或提交。修正后的下一批执行计划单独保存为`runner-after-schema-fix.py`，没有执行。当前report内bundle仍对应停止时的旧代码，不能当修正后匹配产物使用。
+
+全部运行证据与原bundle保留；冻结源码逐文件原字节保留为`sources/<原路径>.snapshot`，防止评审/映射扫描把证据副本当活跃源。初次静态映射检查因此报告了本批证据副本引起的6个重复ID，随后只调整本批证据文件后缀、保留原字节，并重新检查。中断时仍存在的4份节点/SDK日志另复制到`interrupted-setup-logs/`，原临时目录保留；不会将旧02尚未完成的环境准备记作业务样本。
+
+修正后GPT6.1sol静态复核通过，未重新编译或运行。最终设计检查6行退出0；映射检查114/108、无重复ID，退出1仍仅因六个既有孤立映射（PMP-01～05、SETTLE-01）；Python AST与git diff --check通过。已核对21份冻结源码的原始摘要全部保留。临时CKB链由中断清理流程移除，未保留完整临时CKB数据库；原链快照未变，已保存构建/运行日志、合约预检、JUnit/HTML、停止原因及仍存在的节点/SDK日志，不把准备现场视为完整业务样本。
+
+
+## 84333ee 独立收款诊断 Gate3：修正后单次批次完成（2026-10-29）
+
+用户明确授权用修正后代码重新构建并执行一批：适配自检→旧02相关回归→05单次诊断，固定完整`84333eea8488a8afc7e4474aa4bbd0e7e973cee9`，54分钟硬截止，任何失败即停止。01/06及退款夜跑不动；未修改产品或原链快照。上次`20261029T193040`停止记录、bundle、冻结源码、日志及修正后计划全部保留，本次写入全新目录。
+
+本地证据：`report/lsp-watchtower-05-84333ee-20261029T195244/`。实际启动命令：
+
+```bash
+/Users/sunchengzhu/project/fiber-py-integration-test/venv/bin/python   report/lsp-watchtower-05-84333ee-20261029T193040/runner-after-schema-fix.py
+```
+
+本次运行时执行器保存在新目录`runner.py`；具体子命令、PID、阶段截止、日志和退出码保存在`run.json`及各阶段文件。北京时间19:52:44启动，约20:02:14完成，总耗时**570.293秒（9分30秒）**；`batch.exit=0`、`status=passed`，没有重跑或补充轮次。
+
+| 实际阶段 | 结果 |
+| --- | --- |
+| 预检 | 1.334秒，通过；源码干净、完整SHA正确，FNN自报`fnn Fiber v0.10.0-rc1 (84333ee 2026-10-28)`，原bundle摘要匹配、所需端口空闲 |
+| 独立driver构建 | 阶段24.272秒，通过；构建命令退出0，Cargo原始输出`Finished dev profile ... in 18.15s`。复制独立匹配缓存，仅编译本地driver，原FNN/agent核验后复用；新bundle在本次report内，未覆盖任何旧产物 |
+| 适配自检与收集 | 2.116秒，通过；合法参数和真实授权类型的内存schema序列化自检退出0；同钱包、扩大费限、未知字段各按预期退出1；Python AST正常，两方法收集退出0。此阶段没有真实链SDK样本 |
+| 旧02相关回归 | 命令退出0，用时362.676秒；JUnit `tests=1, failures=0, errors=0, skipped=0`，pytest时间362.498秒 |
+| 05单次诊断 | 命令退出0，用时179.203秒；JUnit `tests=1, failures=0, errors=0, skipped=0`，pytest时间178.861秒 |
+| 收尾 | 0.684秒，通过；本批PGID残留列表为空、测试端口空闲、源码仍干净，原工作区Git状态和旧bundle摘要未变；21份冻结文件与执行时源一致 |
+
+**旧02只证明历史D=S的分段路径。** 原`Agent.handle_event`真实因缺本地批准拒签，`adapted=false`；负向窗口130.834秒、131次采样，最大间隔1.182秒，无A结算。明确批准后取得真实Applied，复核65字节签名进入A已committed结算交易的witness；T/A解锁份额分别为50,000,000,000 / 49,999,999,543 Shannon，两笔结算费785 / 638 Shannon，强关费457 Shannon，逐笔及累计守恒。终态稳定65.722秒、66次采样，最大间隔1.027秒。不转记为独立用户到账或原Agent自动恢复通过。
+
+**05取得真实SDK拒绝及无副作用证据。** 实际`auth.destination`导出的RPC Script与预先批准D_A完整一致，D_A与T的S不同，原始EntityHex授权仍保存。真实候选的输入/祖先、成熟、可信deps、request hash、record/witness与A解锁归属一致；资金快照为：
+
+| 候选资金项 | Shannon |
+| --- | ---: |
+| A合法应得份额 | 50,000,000,000 |
+| 输出至D_A | 0 |
+| S辅助输入 | 100,000,000,000 |
+| 输出至S（合并份额和找零） | 149,999,999,215 |
+| 合法后继commitment | 49,999,999,543 |
+| 实际交易费 | 785 |
+
+原SDK `prepare_onchain`确实被调用，返回`prepared=false`，最先拒绝层级为`sdk_sponsor`，原始错误：`invalid signing content: commitment validation: fee input is not approved plain CKB`。这不是旧夹具的提前拦截。后续65.546秒、66次采样、最大间隔1.181秒内，零A Settlement签名提交、SDK snapshot不变、批准未改变，沿真实链未发现A份额解锁；没有调用sign/submit或广播该候选。
+
+GPT6.1sol已独立核对本次schema自检、固定版本与复用产物、旧02的拒签/Applied/witness/资金，以及05的真实授权、错误候选、原SDK拒绝、连续观察和清理记录，复核通过。**05通过只说明独立D_A批准下，当前真实候选被sponsor约束拒绝；不证明输出目的地校验已经执行，不证明产品已修复或A已独立到账。** 新01/06仍等待修复版本，未执行，退款夜跑未启动。
+
+TEST-MAP仍为02～05已映射，新01/06未映射；本次新增执行结论仅为旧02一次相关回归、05一次有限诊断，不累计成1+3或全PR通过。成功/失败分目录保留，冻结证据使用`.snapshot`后缀，不参与活跃评审/映射扫描。
+
+本批文档/映射核验：`python3 scripts/check_test_map.py`输出114条评审、108条映射、无重复ID，退出1仍仅因既有PMP-01～05及SETTLE-01六个孤立映射；本批没有新增孤立映射。设计检查`cases: 6`、退出0（工具仍提示历史/推断Spec需要人工决定，本批行集与费用已获明确批准）。`git diff --check`退出0。前后两批各21份冻结源码均按原摘要核对一致；没有覆盖上次停止证据。

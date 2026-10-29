@@ -563,3 +563,212 @@ pub async fn process(
     }
     Ok(evidence)
 }
+
+/// Preserve the SDK's EntityHex schema and export the actual authorization's
+/// destination in RPC Script form for independent Python comparisons.
+fn authorization_export(auth: &OnchainSpendAuthorization) -> Result<Value> {
+    let authorization = serde_json::to_value(auth)?;
+    let rpc = ckb_jsonrpc_types::Script::from(auth.destination.clone());
+    let decoded_rpc: Script = rpc.clone().into();
+    let decoded_auth: OnchainSpendAuthorization = serde_json::from_value(authorization.clone())?;
+    ensure!(decoded_rpc == auth.destination && decoded_auth.destination == auth.destination,
+        "authorization destination serialization mismatch");
+    ensure!(authorization["destination"] == json!(format!("0x{}", hex::encode(auth.destination.as_slice()))),
+        "authorization destination is not the original packed EntityHex");
+    ensure!(decoded_auth.source == auth.source && decoded_auth.fee == auth.fee
+        && decoded_auth.additional_inputs == auth.additional_inputs && decoded_auth.cell_deps == auth.cell_deps,
+        "authorization field serialization mismatch");
+    Ok(json!({"authorization":authorization,"authorization_destination_rpc":rpc}))
+}
+
+/// Parameter-only validation. No RPC, store, signing or submission is reachable here.
+pub fn diagnostic_intent(value: Value) -> Result<Value> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Intent {
+        destination: ckb_jsonrpc_types::Script,
+        sponsor: ckb_jsonrpc_types::Script,
+        max_fee: u64,
+    }
+    let intent: Intent = serde_json::from_value(value)?;
+    let destination: Script = intent.destination.into();
+    let sponsor: Script = intent.sponsor.into();
+    ensure!(destination != sponsor, "diagnostic requires independent destination and sponsor");
+    ensure!(destination.args().raw_data().len() == 20 && sponsor.args().raw_data().len() == 20,
+        "diagnostic requires full secp wallet locks");
+    ensure!(destination.code_hash() == sponsor.code_hash() && destination.hash_type() == sponsor.hash_type(),
+        "diagnostic wallet lock types differ");
+    ensure!(intent.max_fee == 10_000, "diagnostic requires the reviewed 10000 Shannon cap");
+    Ok(json!({"destination":ckb_jsonrpc_types::Script::from(destination),
+        "sponsor":ckb_jsonrpc_types::Script::from(sponsor), "max_fee":intent.max_fee,
+        "check_only":true,"can_sign":false,"can_submit":false}))
+}
+
+/// Pure-memory schema probe using the same export as the real diagnosis.
+pub fn diagnostic_selfcheck(value: Value) -> Result<Value> {
+    let mut intent = diagnostic_intent(value)?;
+    let destination: Script = serde_json::from_value::<ckb_jsonrpc_types::Script>(intent["destination"].clone())?.into();
+    // Non-empty packed fields exercise the SDK's EntityHex arrays as well.
+    let probe = OnchainSpendAuthorization {
+        source: fiber_lsp_sdk::CommitmentReference {
+            for_remote: true, version: 1, tx_hash: Hash256::from([0u8; 32]),
+        },
+        destination, fee: intent["max_fee"].as_u64().context("fee cap")?,
+        additional_inputs: vec![OutPoint::default()], cell_deps: vec![CellDep::default()],
+    };
+    let exported = authorization_export(&probe)?;
+    intent["authorization"] = exported["authorization"].clone();
+    intent["authorization_destination_rpc"] = exported["authorization_destination_rpc"].clone();
+    intent["authorization_serialization_checked"] = json!(true);
+    intent["schema_probe_only"] = json!(true);
+    Ok(intent)
+}
+
+/// Gate3/05 only: retain the actual approval and let the original SDK reject
+/// the real sponsor/destination incompatibility, rather than the old adapter.
+pub async fn diagnose(
+    agent: &Agent<HttpFiberRpc, FileSignerStore>,
+    rpc: &HttpFiberRpc,
+    store: &std::path::Path,
+    chain: &Chain,
+    id: Hash256,
+    sponsor_value: Value,
+) -> Result<Value> {
+    let snapshot_before = std::fs::read(store.join("snapshot.bin"))?;
+    let approvals_before = std::fs::read(store.join("watchtower-approvals.json"))?;
+    let policies: Value = serde_json::from_slice(&approvals_before)?;
+    let policy = policies.get(format!("{id:#x}")).context("no persisted watchtower approval")?;
+    let intent = diagnostic_intent(json!({"destination":policy["destination"],
+        "sponsor":sponsor_value,"max_fee":policy["max_fee"]}))?;
+    let destination: Script = serde_json::from_value::<ckb_jsonrpc_types::Script>(intent["destination"].clone())?.into();
+    let sponsor: Script = serde_json::from_value::<ckb_jsonrpc_types::Script>(intent["sponsor"].clone())?.into();
+    let max_fee = intent["max_fee"].as_u64().context("fee cap")?;
+    let status = rpc
+        .get_watchtower_signing_status(&agent.tenant_token()?, id.into())
+        .await?
+        .status;
+    let request = serde_json::to_value(&status)?;
+    let fiber_json_types::WatchtowerSigningStatus::SignatureRequired {
+        content,
+        request_id,
+        ..
+    } = status
+    else {
+        return Ok(json!({"idle":true,"sdk_called":false,"request":request}));
+    };
+    ensure!(
+        content.key_purpose == fiber_json_types::OnchainKeyPurpose::Settlement,
+        "non-settlement work"
+    );
+    let tx: Transaction = content.transaction.clone().into();
+    let first = tx
+        .raw()
+        .inputs()
+        .get(0)
+        .context("commitment input")?
+        .previous_output();
+    let first_live = chain.call("get_live_cell", json!([ckb_jsonrpc_types::OutPoint::from(first.clone()),true])).await?;
+    if first_live["status"] != "live" {
+        return Ok(json!({"checkpoint_invalid":true,"sdk_called":false,
+            "request_id":request_id,"request":request,"first_input_live":first_live,
+            "reason":"commitment input is not live"}));
+    }
+    let signer = agent
+        .open_channel(agent.binding(id).context("channel binding")?)
+        .await?;
+    let mut candidates = vec![];
+    for record in signer.recovery_records().await? {
+        // A remote commitment's aggregate signature belongs to the peer. The
+        // SDK-verified record plus canonical, contract-valid chain lineage is
+        // the settlement source; local aggregate storage is not a prerequisite.
+        if !record.settlement.data.tlcs.is_empty() {
+            continue;
+        }
+        let mut scoped = chain.clone();
+        scoped.funding = Some(
+            record
+                .transaction
+                .raw()
+                .inputs()
+                .get(0)
+                .context("record funding")?
+                .previous_output(),
+        );
+        if scoped
+            .lineage(record.reference.tx_hash, &first)
+            .await
+            .is_ok()
+        {
+            candidates.push((record, scoped));
+        }
+    }
+    ensure!(
+        candidates.len() == 1,
+        "expected unique verified ancestor, got {}",
+        candidates.len()
+    );
+    let (record, scoped) = candidates.pop().unwrap();
+
+    scoped.verify_maturity(&tx.raw().inputs().into_iter().collect::<Vec<_>>()).await?;
+    ensure!(tx.raw().cell_deps().into_iter().collect::<Vec<_>>() == chain.deps,
+        "diagnostic candidate dependencies differ from trusted configuration");
+    ensure!(Hash256::from(fiber_types::blake2b_hash_with_salt(tx.as_slice(), &[])) == Hash256::from(request_id),
+        "diagnostic request id differs from full packed transaction hash");
+    let mut total = 0u64;
+    let mut sponsors = vec![];
+    let mut live_inputs = vec![];
+    for (i, input) in tx.raw().inputs().into_iter().enumerate() {
+        let raw_live = scoped.call("get_live_cell", json!([ckb_jsonrpc_types::OutPoint::from(input.previous_output()),true])).await?;
+        if raw_live["status"] != "live" {
+            return Ok(json!({"checkpoint_invalid":true,"sdk_called":false,"request_id":request_id,
+                "request":request,"input_index":i,"live_response":raw_live,
+                "reason":"candidate input became non-live"}));
+        }
+        live_inputs.push(json!({"input":ckb_jsonrpc_types::CellInput::from(input.clone()),"response":raw_live}));
+        let cell = scoped.live_cell(&input.previous_output()).await?;
+        if i > 0 {
+            ensure!(cell.output.lock() == sponsor && cell.output.type_().to_opt().is_none() && cell.data.is_empty(),
+                "diagnostic input does not match independently frozen plain sponsor");
+            ensure!(input.previous_output() != first && !sponsors.contains(&input.previous_output()), "duplicate diagnostic sponsor");
+            sponsors.push(input.previous_output());
+        }
+        total = total.checked_add(cell.output.capacity().unpack()).context("capacity overflow")?;
+    }
+    ensure!(!sponsors.is_empty(), "diagnostic requires an actual sponsor input");
+    for output in tx.raw().outputs() {
+        total = total.checked_sub(output.capacity().unpack()).context("negative fee")?;
+    }
+    ensure!(total <= max_fee, "diagnostic fee exceeds persisted approval cap");
+    let auth = OnchainSpendAuthorization { source:record.reference.clone(),destination,
+        fee:total,additional_inputs:sponsors,cell_deps:chain.deps.clone() };
+    // No sign, confirm, poll, nonce mutation, or submission call exists below.
+    let result = signer.prepare_onchain(fiber_lsp_sdk::json::onchain_from_rpc(content.clone()),auth.clone(),&scoped).await;
+    let error = result.as_ref().err().map(|e|e.to_string());
+    let layer = match error.as_deref() {
+        Some(e) if e.contains("fee input is not approved plain CKB") => "sdk_sponsor",
+        Some(e) if e.contains("unapproved on-chain destination") => "sdk_output_destination",
+        Some(_) => "sdk_other",
+        None => "prepared_without_signing",
+    };
+    let snapshot_after = std::fs::read(store.join("snapshot.bin"))?;
+    let approvals_after = std::fs::read(store.join("watchtower-approvals.json"))?;
+    let exported_auth = authorization_export(&auth)?;
+    let evidence = json!({"sdk_called":true,"request":request,"first_input_live":first_live,
+        "live_inputs":live_inputs,"checks":{"unique_verified_ancestor":true,"maturity":true,"trusted_deps":true,
+        "request_hash":true,"sponsor_plain_live_unique":true,"fee_within_approval":true},
+        "channel_id":id,"request_id":request_id,"content":content,
+        "transaction":ckb_jsonrpc_types::Transaction::from(tx.clone()),
+        "transaction_hash":format!("{:#x}",tx.calc_tx_hash()),
+        "signing_message":hex::encode(fiber_types::compute_tx_message(&tx)),
+        "authorization":exported_auth["authorization"],
+        "authorization_destination_rpc":exported_auth["authorization_destination_rpc"],
+        "intent":intent,"source":record.reference,"prepared":result.is_ok(),
+        "rejection_layer":layer,"error":error,"check_only":true,"can_sign":false,"can_submit":false,
+        "snapshot_before_hash":hex::encode(fiber_types::blake2b_hash_with_salt(&snapshot_before,&[])),
+        "snapshot_after_hash":hex::encode(fiber_types::blake2b_hash_with_salt(&snapshot_after,&[])),
+        "snapshot_unchanged":snapshot_before==snapshot_after,"approval_unchanged":approvals_before==approvals_after});
+    scoped.evidence(evidence.clone())?;
+    ensure!(snapshot_before==snapshot_after && approvals_before==approvals_after,
+        "diagnostic changed SDK snapshot or persisted approval");
+    Ok(evidence)
+}
