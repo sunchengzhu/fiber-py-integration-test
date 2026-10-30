@@ -1,11 +1,23 @@
 # Fiber 网络集成测试区域图
 
+当前84333ee专项已带已知问题收尾。新会话先读[LSP收尾结论与有限后续](../test_cases/fiber/devnet/lsp/README.md#84333ee-收尾结论与新会话入口2026-10-31)，下方历史计划不作为当前启动授权。
+
+2026-10-30整体盘点已核原始JUnit及退款最终证据：固定843为47通过、2个产品失败、25个无该版本结果（74个既有LSP ID口径）。DELIVERY当前5/6通过，退款按用户接受的两轮方案完成；下文40/74、DELIVERY 1/6等为早期批次历史。无843结果不等于从未执行：19个是旧版本回归，2个沿#1674待修，取消02被已知入口缺陷阻断，另3个待产品能力/契约且未实现。见[当前运行汇总](../test_cases/fiber/devnet/lsp/README.md)。普通订阅8ID/11方法重新评审的草稿暂缓，下一步应选真正未覆盖行为，不新增同义用例或重复夜跑。
+
 本文标为“本地证据”的路径均相对仓库根目录；原始报告保留在本机 `report/`，不随 Git 提交或推送。其他会话可先读已提交的 [LSP 运行说明](../test_cases/fiber/devnet/lsp/README.md)，需要原始日志时再到本机按路径核对。
+
+第二批接纳一致性的[Gate2六行、触发方案、资金断言与预算](lsp/delivery-acceptance-consistency.md)已获用户明确确认，固定84333ee；`LSP-DELIVERY-01～06` 均有 Python TEST-MAP。第七批01取得原调用超时后接纳的安全失败样本但未过终态，第八批正常对照因逐K采样缺口停止，均保留历史失败。第九批正常资格及正式01通过；正式02在同进程actor薄包装受控丢弃接纳回复后，出现原K上游失败而同K下游成功的产品一致性失败，于早期断言停止，正式最终资金与30秒稳定未运行；03～06未运行，正式通过 **1/6**。见[第七批](../test_cases/fiber/devnet/lsp/README.md#84333ee-接纳一致性-gate3第七批01终态判据未过2026-10-30)、[第八批](../test_cases/fiber/devnet/lsp/README.md#84333ee-接纳一致性-gate3第八批逐k完成采样缺口停批2026-10-30)和[第九批运行记录](../test_cases/fiber/devnet/lsp/README.md#84333ee-接纳一致性-gate3第九批01通过02产品一致性失败2026-10-30)。固定843独立通过 **40/74**、有映射 **71/74**；映射不等于通过。新02失败不归入旧#1674/#1706，退款夜跑结论不变。
+
+LusoCryptoLabs 报告的第三项“租户不能取消自己的发票”已补为[Hosted 发票取消 Gate2 三行](lsp/hosted-invoice-cancellation.md)：自己 Open 发票取消、跨租户隔离、Received hold invoice 取消后的资金收尾。01/02 已建立 TEST-MAP；固定843的01单次诊断以真实A tenant token创建hash-only Open发票后，`cancel_invoice` 返回 `-32999 Unauthorized`，节点明确指出租户白名单缺该方法。旧付款资金与新付款后半步骤未执行，02未运行；03的Received契约待产品明确，未映射。见[取消运行记录](../test_cases/fiber/devnet/lsp/README.md#84333ee-hosted租户发票取消真实入口拒绝2026-10-30)。
+
+2026-10-29 新增[实测反馈与相邻风险 Gate1](lsp/field-feedback-scope.md)：二十个候选方向，涵盖独立收款归属、actor 接纳超时、租户取消发票、缺授权 TLC 收尾、注册规模及 SDK 长期状态。Gate1已获确认；方向1/2已展开为[watchtower Gate2](lsp/watchtower-settlement.md#独立收款与目的地替换gate22026-10-29)：补强01、新增05/06，02澄清历史引用；行集/费用/预算已确认，Gate3当前实现05；旧01过时映射移除，01/06等待修复版。前次Gate3因05证据schema缺陷主动停批的证据保留；修正后经用户重新授权，843独立构建、自检、旧02一次与05单次均通过，总耗时570.293秒。05仅证明SDK sponsor约束拒绝，独立到账仍未验证，见[最新LSP运行记录](../test_cases/fiber/devnet/lsp/README.md#84333ee-独立收款诊断-gate3修正后单次批次完成2026-10-29)。旧 watchtower 批次预先批准 T/sponsor 钱包，因此证明已批准交易的签名和守恒，不能证明资金回到独立用户钱包；新范围优先补这个判据缺口，不抹去 #1706 的有效修复证据。
 
 上一轮完整已执行基线：FNN/SDK `4028884`，测试仓库基于 `v0.10.0 / 6088115`；已有 16 条核心用例已全部回归通过，见 [运行说明](../test_cases/fiber/devnet/lsp/README.md)。
 `24b5c38` 签名订阅迁移批次：[已通过的 Gate1 范围](lsp/signing-subscriptions-scope.md)、[已确认的 Spec、测试树与用例表](lsp/signing-subscriptions.md)。原事件 01～07改造为 LSP-SUBSCRIPTION 前缀，旧 08/09 已删除；该版本已同源构建并完成 Gate3 实现：核心 16 条与订阅 14 条全部通过；当轮完整 LSP 40 条为 38 通过、2 失败。普通开通计时器缺口及旧强关夹具竞争风险见 [运行记录](../test_cases/fiber/devnet/lsp/README.md)，历史通过不转记。
 
 当前新增范围为固定 `04c2064` 的 [浏览器鉴权 Gate2](lsp/signing-subscriptions.md#浏览器鉴权-gate2共同断言输入与预算04c2064)，14～19六行及预算已获用户确认，Gate3已实现并完成正式1+3共44/44、相关旧14/14回归，GPT6.1 sol复核通过，见 [浏览器鉴权记录](../test_cases/fiber/devnet/lsp/README.md#04c2064-浏览器鉴权-gate32026-10-26)。现有 Bearer 14方法已在04通过，见 [运行记录](../test_cases/fiber/devnet/lsp/README.md#04c2064-websocket-既有订阅回归与下一步2026-10-26)。旧事件传输仅保留为 [4028884历史范围](lsp/legacy-signing-events-scope.md)，不代表当前协议。
+
+订阅过滤20～28的[Gate1](lsp/signing-subscriptions-scope.md#2026-10-28过滤参数补充-gate1)及[Gate2行集/数组兼容/预算](lsp/signing-subscriptions.md#过滤参数-gate2输入断言预算与最小适配04c2064)已获确认，12方法与TEST-MAP已实现。用户进一步授权更新LSP分支后，固定 `84333ee` 独立构建并完成相关3/3及正式1+3共48/48；04缓存准备失败保留历史，详见[最新运行记录](../test_cases/fiber/devnet/lsp/README.md#84333ee-订阅过滤-gate3完成2026-10-29)。同身份多通道严格子集仍是覆盖缺口。
 
 **已知问题入口：** `LSP-TIMEOUT-04/05` 的普通开通计时器缺口已由
 [Fiber #1674](https://github.com/nervosnetwork/fiber/issues/1674) 跟踪，2026-10-23 核实时为 Open；
