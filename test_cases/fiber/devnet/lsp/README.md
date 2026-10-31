@@ -35,9 +35,9 @@
 
 ### 测试代码提交关系与可复现边界
 
-- 测试仓库目标分支为 `sunchengzhu/fiber-py-integration-test:codex/lsp-core-regressions`。[PR #2](https://github.com/sunchengzhu/fiber-py-integration-test/pull/2)已合并；[订阅过滤#3](https://github.com/sunchengzhu/fiber-py-integration-test/pull/3)、[Watchtower诊断#4](https://github.com/sunchengzhu/fiber-py-integration-test/pull/4)、[取消入口#5](https://github.com/sunchengzhu/fiber-py-integration-test/pull/5)、[接纳一致性#6](https://github.com/sunchengzhu/fiber-py-integration-test/pull/6)已提交、尚未合并。
-- `codex/lsp-84333ee-closeout` 整合上述代码的本地最终内容，以及RECOVERY-05/08、PAYMENT-04、退款夜跑源码和最终记录，供一次审阅。与#3～#6有内容重叠；不要把整合PR与这些PR当成互不相干的补丁依次合并。原PR保持不变，不在本次自动关闭或合并。
-- 整合分支是**草稿交付**。PAYMENT-04准备问题未修复、没有业务通过记录；退款原启动脚本仍固定04版本及本机输入，不能直接复现843两轮补救批。843使用的独立补救批输入保留在原本地证据中，本次没有移植或重新执行启动器。
+- 测试仓库目标分支为 `sunchengzhu/fiber-py-integration-test:codex/lsp-core-regressions`。[PR #2](https://github.com/sunchengzhu/fiber-py-integration-test/pull/2)已合并；后续成果统一通过[整合PR #7](https://github.com/sunchengzhu/fiber-py-integration-test/pull/7)交付。2026-10-31用户明确授权核对后合并#7，并将重复的#3～#6按已被替代整理。
+- [订阅过滤#3](https://github.com/sunchengzhu/fiber-py-integration-test/pull/3)、[Watchtower诊断#4](https://github.com/sunchengzhu/fiber-py-integration-test/pull/4)、[取消入口#5](https://github.com/sunchengzhu/fiber-py-integration-test/pull/5)、[接纳一致性#6](https://github.com/sunchengzhu/fiber-py-integration-test/pull/6)保留为历史分项记录，不再单独合入。#7还包含RECOVERY-05/08、PAYMENT-04、退款夜跑源码及最终记录。PR的实际合并/关闭状态以链接中的GitHub记录为准；原分支、工作树及本地证据保留，不因整理PR而删除。
+- 这次交付保存测试代码与收尾结论，**不代表产品测试全部通过或批准合并产品PR #1623**。PAYMENT-04准备问题未修复、没有业务通过记录；退款原启动脚本仍固定04版本及本机输入，不能直接复现843两轮补救批。843使用的独立补救批输入保留在原本地证据中，本次没有移植或重新执行启动器。
 - 夜跑源码独立放在 `lsp_nightly/`，`manual_nightly`及默认deselect保持；不加入普通测试、Makefile或定时CI。本次仅整合源码、运行记录及静态检查，不启动节点/VM或产品测试。
 - `report/`、`tmp/`、下载包、编译缓存、节点密钥、VM磁盘均未提交。GitHub上的摘要可读，原始证据仍只在下列本机目录，不能声称已公开上传可复验的全部原始日志。
 
@@ -66,7 +66,7 @@
 
 ### 可直接给新会话的任务
 
-> 继续Fiber PR #1623的已收尾测试工作，先读AGENTS.md和本README顶部“84333ee收尾结论与新会话入口”，必要时读取对应评审及原本地证据。固定产品84333ee，本轮测试工作已结束，不能解释为全部通过或可无条件合并。当前只核对测试整合PR和产品修复状态，报告是否存在需要定点验证的实际diff；没有修复就不启动测试。后续范围限DELIVERY-02、取消01/02、#1674对应04/05及明确纳入产品承诺的独立收款问题。多preimage本地补跑取消，退款两轮已完成，不补3/4，不重跑无关通过项。若需要新增/实质修改用例或启动新批，先给我有限方案和预算并等确认。保留证据和其他改动，清理自己产生的临时文件。复核用GPT-6 Sol High。
+> 继续Fiber PR #1623的已收尾测试工作，先读AGENTS.md和本README顶部“84333ee收尾结论与新会话入口”，必要时读取对应评审及原本地证据。固定产品84333ee，本轮测试工作已结束，不能解释为全部通过或可无条件合并。测试成果统一见PR #7及目标分支codex/lsp-core-regressions，#3～#6作为被替代的历史记录，不再重复合入。当前只核对产品修复状态，报告是否存在需要定点验证的实际diff；没有修复就不启动测试。后续范围限DELIVERY-02、取消01/02、#1674对应04/05及明确纳入产品承诺的独立收款问题。多preimage本地补跑取消，退款两轮已完成，不补3/4，不重跑无关通过项。若需要新增/实质修改用例或启动新批，先给我有限方案和预算并等确认。保留证据和其他改动，清理自己产生的临时文件。复核用GPT-6 Sol High。
 
 ---
 
