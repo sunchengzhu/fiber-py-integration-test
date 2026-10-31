@@ -17,6 +17,8 @@
 - SDK 重启保留 RootKey、会话、绑定、已验证历史和授权所在的原存储；FNN 重启保留公共节点与租户的原数据、配置和认证密钥。所有重启都在同一 SHA 内进行，不读取旧版运行遗留的数据来测试升级兼容。
 - “进程重启”必须观察旧进程退出和新进程启动；仅重建 SDK 对象、重新连接 HTTP 或驱逐租户均不符合前提。FNN 可读存储不代表租户已经能继续协议，必须实际提交和完成业务。
 
+本次新增范围（2026-10-30）：用户选择实测反馈候选18，直接展开下文[连续付款后的SDK恢复Gate2](#连续付款后的sdk恢复gate22026-10-30)，仅新增 `LSP-RECOVERY-08` 一行，固定 `84333eea8488a8afc7e4474aa4bbd0e7e973cee9`。01～07的历史行和结果不变；08等待完整行及预算确认，本轮未修改自动化或运行测试。
+
 ## Spec
 
 ### SPEC-01：正常授权与资金结果
@@ -43,6 +45,14 @@ Basis: [Hosted 签名与运行时恢复](https://github.com/nervosnetwork/fiber/
 Source: explicit
 Testing: required
 
+### SPEC-04：已积累多笔付款历史的同一通道仍可恢复并继续支付
+Condition: 同一P–T–A拓扑及同一SDK文件存储已连续完成8笔付款，第9笔的真实撤销签名已保存但尚未提交时强制退出SDK。
+Expected: 原存储的新SDK进程恢复相同待签请求及提交体，无须重建通道或再次批准第9笔；第9笔及随后第10笔均成功，各付款只结算一次，逐笔及累计金额与实际路由费正确。
+Observable: 十个唯一payment hash的实际付款/发票、四端余额和锁定、原channel/funding、旧新PID、原身份/token/存储、完整R/S及首次Applied；另记录整库snapshot.bin字节、恢复记录投影数量和付款耗时，不设未经确认的性能阈值。
+Basis: 已获范围确认的[候选18与SPEC-06](field-feedback-scope.md#spec-06连续正常付款不能只验证第一笔可用)；固定843的 `crates/fiber-lsp-sdk/src/signer.rs:1257` 读写签名状态、`lifecycle.rs:234` 保留承诺恢复记录、`tests/fiber-lsp-sdk-agent/src/store.rs:30` 重新打开原快照及逐次持久化；已有06仅验证一笔付款时的同类恢复。
+Source: inference
+Testing: required
+
 ## 测试树
 
 <!-- TEST-TREE-BEGIN -->
@@ -56,6 +66,9 @@ Testing: required
 - FNN 原数据重启
   - 待签请求保留 LSP-RECOVERY-04 [primary] -> SPEC-03
   - 支付最近结果去重 LSP-RECOVERY-05 [primary] -> SPEC-03
+- 同一通道累积付款历史
+  - 前8笔逐笔完成，第9笔原SDK存储恢复，再完成第10笔及累计资金核对 LSP-RECOVERY-08 [primary] -> SPEC-04
+  - 长期压力、性能增长阈值及单通道StoredSigningState字节导出 [pending] — 本次只记录现有接口可得数据，不新增性能验收或Rust导出入口。
 <!-- TEST-TREE-END -->
 
 ## 待评审用例
@@ -70,10 +83,11 @@ Testing: required
 | `LSP-RECOVERY-05` | - [x] P 向 A 支付一次，关联承诺签名 S1已 Applied、R2尚未应用；暂缓 SDK 事件交付及后续提交，正常停止整个 FNN并用原数据重启；同一 SDK 重新订阅恢复 R2，重交 S1再放行 | FNN 保留最近已应用记录和完整 R2；原 SDK 同 PID 的新订阅实际收到 R2；S1返回 AlreadyApplied且 R2不变；P–T重连后原支付 Success、发票 Paid、TLC清空，四端余额只结算一次且路由费一致 | FNN 重启丢失去重或订阅恢复能力，造成重复扣款或原支付卡住 | P0 |
 | `LSP-RECOVERY-06` | - [x] P 向 A 支付一次，SDK 已保存发票、兑现授权及该支付 SendRevokeAndAck 的签名，但未送达 FNN；强制结束 SDK，以原存储启动新 PID，经新订阅恢复原请求，不重新登记授权 | 新 SDK 成功订阅并实际收到原完整请求，从原历史及授权生成相同提交体，首次送达为 Applied；原支付 Success、发票 Paid、通道就绪、TLC清空，四端余额只结算一次，无须重新发起支付 | 恢复丢失撤销历史或授权，或未真正消费订阅却误判支付恢复 | P0 |
 | `LSP-RECOVERY-07` | - [x] A–T 收款完成且无 TLC，A 已保存精确关闭费用授权；T 协作关闭，SDK 已保存 SendClosingSigned 签名但未提交时强制退出；以原存储启动新 PID，经新订阅恢复原请求，不重新批准关闭 | 新 SDK 实际收到原完整关闭请求并生成相同提交体，首次送达为 Applied；原注资被对应关闭交易花费一次且确认，两个输出的脚本与金额符合支付后余额和各自批准费用，原通道关闭 | 恢复丢失关闭授权或余额历史，或关闭资金少返、多返和付错地址 | P0 |
+| `LSP-RECOVERY-08` | - [x] 同一P–T与T–A两条通道、同一SDK存储串行收款：前8笔各成功，第9笔SendRevokeAndAck签名已保存未提交时强制退出SDK，以原存储及身份新进程恢复第9笔，随后完成第10笔；每笔1,000,000 Shannon、唯一hash、只发送一次 | 第9笔新SDK收到原完整请求并生成相同提交体，首次实际提交Applied，无重新授权；十笔均Success/Paid且各只结算一次，原通道/注资不变，每笔及累计四端金额与实际路由费一致，无残留TLC/锁定；重启不改变前8笔结果，第10笔证明后续可用 | 单笔测试遗漏历史积累后的恢复错误、重复扣款/收款，或重启只能完成旧付款而无法继续新业务 | P1 |
 
 <!-- TEST-CASES-END -->
 
-七行均针对核心通道使用或资金安全；第一行是新版主流程对照，其余分别验证不同持久化事实和恢复位置。
+原七行针对核心通道使用或资金安全；第一行是新版主流程对照，其余分别验证不同持久化事实和恢复位置。新增08仅补多笔历史积累后的恢复和继续付款，输入及预算按文末本次Gate2，不套用历史批次规模。
 不把一切错误都归为重启缺陷：版本不符、授权入口缺失、指定检查点未出现，应报告准备失败，不能算用例通过。
 
 ## 共同前提：先让新版正常工作
@@ -208,4 +222,66 @@ P2P 重连可使用原节点身份和地址，禁止以重新发起支付或换�
 - SDK 故障采用存储操作返回后的强制进程退出；FNN 采用保留数据的正常停止重启。它们不代表断电或任意写入点崩溃恢复。
 - 接受上文最小测试驱动作为必要准备；准备接口存在不等于新版完整链路成立，必须先验证第一行，再执行重启故障。
 
-本表七行已对应 `test_cases/fiber/devnet/lsp/test_channel_signing_recovery.py` 中的 TEST-MAP；勾选只表示映射存在，不表示执行通过。
+原01～07已对应 `test_cases/fiber/devnet/lsp/test_channel_signing_recovery.py` 中的 TEST-MAP；勾选只表示映射存在，不表示执行通过。新增08尚未映射。
+
+## 连续付款后的SDK恢复：Gate2（2026-10-30）
+
+本批是[实测反馈候选18](field-feedback-scope.md)的一条新行为序列，不重做旧订阅评审，也不把单笔RECOVERY-06再次执行当作新增覆盖。用户已选择该范围；本轮提交上表08及以下输入、断言、预算和适配供确认。产品固定843，GPT-6 Sol High只读复核，当前仅编辑文档。
+
+### 固定规模与完整操作
+
+只执行一个新方法，固定十笔串行付款；失败即停，不增加轮次或换hash补跑失败笔。A–T双方各500 CKB；P–T由P注资1,000 CKB，只开一次。四端顺序固定为A、T–A、P、T–P；准备就绪后保存两条channel ID、funding outpoint和四端余额基准。第2～10笔必须复用该拓扑，不重新注册A、不换SDK存储，不重建通道。
+
+每笔金额均为1,000,000 Shannon，总金额10,000,000 Shannon（0.1 CKB），十个preimage/hash各不相同。沿用现有普通CKB发票、3600秒有效期、final_expiry_delta=3,600,000ms、允许trampoline且禁MPP；一次send_payment，max_fee_amount=10,000 Shannon、tlc_expiry_limit=86,400,000ms、timeout=1200秒。发票授权先保存，SDK记录含本笔TLC的真实有效承诺后才批准兑现。本行不是hold invoice安全释放测试，也不增加取消发票或链上结算。
+
+1. **第1～8笔。** 每笔新建并授权唯一发票，真实发送一次；等Success/Paid、无待签、无TLC/锁定后核对逐笔与从初始基准累计的四端资金，连续5次、间隔1秒确认本笔状态/余额稳定，才发下一笔。SDK始终使用原PID和存储；仅在准备阶段创建P–T一次。
+2. **第9笔冻结。** 沿现有06的真实检查点推进：本笔含目标hash的承诺已记录、发票及兑现授权已保存；到首个对应本笔的SendRevokeAndAck时保存完整R9/S9并暂扣提交。用commitment version、方向、complete标志及目标hash确认原恢复记录对应本笔，不截取开通或其他更新。HTTP审计确认S9从未实际转发；保留原R9、原身份、token、绑定、存储路径及控制调用记录。只在本笔活跃TLC/授权期限至少有900秒余量时开始故障。
+3. **原存储恢复。** 强制退出SDK，确认旧进程退出；保存已落盘的snapshot.bin原字节/摘要。仅删除可重建status输出，原存储不写入、不修剪、不替换；以相同command/token/store启动新PID。新进程必须真实重新订阅并收到完整R9，产生与S9相同的提交；tenant/root signer/token/绑定保持，恢复期间没有新invoice/fulfill/bind授权调用，也不重新send第9笔。只要求在已保存签名之后杀进程，不声称覆盖任意写盘点断电。
+4. **完成第9笔。** 放行真实SDK提交，原S9首次实际到FNN必须Applied；后续签名由真实SDK继续。第9笔Success/Paid，原通道/注资、逐笔及累计资金、零TLC/锁定和5秒稳定均通过；再次查询前8笔仍为Success/Paid且fee未改变。
+5. **第10笔与收尾。** 由恢复后的同一新SDK进程按正常流程完成新hash付款，执行同样资金和稳定断言；最后重新查询十笔终态/fee并检查累计账本、原通道和零锁定。第10笔失败不能用“第9笔恢复了”代替本行通过。
+
+### 金额、身份及证据断言
+
+第i笔实际路由费为 `f_i=get_payment(hash_i).fee`，要求 `0≤f_i≤10,000`，不写死为零。相对上一笔稳定余额，四端local_balance增量依次为 `(a, -a, -(a+f_i), a+f_i)`，remote_balance增量相反；A/T–A与P/T–P均须local/remote互为镜像。完成k笔后相对首次基准，四端累计增量为 `(k*a, -k*a, -(k*a+Σf_i), k*a+Σf_i)`；T两条通道净收入合计等于Σf_i。
+
+每笔四端保持ChannelReady、原channel/outpoint；offered/received锁定额均0、pending_tlcs清空、A为NoSignatureRequired。十次send的记录与十个唯一hash一一对应，旧付款终态/费用不变，逐笔和累计账本共同证明经济上没有重复结算；不声称完整验证所有内部session/attempt重试。第9笔恢复另要求同一R9/S9、原存储和新PID、新订阅的实际交付以及首次Applied，不能由Python代交S9冒充SDK恢复。
+
+在0、1、4、8、9、10笔稳定点记录宿主单调时间、整库 `store/snapshot.bin` 的字节数、已有 `records` 投影条数/版本及各笔实际耗时；第9笔记录故障、重启、恢复的相应时间点。时间和大小是诊断数据，无增长斜率、CPU或性能通过阈值；付款耗时包含RPC与观察开销，不称SDK纯签名耗时。
+
+当前 `records` 并不导出完整StoredSigningState，**单通道序列化状态字节在本批明确未测**；整库snapshot.bin不能换名冒充它。为本次功能验证不增加Rust导出接口或产品构建。原始请求/响应、签名审计、SDK/node日志、逐笔/累计账本、稳定样本、身份（摘要）、存储检查点和JUnit均保存在一个独立运行目录；对外汇报不展示token/私钥。
+
+### 最小适配及一次验证
+
+- 在现有 `test_channel_signing_recovery.py` 新增一个方法 `test_sequential_payments_survive_sdk_restart`，映射08；不新增通用框架。`_start_payment`仅增加可选已有public_channel输入：默认仍创建通道，旧01～07调用不变；08在首次付款后保留P–T ID，第2～10笔复用并核对同一四端。不能直接循环原方法而生成十条P–T通道。
+- 复用 `_finish_payment` 的逐笔余额/镜像/费用/稳定断言，另保存初始基准、每笔终态和fee作累计核对；复用06的撤销检查点、`_kill_sdk/_restore_sdk/_check_first_forward`。十笔期间保留审计历史，不清空SDK记录来“重置”下一笔；第9笔用request ID和时间筛选自己的事件，避免把前8笔提交误判为重复。
+- 现有局部循环之外增加仅对08生效的总截止；不修改旧方法默认等待。复用现有归档方式，将小型序列账本/度量随每笔落盘，故障/到期保留已完成笔数及当前原始证据。只新增一处TEST-MAP及08复选框同步。
+- 显式使用 `LSP_TEST_REVISION=84333eea8488a8afc7e4474aa4bbd0e7e973cee9` 与已保留的 `report/lsp-invoice-cancel-84333ee-20261030T003644/bundle`。该清单driver/chain摘要与当前源码匹配；默认download下843 bundle的辅助源码摘要过期，不能误用。Gate3仍先核对全部文件摘要、产品干净HEAD、Python/端口和空间；匹配产物可复用，不为本批重建FNN/SDK或启动VM。
+- 适配先经GPT-6 Sol High复核，静态语法与选择器收集检查后，仅跑旧06一次检查默认路径，再跑新增08一次。旧06在843既有JUnit耗时89.176秒，仅作本次3分钟聚焦预算参考；新十笔尚无实测时间，不将单笔时间机械乘十。两个方法均失败/到期即停，不加1+3、不跑全套旧订阅或退款。
+
+### 时间、空间与停止规则
+
+Gate3从首次准备开始共30分钟硬上限：实现/复核/产物与环境检查10分钟，旧06相关回归3分钟，新08正式执行12分钟，证据及清理5分钟。准备、修正或重启执行器都不重置起点；各阶段取自身截止与总截止前预留清理时间的较早者，未用完时间不扩大后续阶段上限。到期尚未完成十笔即记“预算停止/未完成”，不能压缩付款次数、5秒稳定期或资金断言来取得通过。
+
+局部等待沿用RPC最多10秒、请求/撤销检查点和重连各最多60秒、每笔完成最多120秒，均受全局剩余截止限制；放行第9笔前保留现有至少180秒业务余量。入口/环境失败、产品断言失败或超时均停止；已完成前缀不等于08通过。运行前及运行中磁盘不得低于8 GiB，本批新证据目录增长到512 MiB即停止业务并保留现场收尾，不生成多轮全量存储拷贝。完成后清理本批自有进程及可重建临时文件，保留原始证据、现有bundle、源码改动与旧快照；本批不生成新的Rust编译缓存。
+
+下一步等待用户确认08这一行、固定8+恢复第9+第10的规模、30分钟上限及上述度量边界，再在主会话进入Gate3；本次没有运行测试。
+
+Gate2复核：GPT-6 Sol High结论为设计可通过、无阻塞；已将“同一P–T–A通道”精确化为两条原通道。设计检查识别8行、退出0，新增SPEC-04的推断预期仍按本轮提交用户确认，长期压力/单通道字节保持未覆盖。项目映射检查124评审/116映射、退出1，08未映射符合Gate2，9个既有孤儿映射保持且无重复ID；未宣称映射检查全绿。`git diff --check`退出0。仅新增评审行、测试树及表外方案，并在原候选范围添加入口；未改自动化、未收集pytest、未构建或启动节点。
+
+## 连续付款后的SDK恢复：Gate3实测（2026-10-30）
+
+用户明确确认上面的08行集与30分钟预算后，已实现`test_sequential_payments_survive_sdk_restart`并建立TEST-MAP，08复选框由未映射改为已映射；预期未变。GPT-6 Sol High先复核实现通过，再只读复核实测证据通过。
+
+固定干净84333ee，匹配现有bundle，旧06、新08各运行一次：pytest分别103.82/207.16秒，均1 passed、exit0，整批exit0；准备至执行/自动清理约646.44秒，未重置预算或追加测试。08的固定8+恢复第9+第10完整执行，十笔Success/Paid，金额总计10,000,000 Shannon，费用总计50,000；四端逐笔及累计余额、原channel/outpoint、零锁定、5秒稳定与历史终态/fee保持均通过。新PID通过新WS恢复原请求，S9首次真实转发Applied。
+
+完整证据和命令见本批RESULT（本地证据：`../../report/lsp-recovery08-84333ee-20261030T171222/RESULT.md`）。本批自有进程已退出、端口释放、可重建隔离临时目录清理；证据、原产物、历史快照保留。没有改产品、操作退款或扩成长压；整库snapshot/records的诊断边界仍按Gate2。映射检查124评审/117映射，exit1仍为9个既有孤儿，无新增孤儿或重复ID。
+
+## 84333ee 收尾补证：RECOVERY-05 持久化 delivery（2026-10-30）
+
+用户确认四项收尾工作后，复核现有05发现其已执行真实付款中的完整FNN正常停止、原数据重启、同SDK恢复及四端资金核对；不新增重复ID或第二套恢复环境。本次保留05既有输入与行预期，只增强原付款执行记录的观察：停前必须真实处于`in_flight`或`settling_upstream`，保存并匹配P—T的incoming channel/TLC、租户、private channel、hash、created_at和buffer_deadline；重启后这些身份和截止不变，attempt_count允许产品合法推进；最终同记录必须`succeeded`，原资金、零锁定与5秒稳定窗口断言仍执行。
+
+源码依据：固定843的`crates/fiber-lib/src/lsp/service.rs`启动时扫描持久pending并Resume、`rpc/lsp.rs`公开原incoming执行键与时间字段。已有TEST-MAP继续使用LSP-RECOVERY-05；此次不声称覆盖Deferred冷租户的首次dispatch，也不验证断电/fsync或跨版本迁移。实现及复核不等于执行通过，实际结果追加至LSP README。
+
+本次增强的单次实测结果：2026-10-30 `execution-211837`，pytest 1 failed in94.53s、exit1。真实delivery已取得`in_flight`，但新增观察代码在`before_restart`写未创建的证据父目录时失败；尚未调用FNN重启，不能计恢复、最终资金或稳定窗口通过，也不能归为产品失败。按用户fail-stop要求未重跑，后续九项TIMEOUT未启动。原TEST-MAP和用例预期不变，历史05通过不能代替增强后通过。证据、GPT-6 Sol High归因复核及已完成临时目录清理见实际结果（本地证据：`../../report/lsp-closeout-84333ee-20261030/execution-211837/RESULT.md`）。
+
+用户批准修正后开新批`execution-214323`：父目录创建遗漏已修，GPT-6 Sol High复核及离线准备检查通过后，05单次**1 passed/150.86秒、exit0**。真实FNN新PID/原SDK同进程，同一incoming key、身份、时间字段在原数据重启前后保持，delivery由in_flight达到succeeded并五次稳定；原付款Success/Paid、金额1,000,000 Shannon、fee5,000、四端资金镜像和零锁定通过。归档校验及临时目录清理完成，旧211837仍保留原失败。证据和准确资金边界见新批结果（本地证据：`../../report/lsp-closeout-84333ee-20261030/execution-214323/RESULT.md`），仍不扩大为Deferred冷恢复、断电或跨版本保证；TEST-MAP和用例行不变。

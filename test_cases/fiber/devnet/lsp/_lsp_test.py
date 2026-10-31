@@ -29,7 +29,15 @@ REVISION = os.environ.get(
 assert len(REVISION) == 40 and all(
     c in "0123456789abcdef" for c in REVISION
 ), "LSP_TEST_REVISION must be a full lowercase commit SHA"
-BUNDLE = Path(get_project_root()) / "download/fiber" / f"pr-1623-{REVISION[:7]}"
+BUNDLE = Path(
+    os.environ.get(
+        "LSP_TEST_BUNDLE",
+        str(Path(get_project_root()) / "download/fiber" / f"pr-1623-{REVISION[:7]}"),
+    )
+).resolve()
+assert BUNDLE.is_relative_to(
+    Path(get_project_root()).resolve()
+), "LSP_TEST_BUNDLE must stay inside this test checkout"
 BISCUIT_PUBLIC_KEY = (
     "ed25519/17b172749be74276f0ed35a5d0685752684a3c5722114bba447a2f301136db79"
 )
@@ -63,6 +71,10 @@ class LspTestBase(FiberTest):
     # Extra keys written into the hosting FNN's `fiber:` section. Deadline suites
     # shorten the two opening timers here instead of changing a shared template.
     fiber_config_extra = {}
+    # A reviewed suite may wrap only Public T; ordinary tests and payer P keep FNN.
+    host_binary = None
+    host_process_env = {}
+    lsp_config_extra = {}
     # Deadline suites that hold the wallet funding submission keep this false.
     submit_external_funding = True
     # Keep the pre-merge binary selection local to this suite.
@@ -200,7 +212,12 @@ class LspTestBase(FiberTest):
                 f"  {key}: {value}\n" for key, value in self.fiber_config_extra.items()
             )
             config = config.replace("fiber:\n", "fiber:\n" + extra, 1)
-        config_path.write_text(config + "\nlsp:\n  max_active_tenants: 2\n")
+        lsp_options = {"max_active_tenants": 2, **self.lsp_config_extra}
+        config_path.write_text(
+            config
+            + "\nlsp:\n"
+            + "".join(f"  {key}: {value}\n" for key, value in lsp_options.items())
+        )
         operator_token = (BUNDLE / "operator-token").read_text().strip()
         self.fiber1.client = FiberRPCClient(
             self.fiber1.client.url,
@@ -215,7 +232,11 @@ class LspTestBase(FiberTest):
             with (Path(fiber.tmp_path) / "node.log").open("a") as log:
                 process = subprocess.Popen(
                     [
-                        str(BUNDLE / "fnn"),
+                        (
+                            str(self.host_binary or BUNDLE / "fnn")
+                            if fiber is self.fiber1
+                            else str(BUNDLE / "fnn")
+                        ),
                         "-c",
                         fiber.fiber_config_path,
                         "-d",
@@ -224,6 +245,7 @@ class LspTestBase(FiberTest):
                     env={
                         **os.environ,
                         **fiber.extra_env,
+                        **(self.host_process_env if fiber is self.fiber1 else {}),
                         "FIBER_SECRET_KEY_PASSWORD": "password0",
                         "RUST_LOG": f"info,fnn={self.fnn_log_level}",
                     },

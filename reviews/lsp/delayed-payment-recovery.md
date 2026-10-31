@@ -1,5 +1,7 @@
 # 真实付款的延迟签名恢复
 
+2026-10-30当前状态：`LSP-PAYMENT-04`已映射、业务未验证。最新192130批补入既有合约对齐调用，经GPT-6 Sol High复核后仅执行一次；pytest在setup_class的隔离路径断言报错（1 error in7.60s、exit1）即停。runner向预导入类设置路径，但pytest实际加载另一模块中的类，tmp_path_name仍为None；CKB已在默认tmp启动后才被断言拦下。未执行合约对齐、FNN初始化或任何付款/资金断言。属于本批执行准备错误，不能计产品业务失败或通过。详见最新RESULT（本地证据：`../../report/lsp-payment04-84333ee-20261030T192130/RESULT.md`）。旧批证据保留；固定产品仍为干净`84333eea8488a8afc7e4474aa4bbd0e7e973cee9`。
+
 范围：已通过 [Gate1](hosted-channel-guards-scope.md) 的在线延迟、SDK 完全离线、A 等签时 B 收款三个方向。用户已明确通过 Gate2 的三行、预算和共同断言，2026-10-24 进入 Gate3；Python 自动化与 TEST-MAP 已接入，执行结果另记于[运行记录](../../test_cases/fiber/devnet/lsp/README.md)。已有 RECOVERY、RETRY、SIGN、TIMEOUT 用例不变，不改产品代码；映射存在不表示执行通过。
 
 固定 FNN/SDK：`24b5c38bc098aeb29de5f6af7ac28dc667f218e3`；测试仓库基线 `cf937275618d8e51b35a7537788702cf4b67bc31`。新 PR HEAD 的观察保留在 Gate1，不把本批结果归给未运行的版本。
@@ -39,6 +41,14 @@ Basis: [租户隔离契约](channel-signing-isolation.md)与 [每通道独立的
 Source: inference
 Testing: required
 
+### SPEC-04：本地缺授权拒签后由显式批准恢复同一次付款
+Condition: 固定843，P通过原P–T–A两条通道支付仅含hash的发票；A的真实SDK尚未保存该hash的付款授权，客户端持有preimage，SDK进程始终在线。
+Expected: 无授权时拒绝目标签名且不释放preimage；用户明确补入匹配授权后，由同一SDK通过自然重连收到的原待签请求继续处理，先验证可执行承诺与真实链，再释放preimage使原付款完成；同通道下一笔付款也成功，逐笔及累计资金正确。
+Observable: 无预授权的控制记录、含目标hash的完整R、实际WS交付/新连接、对应SDK拒签日志区间、提交及preimage相关HTTP审计、同PID/存储/身份、独立链验证控制结果、两笔付款/发票/四端余额/锁定和稳定样本。
+Basis: 固定843 [缺授权拒绝](https://github.com/nervosnetwork/fiber/blob/84333eea8488a8afc7e4474aa4bbd0e7e973cee9/crates/fiber-lsp-sdk/src/commitment.rs#L471)、[本地发票授权不释放preimage](https://github.com/nervosnetwork/fiber/blob/84333eea8488a8afc7e4474aa4bbd0e7e973cee9/crates/fiber-lsp-sdk/src/signer.rs#L637)、[事件失败后重载](https://github.com/nervosnetwork/fiber/blob/84333eea8488a8afc7e4474aa4bbd0e7e973cee9/tests/fiber-lsp-sdk-agent/src/events.rs#L83)、[原Agent独立验证后释放](https://github.com/nervosnetwork/fiber/blob/84333eea8488a8afc7e4474aa4bbd0e7e973cee9/tests/fiber-lsp-sdk-agent/src/agent.rs#L557)；本地驱动`_sdk_driver.rs:347～351、538～542`仅调用上述真实授权/事件路径。
+Source: inference
+Testing: required
+
 ## 测试树
 
 <!-- TEST-TREE-BEGIN -->
@@ -46,13 +56,15 @@ Testing: required
   - 在线等待至少 35 秒并完成原付款：LSP-PAYMENT-01 [primary] -> SPEC-01
   - SDK 离线且不查询 A，恢复原存储：LSP-PAYMENT-02 [primary] -> SPEC-01、SPEC-02
   - A 等待期间 B 完成，再放行 A：LSP-PAYMENT-03 [primary] -> SPEC-01、SPEC-03
+- 缺授权后的显式批准恢复（固定843）
+  - 无授权真实拒签、同PID自然恢复原付款及同通道下一笔资金：LSP-PAYMENT-04 [primary] -> SPEC-04
 - 后续独立评审
   - 反向开通、watchtower 与链上资金取回 [unanalysed] — 本批不覆盖，完成此组后再选择下一范围。
 <!-- TEST-TREE-END -->
 
 ## 完整用例
 
-以下三行共享本文的检查点、时间预算及断言；复选框仅表示 TEST-MAP 是否存在。
+01～03共享下文原检查点、时间预算及断言；04只采用SPEC-04及文末独立Gate2约束。复选框仅表示TEST-MAP是否存在。
 
 <!-- TEST-CASES-BEGIN -->
 | 用例 | 场景 | 预期结果 | 防止的问题 | 优先级 |
@@ -60,6 +72,7 @@ Testing: required
 | `LSP-PAYMENT-01` | - [x] P 真实支付 A 一次；A 的 SDK 在线，在目标 CompleteReceivedCommitment 签名未应用且 T 已等 ACK 后，持续扣留并观察至少 35 秒，再提交原 SDK 签名和放行后续签名 | 等待期间原请求和通道保留、原付款未完成、funding 未花费；恢复后原付款 Success、发票 Paid、TLC/锁定额/待签清空，四端余额与实际费用一致并稳定至少 5 秒 | 将用户正常延迟签名误判为通道失活，或恢复只返回 Applied 却丢付款、重复结算 | P1 |
 | `LSP-PAYMENT-02` | - [x] P 真实支付 A 一次并到达同一检查点；结束 SDK，确认原 WS 两侧及在途请求均结束后，至少 35 秒完全不请求 A，再用原存储启动并核对原请求和签名后恢复 | 无租户查询的完整窗口内公共侧通道和原付款仍保留；新 PID 的订阅实际补发同一完整请求、首个签名体与原件一致且身份/授权未重建；原付款按共同资金断言完成并稳定 | 保护依赖持续查询或残留订阅保活，或重启靠重新授权、重发付款掩盖恢复丢失 | P1 |
 | `LSP-PAYMENT-03` | - [x] A、B 通道先就绪；P 向 A 付款并扣住同一检查点，在 A 持续等签至少 35 秒期间向 B 支付另一张发票，确认 B 已完成且 A 仍未放行，再恢复 A | B 必须先 Success/Paid 且自身 TLC 清理，A 同时仍为原待签/未付款；共享 P–T 只结算 B 并保留 A 锁定额；A 随后成功，六端余额、两笔费用及 T 净收入分别准确且稳定 | 单租户签名等待阻塞其他租户付款，或共享余额/付款上下文串单、漏扣或重复扣款 | P1 |
+| `LSP-PAYMENT-04` | - [x] P向A的hash-only发票发送一次付款，A的SDK缺本地授权而真实拒签；在同一SDK进程补入同hash正确授权，经自然重连恢复原请求并安全释放preimage，原付款完成后在原两条通道再付一笔新hash | 补授权前无目标签名提交或preimage释放；同PID、新WS实际交付原R，补授权后SDK首次实际提交Applied；两笔均Success/Paid，逐笔及累计四端资金/实际费用守恒，原通道和funding保持、TLC/锁定/待签清空并各稳定至少5秒，原付款历史终态及费用不变 | 无授权状态被误签或提前泄露preimage，拒签后无法恢复、需要重启/重发掩盖问题，或后续付款串单及重复结算 | P0 |
 <!-- TEST-CASES-END -->
 
 ## 共同检查点：证明 T 真正在等这笔付款的 ACK
@@ -161,3 +174,106 @@ Gate3 在 LSP Python 范围复用/扩展：现有 RetrySignatureGate 的全 HTTP
 2026-10-24 Gate3：三行已确认并映射到 `test_delayed_payment_recovery.py`。首轮 3/3 通过后，独立复核补齐全部付款通道的 actor 重建检查；冻结后聚焦 1 轮和固定 3 轮共 12/12 通过。首轮及所有复跑的原始证据均保留，详见[本批运行记录](../../test_cases/fiber/devnet/lsp/README.md#24b5c38真实付款延迟签名恢复2026-10-24)。本段不改变已确认的用例、预算或资金断言。
 
 GPT 6.1 sol 已独立复核最终代码与全部运行证据，无本范围剩余阻断项，未触发 Daybreak；受 gate 改动影响的既有 LSP-RETRY-04/05 另跑 2/2 通过。TEST-MAP 为本批 3/3；全仓映射检查因既有孤儿映射和历史重复 ID 返回 1，设计检查因历史重复 ID 返回 1，详见运行记录，不将其描述为检查通过。
+
+## LSP-PAYMENT-04 Gate2：缺授权后的同进程恢复（84333ee）
+
+### 固定输入与去重边界
+
+只新增一个方法、两个唯一付款hash：第一笔故意缺授权，第二笔正常授权后发送作为后续可用性对照。两笔各`a=1,000,000 Shannon`、独立preimage，不做参数矩阵或固定1+3。拓扑为P–T–A，A–T双方各500 CKB，P–T由P注资1,000 CKB，仅建立一次；四端顺序为A、T–A、P、T–P。准备后保存原channel ID/funding outpoint、完整余额基准、SDK PID/启动命令/存储路径和身份摘要。
+
+两张发票均由A的真实tenant token创建：Fibd/CKB、`payment_hash`和`hash_algorithm=ckb_hash`、`expiry=3600s`、`final_expiry_delta=3,600,000ms`、允许trampoline、禁MPP；**没有`payment_preimage`参数**。preimage只留在测试客户端，直至本地授权及之后的安全释放。每hash只调用一次`send_payment`，`max_fee_amount=10,000`、`tlc_expiry_limit=86,400,000ms`、`timeout=1200s`；客户端RPC自动重试关闭。
+
+第一笔先仅生成授权意图而不调用SDK授权：金额a、方向inbound、同hash/算法，`expires_at_ms=创建时+3,600,000`、`min_tlc_expiry_delta_ms=900,000`、`max_tlc_expiry_ms=创建时+172,800,000`。补授权使用这份原意图。第二笔在发送前保存自己的匹配授权。`invoice`控制验证preimage匹配后只保存付款授权；它不等于兑现批准或安全释放。
+
+旧RETRY/PAYMENT/RECOVERY在付款前已有正确授权；SDK单测虽覆盖无授权拒绝，但没有本行真实付款/资金收尾。04不使用取消入口，不重跑已知`cancel_invoice`权限失败。错误金额/方向已保存授权的替换与永久拒绝收尾仍在范围外。
+
+### 完整操作及证据顺序
+
+1. **准备和审计边界。** 使用固定843的现有匹配bundle `report/lsp-invoice-cancel-84333ee-20261030T003644/bundle`。A–T、P–T及路由就绪，四端ChannelReady、无TLC/锁定/待签，funding为live。配置原Agent的独立ChainVerifier，保留`preimage-configure`请求/响应与固定合约目录。开通完成后签名HTTP gate始终passthrough，所有故障模式关闭；它只记录，不扣签、不伪造错误、不主动断线。A的Python RPC和SDK RPC都经过同一审计入口。保存开通后的审计/日志偏移，不清空历史；不留其他并发付款或待签工作。
+2. **唯一发送与真实拒签。** 先核对新hash从未有`invoice/payment/fulfill/release-preimage`授权调用，创建hash-only发票并发送一次。60秒阶段内取得完整R：channel ID及结算TLC的hash/金额/方向/expiry对应第一笔，WS实际交给同一SDK；从发送前日志偏移起取得真实“无本地付款授权”错误。错误文本只用于确认故障来源，结合唯一待处理R、原始WS/HTTP和控制历史归属目标；单条日志或空`records`均不足以证明无授权。
+3. **拒签观察及自然重连。** 自首个对应拒签证据起连续观察至少10秒，最后完整样本在10～15秒内；每约1秒取一个完整样本，每样本最多5秒，期间不得补授权。记录四端状态/余额/原hash TLC及锁定量；原付款仍非Success/Failed，发票Open或Received，原通道/funding保持，无已结算余额变化。补授权前目标签名**尝试与转发均为零**，没有`settle_invoice/create_preimage`，也没有携带该preimage的其他FNN写请求。需在同一60秒阶段内看到由真实拒签触发的另一个WS连接接受订阅并实际交付完整同R；不能只看到socket建立。缺证据、提前终止/强关或不再保留原R均保存实际状态并停批，不补发付款换分支。
+4. **显式补授权和同进程处理。** 保存`t_auth_start`，只调用一次SDK `invoice`控制补入原意图并确认成功；SDK PID、命令、store/token/绑定不变，gate始终放行。60秒内同R由真实SDK产生有效签名，首次实际forward为Applied。自然重连的连接可以在补授权前已建立/交付R，不能强求补授权后再发生一次重连；提交必须属于首次拒签后新连接交付的同R，且补授权开始前没有提交。控制返回成功及单线程处理顺序证明授权保存；不以客户端收到ack的时间强制排序HTTP，因为回复接收存在传输竞争。禁止Python调用`_submit/_release_original`、手动重新订阅/断线、重启SDK或重发原付款。
+5. **安全释放并完成第一笔。** 等SDK最新完整本地恢复记录（`complete=true, for_remote=false`）实际包含目标TLC，同时保存version/reference/金额/expiry。随后只调用一次原Agent `release-preimage`；它须经过独立ChainVerifier和`authorize_preimage_release`，在安全批准持久化后由原Agent以tenant token调用`settle_invoice`。要求成功控制响应和真实settle RPC审计；普通`fulfill`或Python直调settle不能替代。缺完整记录则有界等待，不先放preimage试探；安全校验/释放失败即停，不反复释放挑结果。原付款Success、发票Paid，完成下述资金/零占用和至少5秒稳定断言。
+6. **同通道第二笔及历史复查。** 新建第二个hash-only发票，先保存它的匹配授权，再唯一发送；同PID自然处理，按相同完整记录/链验证/安全释放路径完成。核对本笔增量与从初始基准累计的资金，两笔各自终态和fee不变、原通道/funding、无待签/TLC/锁定及至少5秒稳定；第一笔恢复成功但第二笔失败不算04通过。
+
+SDK授权拒签是预设故障；其他RPC/解析/审计/版本错误不得当作“拒签成功”。本批对“未泄露preimage”的证明限定为受控输入、SDK控制与完整FNN RPC审计：不向FNN提前提供它，也不声称执行了任意进程内存或全系统信息流证明。不得复用带preimage的普通发票。
+
+### 资金、稳定和业务期限
+
+每笔实际费用`f_i=get_payment(hash_i).fee`，要求`0≤f_i≤10,000`，不写死历史样本的5,000。相对该笔前的稳定快照，四端local增量应为`(a, -a, -(a+f_i), a+f_i)`，remote增量相反；A/T–A和P/T–P的local/remote互为镜像。两笔后相对原始基准为`(2a, -2a, -(2a+f_1+f_2), 2a+f_1+f_2)`，T两条通道净收入恰为`f_1+f_2`。
+
+拒签期间local/remote余额保持初始未结算值；锁定额和目标TLC按实际协议阶段原样保存，不能预写为零或生搬旧“有效签名已保存”检查点的四端锁定形态。出现的TLC必须属于原hash、方向和金额正确，上游金额按真实TLC保存并在完成后核对`a+f_1`。每笔终态必须四端ChannelReady、原channel/outpoint、pending TLC清空、offered/received锁定为0、NoSignatureRequired；独立链查询原funding仍live。每笔成功后至少5秒、5个间隔约1秒的后续完整样本保持余额、终态与fee；最后完整样本最迟成功后10秒。末尾再查两笔历史，不能只依赖当前余额总和。
+
+所有循环受单调绝对截止约束；RPC/控制单次最多10秒、无隐藏自动重试，负向观察样本取更小的5秒总上限。业务安全余量由实际上下游TLC expiry、SDK截断/安全预留、首次接纳最小delta、发票/授权到期以及`t_send+1200s`保守付款窗口共同取最早期限；首次观察拒签时至少900秒，补授权/安全释放前至少180秒。按实际1 epoch协商参数及devnet可信epoch时长核验安全预留，不将旧构建常量推广；原数据缺失或余量不足即停，不改变宿主时间/矿工参数。测试截止与业务余量分别判断，不能拿剩余测试秒数冒充TLC有效期。
+
+### 30分钟总预算与固定执行数量
+
+从Gate3首次实现/准备开始记唯一`t0`，绝对截止`t0+1800s`，不因修正、启动执行器或进入下一阶段重置。阶段均取自身上限与总截止预留清理时间的较早者：
+
+| 阶段 | 硬上限 | 产出与停止条件 |
+| --- | --- | --- |
+| Python实现及GPT-6 Sol High复核 | 600秒 | 只实现本行；复核未通过或适配需超范围改动则停 |
+| 静态/产物/环境检查 | 300秒 | 语法、唯一选择器收集、manifest及辅助源码摘要、干净843产品、端口和空间；不重新构建Rust |
+| 新04单次正式执行 | 600秒，含类初始化、准备、两笔和进程收尾 | 仅一个方法一次；失败或超时立即停，不补跑、不追加旧套件或1+3 |
+| 证据汇总及自有临时资源清理 | 300秒 | 保存日志、JSONL/JUnit、全部退出码及版本证据；确认自有进程退出、端口释放后清理可重建目录 |
+
+600秒正式执行从pytest子进程启动计时，环境/通道/链验证配置最多180秒（含setup_class，setup_method不得重置起点）；从第一次send起的全部业务最多360秒；最后进程收尾预留60秒。内部阶段上限：拒签取得+10秒观察+自然新连接证据共60秒，显式补授权+原R首次Applied共60秒，第一笔完整记录/安全释放/终态/稳定共90秒，第二笔全流程共90秒，末尾历史和账本核对20秒；这些上限共享360秒且不累加延长它，剩余40秒只吸收观察开销。任一步不足以完整执行后续最小稳定期或安全余量即停止，不能删步骤凑通过。
+
+执行前及过程中宿主可用空间至少8 GiB，本批证据增长不得超过512 MiB；超界停业务并收尾。保留新批原始证据与现有产物、旧快照，不开启VM/退款或清理无关文件。本批无重复试验概率/性能结论；通过只代表两笔固定功能序列。
+
+### 最小适配与结果边界
+
+计划新增`test_cases/fiber/devnet/lsp/test_payment_authorization_recovery.py`，一个`TestPaymentAuthorizationRecovery.test_missing_authorization_recovers_same_process_and_next_payment`方法，一处`TEST-MAP: LSP-PAYMENT-04`。Gate3才把本行复选框改为已映射；本轮不生成文件或收集pytest。
+
+使用本文件专用的`_DelayedPaymentBase`子类复用真实拓扑、`_budget/_rpc/_control/_views`和归档；覆写原`_prepare_invoice`使准备阶段不创建普通发票/不预授权，覆写本类预算并在基类准备结束后立即`gate.release()`。正式发送前再次断言passthrough/无故障；不设会禁止自然重连的`holding=True`。新的hash-only创建、明确授权、安全释放及两笔账本在本文件线性展开；只复用取消测试中的创建输入和`preimage-configure/release-preimage`调用模式，不继承取消流程或其120秒付款超时。
+
+不调用旧`_checkpoint/_sample/_funds/_release_original/_authorize/_finish_and_stabilize`，因为它们分别依赖有效签名检查点、禁止某些实际状态、旧单笔锁定模型、Python代交或普通fulfill。为本场景写少量专用观察/终态断言，保留原始失败数据，不把`_sample`异常一概归为测试环境。共享框架/原01～03/RECOVERY08默认行为保持；若实现发现必须实质修改它们，应先列出影响与必要聚焦回归，不能暗加到已确认600秒执行份额中。
+
+保存：实际命令/版本与匹配产物证据、原始HTTP/WS帧和SDK/FNN/CKB日志、控制调用及其时间、拒签R/自然重送R/首次Applied关联、两个hash的唯一发送、各阶段四端快照、业务余量、完整记录及链验证/安全释放响应、逐笔/累计资金和稳定样本。证据可含开发网测试秘密，不在用户汇报展示token/preimage；归档无需重复复制大型链数据库。
+
+失败分别记录：准备/观测能力不足、产品拒签未发生或提前错误终止、补授权后恢复/安全释放失败、资金/终态/稳定失败、预算或资源停止。只有整条04及第二笔都完成才通过；预设拒签本身不记产品失败，已有#1674/#1706归因不挪给新症状。Gate2交接时本行未映射、未执行；后续状态以本文件顶部及下方Gate3记录为准。
+
+Gate2独立复核：GPT-6 Sol High只读核对完整04行、源码接口、自然重连时序、资金与安全释放、最小适配和30分钟预算，无阻断项。本批“可执行承诺”指SDK验证的最新完整、未撤销本地承诺及真实链funding可花费条件；不广播承诺交易，不据此宣称实际链上取回或退款通过。下一步等待用户确认04这一行、两笔规模、预算及适配边界，再进入Gate3。
+
+Gate2静态检查：设计检查识别4行、退出0，SPEC-04推断预期仍交本轮人工确认；项目映射检查125评审/117映射、退出1，新增04未映射符合Gate2，9个既有孤儿映射保持、无重复评审ID；`git diff --check`退出0。只修改本评审、原Gate1入口及README进度说明，未修改测试/驱动/产品，未构建、收集或运行测试。
+
+## LSP-PAYMENT-04 Gate3：实现已复核，预算与编排停止（2026-10-30）
+
+新增`test_payment_authorization_recovery.py`中的一个方法，复用既有真实SDK控制、HTTP/WS审计和付款拓扑；04已有TEST-MAP，复选框仅表示映射。实现包含缺授权拒签、自然重连交付原请求、显式授权后同进程恢复、真实链验证后释放preimage、下一笔付款及逐笔/累计资金断言。未修改共享辅助代码、Rust驱动或产品，未操作退款。
+
+GPT-6 Sol High指出并复核了完整请求的`payment_amount`字段、签名前实际可见TLC范围、拒签观察窗与自然重连等待的分离三项修正，最终无内容阻断项。但没有记录可证明600秒阶段内完成复核的时间；启动前阶段断言失败，执行者未正确依据退出码阻止下一工具调用，误启动了唯一pytest，发现后立即停止。该编排错误不归因产品，也不扩预算或补跑。
+
+静态/版本适配自检退出0，精确收集1条退出0；pytest仅完成节点初始化的一部分，日志为`no tests ran in 25.93s`、JUnit为0条，观察记录只有`environment_start`及`incomplete`。拒签、补授权、两笔付款和资金断言均未执行；`batch.exit=1`，run.json中的payment04中断记录为125，因停止清理中的PermissionError未写出独立payment04.exit。原始final.json曾记录一个defunct进程，后续独立复查确认自有进程均退出、六端口释放，空临时目录已清除。保留全部原始记录，详见RESULT（本地证据：`../../report/lsp-payment04-84333ee-20261030T181026/RESULT.md`）。
+
+
+## LSP-PAYMENT-04 Gate3新批：编排修正后单次准备失败（2026-10-30）
+
+新批182922入口强制校验Sol批准、600秒内完成时间、唯一时钟和源文件摘要；离线13项自检通过，独立GPT-6 Sol High复核通过。实际适配/版本检查与精确收集退出0，唯一04运行85.24秒后退出1，batch.exit=1；所有命令结束时间、退出码、清理状态完整保存，未重复181026的编排错误。
+
+失败在setUp的preimage-configure：普通测试环境从CURRENT_TEST及预置链恢复，auth等依赖位于部署交易；固定843原Agent验证器却校验创世第5/6/7输出，首项auth不符而拒绝。已建立通道和四端基准，但尚未创建付款发票或发送付款，因此缺授权拒签、恢复及资金断言均未运行。GPT-6 Sol High只读复核确认该测试环境适配归因，不能计产品业务失败、不能据此认定本地auth文件损坏，也不归入旧#1674/#1706。
+
+本批失败即停，未改产品、驱动或04测试，未重跑或操作退款；自有进程、端口及临时目录已清理，所有新旧证据保留。后续适配须匹配真实合约部署位置而保留独立链/字节校验，不得绕过安全释放检查。完整实际命令、原始配置与控制错误见新批RESULT（本地证据：`../../report/lsp-payment04-84333ee-20261030T182922/RESULT.md`）。TEST-MAP存在，仅表示已映射。
+
+
+## LSP-PAYMENT-04 Gate3实际部署适配新批：合约字节不匹配（2026-10-30）
+
+按用户授权，新增本地驱动preimage-configure-deployed/release-preimage-deployed，04改用实际部署链配置；旧控制保持不变。Chain::new从可信配置通过Type ID查找真实合约并核对本地字节、确认和主链归属，保留独立ChainVerifier；新释放控制通过原Agent公开ChannelSigner真实执行authorize_preimage_release，持久批准后才使用原tenant token提交settle_invoice，顺序与原Agent私有方法一致。产品及旧链适配器未修改，Python不直接settle，业务与资金断言不变。
+
+GPT-6 Sol High复核通过，13项离线编排自检通过，driver-only构建、静态检查和收集退出0；新批184212仅执行04一次，85.78秒后exit1，batch.exit1。FundingLock实际部署定位和字节/确认检查通过；CommitmentLock链上107784B、SHA256 ebf8614c…，本地80880B、SHA256 a7762721…，在字节检查即停止，后续auth/sighash未验证。尚未创建目标发票或发送付款，无拒签恢复或资金结果。
+
+只读定位到既有Watchtower prepare_isolated_contract步骤：它在独立CKB启动后、FNN启动前将同一Type ID升级至受信字节并核对确认/主链/活输出。04复用了定位器但漏接该准备步骤；归为测试适配遗漏，不归因产品。下一批可以复用既有准备，本批不再修或跑。自有构建及运行目录已清理，匹配bundle和全部新旧证据保留；RESULT与原始字节比较（本地证据：`../../report/lsp-payment04-84333ee-20261030T184212/RESULT.md`）。TEST-MAP仍仅表示已映射。
+
+
+## LSP-PAYMENT-04 Gate3合约对齐新批：实际pytest类未收到隔离路径（2026-10-30）
+
+本批在源码中补入既有Watchtower合约对齐调用，计划在CKB初始化后、FNN初始化前调用，但本次未执行到；该操作保留Type ID、受信字节、主链和活输出校验。准备阶段共用pytest启动起点180秒，没有重置600秒单条或1800秒整批截止。GPT-6 Sol High代码复核通过，13项编排模拟、6项准备生命周期模拟和精确收集退出0；这些模拟未覆盖真实pytest模块加载，不能视为环境资格通过。
+
+唯一真实pytest **1 error in7.60s**，payment04.exit=1、batch.exit=1，失败即停、未重跑。BOOTSTRAP设置的是完整包名导入的TestPaymentAuthorizationRecovery，pytest默认prepend实际加载basename模块中的另一类；实际cls.tmp_path_name为None。新setup_class先调用super后才检查隔离路径，因此已在默认tmp/contract/node启动CKB。断言在合约对齐之前失败，未启动FNN、未建目标发票、未付款或执行资金断言。执行者和Sol复核均漏掉这一实际加载差异，不归因产品。
+
+**历史隔离表述勘误：**181026、182922、184212的runner使用同一BOOTSTRAP；182922和184212已完成类级初始化，实际也使用默认tmp，而非各批命名的运行目录。181026被中断，具体到达阶段仍以其原日志为准。CKB_CLI_HOME和报告目录分别独立不等于整条运行链隔离。此前“独立运行目录/隔离链”的表述不成立；仅删除命名空目录也不足以证明默认tmp未被使用。原报告与证据不覆盖，产品业务未执行的结论不变。
+
+本批在class异常处理内保存CKB配置/日志，框架teardown已停止并清理本次实际node目录；后续只删除本批命名的空CKB CLI目录，保留默认tmp其他内容、历史证据与旧bundle。最终两组自有进程为空、六端口释放；产品仍固定843且clean，不改产品、不动退款。本批未构建，未产生新的Cargo target。完整结果、命令、JUnit、源码快照、复核与清理见RESULT（本地证据：`../../report/lsp-payment04-84333ee-20261030T192130/RESULT.md`）。04仍已映射、业务未验证；76ID口径保持48通过/2产品失败/26无该版本业务结果。
+
+后续修正应在实际pytest类入口、任何节点启动之前读取并验证隔离路径，记录实际模块名与节点目录；必须用真实pytest收集对象验证设置确实生效。这里只记录下一次所需修正，本批没有修后重跑。
+
+最终静态检查：设计4行exit0（SPEC-03/04为已确认的人工契约提示）；项目映射125评审/118映射，exit1为9个既有孤儿，无新增孤儿或重复ID；diff检查exit0。原始输出保存在本批document-checks.json。这些检查不替代04业务执行。

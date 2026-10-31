@@ -8,7 +8,7 @@ use fiber_lsp_sdk::{
     ChannelSigningContent, CloseAuthorization, CommitmentParameters, Musig2SignableContent,
     OpeningNetwork, PaymentAuthorization,
 };
-use fiber_lsp_sdk_agent::{Agent, AgentConfig, EventStream, FileSignerStore, HttpFiberRpc};
+use fiber_lsp_sdk_agent::{Agent, AgentConfig, EventStream, FiberRpc, FileSignerStore, HttpFiberRpc};
 use fiber_types::{ChannelActorData, Hash256};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -38,6 +38,9 @@ struct Args {
     ack_held_events: bool,
     #[arg(long)]
     watchtower_check_only: bool,
+    /// Gate3/05: observe watchtower events without invoking any signing handler.
+    #[arg(long)]
+    watchtower_diagnostic_only: bool,
 }
 
 #[derive(Deserialize)]
@@ -279,7 +282,7 @@ async fn control(
             .await?;
         return Ok(serde_json::to_value(opened)?);
     }
-    if operation == "watchtower-configure" {
+    if operation == "watchtower-configure" || operation == "preimage-configure-deployed" {
         *chain = Some(
             watchtower_chain::Chain::new(serde_json::from_value(value["config"].clone())?).await?,
         );
@@ -288,6 +291,12 @@ async fn control(
             "funding_deps":configured.funding_deps.iter().cloned().map(ckb_jsonrpc_types::CellDep::from).collect::<Vec<_>>(),
             "settlement_deps":configured.deps.iter().cloned().map(ckb_jsonrpc_types::CellDep::from).collect::<Vec<_>>()
         }));
+    }
+    if operation == "preimage-configure" {
+        let url = value["ckb_rpc_url"].as_str().context("independent CKB URL")?;
+        let contracts = value["contracts_dir"].as_str().context("trusted contract directory")?;
+        agent.configure_chain(url, std::path::Path::new(contracts)).await?;
+        return Ok(json!({"configured": true}));
     }
     let channel: Hash256 = value["channel_id"]
         .as_str()
@@ -302,6 +311,46 @@ async fn control(
             })
             .await?;
         return Ok(json!({"saved":true}));
+    }
+    if operation == "watchtower-diagnose" {
+        return watchtower_chain::diagnose(agent, rpc, store,
+            chain.as_ref().context("adapter not configured")?, channel, value["sponsor"].clone()).await;
+    }
+    if operation == "release-preimage" {
+        let payment_hash: Hash256 = value["payment_hash"].as_str()
+            .context("payment hash")?.parse()?;
+        let preimage: Hash256 = value["preimage"].as_str()
+            .context("preimage")?.parse()?;
+        agent.authorize(fiber_lsp_sdk_agent::FixtureAuthorization::ReleasePreimage {
+            channel_id: channel,
+            payment_hash,
+            preimage,
+            target: fiber_lsp_sdk_agent::PreimageTarget::Invoice,
+        }).await?;
+        return Ok(json!({"released": true}));
+    }
+    if operation == "release-preimage-deployed" {
+        // Same SDK authorization/persistence then tenant RPC order as Agent's
+        // private release_preimage_verified, with independently resolved deps.
+        let chain = chain.as_ref().context("deployed chain not configured")?;
+        let payment_hash: Hash256 = value["payment_hash"].as_str()
+            .context("payment hash")?.parse()?;
+        let preimage: Hash256 = value["preimage"].as_str()
+            .context("preimage")?.parse()?;
+        let signer = agent.open_channel(agent.binding(channel)
+            .context("unbound channel")?).await?;
+        let token = agent.tenant_token()?;
+        let now_ms: u64 = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?.as_millis().try_into()?;
+        let reference = signer.authorize_preimage_release(
+            payment_hash, preimage, now_ms, chain).await?;
+        chain.evidence(json!({"stage":"preimage_authorized", "payment_hash":payment_hash,
+            "reference":format!("{reference:?}")}))?;
+        rpc.settle_invoice(&token, fiber_json_types::SettleInvoiceParams {
+            payment_hash: payment_hash.into(), payment_preimage: preimage.into(),
+        }).await?;
+        chain.evidence(json!({"stage":"invoice_settled", "payment_hash":payment_hash}))?;
+        return Ok(json!({"released": true}));
     }
     if operation == "watchtower-process" || operation == "watchtower-check" {
         return watchtower_chain::process(
@@ -392,6 +441,11 @@ async fn control(
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("watchtower-diagnostic-selfcheck") {
+        let value: Value = serde_json::from_reader(std::io::stdin())?;
+        println!("{}", watchtower_chain::diagnostic_selfcheck(value)?);
+        return Ok(());
+    }
     if std::env::args().nth(1).as_deref() == Some("subscription-token") {
         return subscription_token();
     }
@@ -459,7 +513,13 @@ async fn main() -> Result<()> {
                 let response = match serde_json::from_str::<Value>(&line) {
                     Ok(value) => {
                         let watchtower = value["operation"].as_str().is_some_and(|op| op.starts_with("watchtower-"));
-                        let action = control(&mut agent, &rpc, &store, &mut chain, value);
+                        let operation = value["operation"].as_str().unwrap_or("");
+                        let forbidden = (operation == "watchtower-diagnose" && !args.watchtower_diagnostic_only)
+                            || (args.watchtower_diagnostic_only && matches!(operation, "watchtower-process" | "watchtower-check"));
+                        let action = async {
+                            ensure!(!forbidden, "diagnostic-only control boundary violated");
+                            control(&mut agent, &rpc, &store, &mut chain, value).await
+                        };
                         let result = if watchtower {
                             tokio::time::timeout(std::time::Duration::from_secs(9), action).await
                                 .unwrap_or_else(|_| Err(anyhow!("watchtower control deadline exceeded")))
@@ -483,7 +543,11 @@ async fn main() -> Result<()> {
                         .and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(Value::Null);
                     (chain.is_some() && policies.get(format!("{id:#x}")).is_some()).then_some(id)
                 } else { None };
-                let result = if let Some(id) = approved_channel {
+                let diagnostic_event = args.watchtower_diagnostic_only && event_evidence["type"] == "watchtower_signing";
+                let result = if diagnostic_event {
+                    eprintln!("watchtower-diagnostic-observed: {}", event_evidence);
+                    Ok(())
+                } else if let Some(id) = approved_channel {
                     tokio::time::timeout(std::time::Duration::from_secs(9), watchtower_chain::process(&agent, &rpc, &store, chain.as_ref().unwrap(), id, args.watchtower_check_only)).await.unwrap_or_else(|_| Err(anyhow!("watchtower event deadline exceeded"))).map(|_| ())
                 } else { agent.handle_event(event).await };
                 // A deliberately held, already saved signature is a test
@@ -492,7 +556,7 @@ async fn main() -> Result<()> {
                 let held_by_test = args.ack_held_events && result.as_ref().err()
                     .is_some_and(|error| format!("{error:#}") == "test driver pauses this submission");
                 if event_evidence["type"]=="watchtower_signing" {
-                    eprintln!("watchtower-event: {}",json!({"event":event_evidence,"error":result.as_ref().err().map(|e|format!("{e:#}")),"adapted":approved_channel.is_some()}));
+                    eprintln!("watchtower-event: {}",json!({"event":event_evidence,"error":result.as_ref().err().map(|e|format!("{e:#}")),"adapted":approved_channel.is_some() && !diagnostic_event,"diagnostic_only":diagnostic_event}));
                 }
                 let _ = delivery.processed.send(result.is_ok() || held_by_test);
                 if held_by_test {

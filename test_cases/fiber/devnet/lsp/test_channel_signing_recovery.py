@@ -1,11 +1,19 @@
 """PR #1623: checked SDK lifecycle and real SDK/FNN process recovery."""
 
+import hashlib
 import json
 import os
+from pathlib import Path
+import shutil
+import signal
 import subprocess
 import time
 
 from test_cases.fiber.devnet.lsp._lsp_test import ChannelSigningTestBase, stop_agent
+
+
+class _SequenceBudgetExpired(BaseException):
+    pass
 
 
 class TestChannelSigningRecovery(ChannelSigningTestBase):
@@ -126,13 +134,14 @@ class TestChannelSigningRecovery(ChannelSigningTestBase):
         assert forwarded and forwarded[0][0] == submission, forwarded
         assert forwarded[0][1].get("result") == {"type": "Applied"}, forwarded
 
-    def _start_payment(self, pause=True):
+    def _start_payment(self, pause=True, public_channel=None):
         payer = self.fiber2.client
         payer.timeout = 10
         payer.try_count = 1
-        public_channel = self.open_channel(
-            self.fiber2, self.fiber1, 1000 * 100000000, 0
-        )
+        if public_channel is None:
+            public_channel = self.open_channel(
+                self.fiber2, self.fiber1, 1000 * 100000000, 0
+            )
         for _ in range(60):
             if (
                 any(
@@ -243,7 +252,7 @@ class TestChannelSigningRecovery(ChannelSigningTestBase):
             cutoff - time.time() * 1000 >= seconds * 1000
         ), "insufficient recovery window"
 
-    def _finish_payment(self):
+    def _finish_payment(self, delivery_check=None):
         self.gate.release()
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
@@ -261,6 +270,10 @@ class TestChannelSigningRecovery(ChannelSigningTestBase):
                 and received["status"] == "Paid"
                 and all(not c["pending_tlcs"] for c in after)
                 and self._status()["type"] == "NoSignatureRequired"
+                and (
+                    delivery_check is None
+                    or delivery_check("completion")["status"] == "succeeded"
+                )
             ):
                 break
             time.sleep(1)
@@ -288,11 +301,12 @@ class TestChannelSigningRecovery(ChannelSigningTestBase):
         for left, right in ((0, 1), (2, 3)):
             assert after[left]["local_balance"] == after[right]["remote_balance"]
             assert after[left]["remote_balance"] == after[right]["local_balance"]
+        stability = []
         for _ in range(5):
             time.sleep(1)
-            assert [
-                self._snapshot(c, ch) for c, ch in self.payment["endpoints"]
-            ] == after
+            stable = [self._snapshot(c, ch) for c, ch in self.payment["endpoints"]]
+            assert stable == after
+            stability.append({"at": time.monotonic(), "balances": stable})
             assert self._status()["type"] == "NoSignatureRequired"
             assert (
                 self.fiber2.client.get_payment({"payment_hash": self.payment["hash"]})[
@@ -306,9 +320,12 @@ class TestChannelSigningRecovery(ChannelSigningTestBase):
                 ]
                 == "Paid"
             )
+            if delivery_check is not None:
+                assert delivery_check("stable")["status"] == "succeeded"
         print(
             f"Payment settled once: {self.payment['hash']}, fee={fee}, deltas={deltas}"
         )
+        return paid, received, after, stability
 
     def _start_close(self, pause=False):
         self.close_before = self._channel(self.client)
@@ -546,11 +563,11 @@ class TestChannelSigningRecovery(ChannelSigningTestBase):
     # TEST-MAP: LSP-RECOVERY-05
     def test_hosted_fnn_restart_preserves_payment_receipt_and_next_request(self):
         """
-        1. 发起唯一支付并应用关联承诺 S1，冻结下一请求 R2。
-        2. 正常重启 FNN，同一 SDK 重新订阅恢复 R2，重交 S1仍幂等。
-        3. 恢复原连接和支付，核对终态、TLC 清理及四端余额只结算一次。
+        1. 发起唯一支付并应用关联承诺 S1，冻结 R2，记录未完成 delivery 的原执行键。
+        2. 正常重启整个 FNN，以原数据恢复同一 delivery 和 R2，重交 S1仍幂等。
+        3. 恢复原支付，核对 delivery 成功、TLC 清理及四端余额只结算一次并稳定。
         """
-        # 1. 发起唯一支付并应用关联承诺 S1，冻结下一请求 R2。
+        # 1. 发起唯一支付并应用关联承诺 S1，冻结 R2，记录未完成 delivery 的原执行键。
         self._finish_opening()
         self._start_payment()
         first, submission = self._pending()
@@ -567,15 +584,73 @@ class TestChannelSigningRecovery(ChannelSigningTestBase):
         self._check_payment_window(900)
         self._submit(submission)
         following, _ = self._pending(first["request_id"])
-        # 2. 正常重启 FNN，同一 SDK 重新订阅恢复 R2，重交 S1仍幂等。
+        original = None
+
+        def observe_delivery(stage):
+            record = self.fiber1.client.call(
+                "lsp_get_payment_delivery", [{"payment_hash": self.payment["hash"]}]
+            )
+            observation = {"stage": stage, "at": time.monotonic(), "delivery": record}
+            print("Persisted delivery: " + json.dumps(observation))
+            root = os.environ.get("LSP_RUN_ARTIFACTS")
+            if root:
+                path = Path(root) / (self._testMethodName + ".delivery.jsonl")
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open("a") as stream:
+                    stream.write(json.dumps(observation) + "\n")
+            assert record["payment_hash"] == self.payment["hash"], record
+            assert record["private_channel_id"] == self.channel_id, record
+            identity = json.loads(self.tenant["status_file"].read_text())
+            assert record["tenant_id"] == identity["tenant_id"], record
+            assert (
+                record["incoming_channel_id"] == self.payment["endpoints"][2][1]
+            ), record
+            assert record["status"] in (
+                "deferred",
+                "dispatching",
+                "in_flight",
+                "settling_upstream",
+                "succeeded",
+            ), record
+            assert record["failure_reason"] is None, record
+            if original is not None:
+                for field in (
+                    "payment_hash",
+                    "incoming_channel_id",
+                    "incoming_tlc_id",
+                    "tenant_id",
+                    "private_channel_id",
+                    "created_at",
+                    "buffer_deadline",
+                ):
+                    assert record[field] == original[field], (field, original, record)
+                assert int(record["attempt_count"], 16) >= int(
+                    original["attempt_count"], 16
+                )
+            return record
+
+        original = observe_delivery("before_restart")
+        assert original["status"] in ("in_flight", "settling_upstream"), original
+        assert int(original["attempt_count"], 16) >= 1, original
+        upstream = self._channel(self.fiber1.client, original["incoming_channel_id"])
+        incoming = [
+            t
+            for t in upstream["pending_tlcs"]
+            if t["payment_hash"] == self.payment["hash"]
+        ]
+        assert len(incoming) == 1, incoming
+        assert incoming[0]["id"] == original["incoming_tlc_id"], (incoming, original)
+
+        # 2. 正常重启整个 FNN，以原数据恢复同一 delivery 和 R2，重交 S1仍幂等。
         self._restart_fnn(following)
+        observe_delivery("after_restart")
         self._submit(submission, "AlreadyApplied")
         assert self._status() == following
 
-        # 3. 恢复原连接和支付，核对终态、TLC 清理及四端余额只结算一次。
+        # 3. 恢复原支付，核对 delivery 成功、TLC 清理及四端余额只结算一次并稳定。
         self.fiber2.connect_peer(self.fiber1)
         self._check_payment_window(180)
-        self._finish_payment()
+        self._finish_payment(delivery_check=observe_delivery)
 
     # TEST-MAP: LSP-RECOVERY-06
     def test_sdk_restart_preserves_payment_revocation_and_authorizations(self):
@@ -656,3 +731,239 @@ class TestChannelSigningRecovery(ChannelSigningTestBase):
         # 3. 首次应用后确认关闭交易，核对原注资只花费一次及输出地址金额。
         self._finish_close(content["transaction"])
         self._check_first_forward(submission)
+
+    # TEST-MAP: LSP-RECOVERY-08
+    def test_sequential_payments_survive_sdk_restart(self):
+        """
+        1. 同两条通道完成前八笔唯一付款，逐笔核对资金和稳定窗口。
+        2. 保存第九笔撤销签名，退出SDK后保留原存储并恢复同一请求。
+        3. 完成第九、第十笔，核对历史终态、累计费用及原通道身份。
+        """
+        evidence = Path(os.environ.get("LSP_RUN_ARTIFACTS", self.fiber1.tmp_path))
+        evidence.mkdir(parents=True, exist_ok=True)
+        ledger = evidence / "sequence.jsonl"
+        command = list(self.tenant["command"])
+        store = Path(command[command.index("--store") + 1]) / "snapshot.bin"
+        original_pid = self.tenant["agent"].pid
+        started = time.monotonic()
+        deadline = min(
+            started + 690, float(os.environ.get("LSP_RECOVERY08_DEADLINE", "inf"))
+        )
+
+        def record(kind, **values):
+            with ledger.open("a") as stream:
+                stream.write(
+                    json.dumps({"kind": kind, "at": time.monotonic(), **values}) + "\n"
+                )
+                stream.flush()
+                os.fsync(stream.fileno())
+
+        def metric(completed):
+            records = self.signer_control(self.tenant, "records")
+            record(
+                "metric",
+                completed=completed,
+                whole_store_bytes=store.stat().st_size,
+                record_count=len(records),
+                records=[
+                    {k: r[k] for k in ("version", "for_remote", "complete")}
+                    for r in records
+                ],
+            )
+
+        def expired(_signum, _frame):
+            raise _SequenceBudgetExpired("RECOVERY-08 global deadline expired")
+
+        previous_handler = signal.getsignal(signal.SIGALRM)
+        previous_timer = signal.getitimer(signal.ITIMER_REAL)
+        assert previous_timer == (0.0, 0.0), "unexpected existing alarm"
+        signal.signal(signal.SIGALRM, expired)
+        signal.setitimer(signal.ITIMER_REAL, max(0.001, deadline - time.monotonic()))
+        completed, seen_preimages, seen_hashes = [], set(), set()
+        try:
+            # 1. 仅准备一次P–T；后续十笔复用两条通道及原SDK存储。
+            self._finish_opening()
+            public_channel = self.open_channel(
+                self.fiber2, self.fiber1, 1000 * 100000000, 0
+            )
+            endpoints = [
+                (self.client, self.channel_id),
+                (self.fiber1.client, self.channel_id),
+                (self.fiber2.client, public_channel),
+                (self.fiber1.client, public_channel),
+            ]
+            baseline = [self._snapshot(c, ch) for c, ch in endpoints]
+            assert all(
+                c["state"]["state_name"] == "ChannelReady" and not c["pending_tlcs"]
+                for c in baseline
+            )
+            record(
+                "baseline",
+                balances=baseline,
+                sdk_pid=original_pid,
+                store_path=str(store),
+            )
+            metric(0)
+            for number in range(1, 11):
+                payment_started = time.monotonic()
+                assert self.tenant["agent"].pid == (
+                    original_pid if number <= 9 else recovered_pid
+                )
+                assert list(self.tenant["command"]) == command
+                self._start_payment(pause=(number == 9), public_channel=public_channel)
+                assert self.payment["endpoints"] == endpoints
+                payment_hash, preimage = self.payment["hash"], self.payment["preimage"]
+                assert (
+                    payment_hash not in seen_hashes and preimage not in seen_preimages
+                )
+                seen_hashes.add(payment_hash)
+                seen_preimages.add(preimage)
+                record(
+                    "sent_once",
+                    number=number,
+                    payment_hash=payment_hash,
+                    started=payment_started,
+                    before=self.payment["before"],
+                )
+                if number == 9:
+                    # 2. 仅推进至本笔撤销检查点；S9必须仍由恢复后的真实SDK首次提交。
+                    pending, submission = self._pending()
+                    assert any(
+                        t["payment_hash"] == payment_hash
+                        for t in pending["settlement"]["tlcs"]
+                    )
+                    self._authorize_fulfillment()
+                    assert self.payment["fulfilled"]
+                    checkpoint_deadline = min(time.monotonic() + 60, deadline)
+                    while time.monotonic() < checkpoint_deadline:
+                        if pending["transition"] == "SendRevokeAndAck":
+                            break
+                        assert pending["transition"] in (
+                            "SendCommitmentSigned",
+                            "CompleteReceivedCommitment",
+                            "CompleteReceivedRevokeAndAck",
+                        ), pending
+                        self._submit(submission)
+                        pending, submission = self._pending(pending["request_id"])
+                    else:
+                        assert (
+                            False
+                        ), "ninth payment revocation checkpoint did not appear"
+                    assert time.monotonic() < checkpoint_deadline
+                    version = int(pending["content"]["slot"]["commitment_number"], 16)
+                    records = self.signer_control(self.tenant, "records")
+                    assert any(
+                        not r["for_remote"]
+                        and r["version"] == version
+                        and r["complete"]
+                        and any(t["payment_hash"] == payment_hash for t in r["tlcs"])
+                        for r in records
+                    ), "checkpoint must belong to ninth payment"
+                    with self.gate.lock:
+                        assert not any(
+                            s["request_id"] == submission["request_id"]
+                            for s, _ in self.gate.forwarded
+                        )
+                        assert any(
+                            t >= payment_started and s == submission
+                            for t, s in self.gate.attempts
+                        )
+                    self._check_payment_window(900)
+                    record(
+                        "checkpoint",
+                        pending=pending,
+                        submission=submission,
+                        records=records,
+                    )
+                    self._kill_sdk()
+                    saved_store = evidence / "ninth-stopped-snapshot.bin"
+                    shutil.copy2(store, saved_store)
+                    digest = hashlib.sha256(saved_store.read_bytes()).hexdigest()
+                    assert hashlib.sha256(store.read_bytes()).hexdigest() == digest
+                    record(
+                        "sdk_stopped",
+                        pid=self.old_sdk_pid,
+                        snapshot_sha256=digest,
+                        identity_sha256=hashlib.sha256(
+                            json.dumps(self.saved_identity, sort_keys=True).encode()
+                        ).hexdigest(),
+                    )
+                    self._restore_sdk(pending, submission)
+                    recovered_pid = self.tenant["agent"].pid
+                    record(
+                        "sdk_restored",
+                        old_pid=original_pid,
+                        new_pid=recovered_pid,
+                        recovery_seconds=time.monotonic() - payment_started,
+                    )
+                    self._check_payment_window(180)
+                paid, received, after, stability = self._finish_payment()
+                if number == 9:
+                    self._check_first_forward(submission)
+                fee = int(paid["fee"], 16)
+                completed.append({"hash": payment_hash, "fee": fee})
+                # 3. 逐笔断言复用_finish_payment；累计账本独立从零点计算。
+                fees = sum(p["fee"] for p in completed)
+                amount = number * 1_000_000
+                deltas = (amount, -amount, -amount - fees, amount + fees)
+                for old, current, delta in zip(baseline, after, deltas):
+                    assert current["channel_id"] == old["channel_id"]
+                    assert current["channel_outpoint"] == old["channel_outpoint"]
+                    assert (
+                        int(current["local_balance"], 16)
+                        - int(old["local_balance"], 16)
+                        == delta
+                    )
+                    assert (
+                        int(current["remote_balance"], 16)
+                        - int(old["remote_balance"], 16)
+                        == -delta
+                    )
+                assert (
+                    sum(
+                        int(after[i]["local_balance"], 16)
+                        - int(baseline[i]["local_balance"], 16)
+                        for i in (1, 3)
+                    )
+                    == fees
+                )
+                record(
+                    "settled",
+                    number=number,
+                    payment_hash=payment_hash,
+                    paid=paid,
+                    invoice=received,
+                    fee=fee,
+                    cumulative_fees=fees,
+                    balances=after,
+                    stability=stability,
+                    duration_seconds=time.monotonic() - payment_started,
+                )
+                if number in (1, 4, 8, 9, 10):
+                    metric(number)
+                if number in (9, 10):
+                    history = []
+                    for old in completed:
+                        payment = self.fiber2.client.get_payment(
+                            {"payment_hash": old["hash"]}
+                        )
+                        invoice = self.client.get_invoice({"payment_hash": old["hash"]})
+                        assert (
+                            payment["status"] == "Success"
+                            and invoice["status"] == "Paid"
+                        )
+                        assert int(payment["fee"], 16) == old["fee"]
+                        history.append(
+                            {"hash": old["hash"], "paid": payment, "invoice": invoice}
+                        )
+                    record("history_verified", completed=number, history=history)
+            assert len(completed) == len(seen_hashes) == len(seen_preimages) == 10
+            record("passed", completed=10, elapsed_seconds=time.monotonic() - started)
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous_handler)
+            record(
+                "finished",
+                completed=len(completed),
+                elapsed_seconds=time.monotonic() - started,
+            )

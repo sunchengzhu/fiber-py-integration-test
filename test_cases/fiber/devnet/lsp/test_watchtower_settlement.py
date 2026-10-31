@@ -1,4 +1,4 @@
-"""04c2064: Hosted no-TLC settlement; case 02 is split-path evidence only."""
+"""Hosted no-TLC settlement; 02 is split-path, 05 is SDK prepare-only evidence."""
 
 import copy
 from contextlib import contextmanager
@@ -84,6 +84,9 @@ class _WatchtowerBase(ChannelSigningTestBase):
             ).relative_to(root)
         )
         timer = object.__new__(cls)
+        timer.total_due = (
+            float(os.environ.get("LSP_WATCHTOWER_ROUND_UNTIL", "inf")) - 60
+        )
         try:
             with timer.budget(300):
                 super().setup_class()
@@ -182,18 +185,22 @@ class _WatchtowerBase(ChannelSigningTestBase):
             "test_missing_approval_then_adapted_settlement": 1440,
             "test_cross_tenant_read": 1320,
             "test_cross_tenant_submit": 2100,
+            "test_independent_destination_rejects_operator_payout": 1020,
         }
-        self.cleanup_due = self.started + caps.get(method.__name__, 1260)
+        self.cleanup_due = min(
+            self.started + caps.get(method.__name__, 1260),
+            float(os.environ.get("LSP_WATCHTOWER_ROUND_UNTIL", "inf")),
+        )
         self.total_due = self.cleanup_due - 60
-        self.prep_due = self.started + 300
+        self.prep_due = min(self.started + 300, self.total_due)
         self.evidence = []
         self.requests_seen = {}
         with self.budget(self.prep_due - time.monotonic()):
             super().setup_method(method)
 
     def teardown_method(self, method):
-        # Evidence and cleanup have their own cap even after a business timeout.
-        self.total_due = max(self.cleanup_due, time.monotonic() + 1)
+        # Reserve cleanup inside the original deadline; never renew it on failure.
+        self.total_due = self.cleanup_due
         with self.budget(60):
             super().teardown_method(method)
 
@@ -264,7 +271,8 @@ class _WatchtowerBase(ChannelSigningTestBase):
                     "tx_hash": "0x" + p[:32].hex(),
                     "index": hex(int.from_bytes(p[32:], "little")),
                 }
-            self.a, self.b = self.tenants
+            self.a = self.tenants[0]
+            self.b = self.tenants[1] if len(self.tenants) > 1 else None
             # The destination is independently derived from T's local wallet key.
             wallet = self.Ckb_cli.util_key_info_by_private_key(
                 self.account1_private_key
@@ -793,7 +801,7 @@ class _WatchtowerBase(ChannelSigningTestBase):
 
 
 class TestWatchtowerSettlement(_WatchtowerBase):
-    # TEST-MAP: LSP-WATCHTOWER-01
+    # Historical D=S oracle only; new independent-payout 01 awaits a product fix.
     def test_authorized_settlement(self):
         """
         1. 预先批准真实地址与费用。
@@ -988,3 +996,232 @@ class TestWatchtowerAdapter(_WatchtowerBase):
         assert "fee exceeds local cap" in refused["error"]
         self.approve(self.a)
         assert not self.a["gate"].watchtower_submissions
+
+
+class TestWatchtowerDestinationRejection(_WatchtowerBase):
+    """84333ee: one real candidate, original SDK validation, no signing path."""
+
+    tenant_labels = ("A",)
+    agent_extra_args = ("--ack-held-events", "--watchtower-diagnostic-only")
+
+    def assert_operator_payout_candidate(self, status):
+        """Independently bind the wrong payout to A's still-unsettled share."""
+        assert status["type"] == "SignatureRequired"
+        assert status["content"]["key_purpose"] == {"type": "Settlement"}
+        tx = status["content"]["transaction"]
+        assert self.inspect(tx)["request_id"] == status["request_id"]
+        rows = self.ledger(self.a)
+        assert not any(row["a"] for row in rows), rows
+        point = {
+            "tx_hash": rows[-1]["tx_hash"] if rows else self.a["commitment"]["hash"],
+            "index": "0x0",
+        }
+        assert tx["inputs"][0]["previous_output"] == point
+        parent = self.transaction(point["tx_hash"])["outputs"][0]
+        body = bytearray(raw(self.a["source"]["witness"]))
+        for row in rows:
+            offset = 1 + 36 * row["side"]
+            body[offset : offset + 36] = bytes(36)
+        witness = raw(tx["witnesses"][0])
+        assert witness[:17] == bytes([16, 0, 0, 0] * 4 + [1])
+        assert witness[17:90] == bytes(body)
+        side = witness[90] - 254
+        assert side == int(self.a["source"]["reference"]["for_remote"])
+        assert witness[91] == 0
+        assert digest(body)[:20] == raw(parent["lock"]["args"])[36:56]
+        offset = 1 + 36 * side
+        assert body[offset : offset + 20] != bytes(20)
+        final = body[1 + 36 * (1 - side) : 1 + 36 * (1 - side) + 20] == bytes(20)
+        capacity = number(parent["capacity"])
+        entitled = (
+            capacity
+            if final
+            else int.from_bytes(body[offset + 20 : offset + 36], "little")
+        )
+        assert entitled > 0
+        body[offset : offset + 36] = bytes(36)
+        expected_remainder = copy.deepcopy(parent["lock"])
+        args = raw(expected_remainder["args"])
+        expected_remainder["args"] = (
+            "0x" + (args[:36] + digest(body)[:20] + b"\x01" + args[57:]).hex()
+        )
+        remainder, sponsor_output, remainder_count = 0, 0, 0
+        for index, output in enumerate(tx["outputs"]):
+            assert output["type"] is None and tx["outputs_data"][index] == "0x"
+            assert (
+                output["lock"] != self.a["shutdown_script"]
+            ), "candidate already pays A"
+            if output["lock"] == self.destination:
+                sponsor_output += number(output["capacity"])
+            else:
+                assert not final and index == 0 and output["lock"] == expected_remainder
+                remainder_count += 1
+                remainder += number(output["capacity"])
+        assert remainder_count == (0 if final else 1)
+        assert remainder == capacity - entitled
+        assert sponsor_output > 0
+        sponsor_input, seen = 0, {json.dumps(point, sort_keys=True)}
+        for value in tx["inputs"][1:]:
+            outpoint = value["previous_output"]
+            key = json.dumps(outpoint, sort_keys=True)
+            assert key not in seen
+            seen.add(key)
+            live = self.rpc("get_live_cell", [outpoint, True])
+            assert live["status"] == "live", "candidate sponsor no longer live"
+            cell = live["cell"]
+            assert cell["output"]["lock"] == self.destination
+            assert cell["output"]["type"] is None and cell["data"]["content"] == "0x"
+            sponsor_input += number(cell["output"]["capacity"])
+        assert tx["cell_deps"] == self.a["deps"]["settlement_deps"]
+        fee = capacity + sponsor_input - remainder - sponsor_output
+        assert 0 <= fee <= 10000
+        self.record(
+            "operator-payout-candidate",
+            request=status,
+            input=point,
+            A_entitled=entitled,
+            A_output=0,
+            sponsor_input=sponsor_input,
+            sponsor_output=sponsor_output,
+            remainder=remainder,
+            fee=fee,
+        )
+        return fee
+
+    # TEST-MAP: LSP-WATCHTOWER-05
+    def test_independent_destination_rejects_operator_payout(self):
+        """
+        1. 固定A独立退出地址和T赞助地址，持久化原SDK批准。
+        2. T真实强关成熟，核对错付候选并取得原SDK只验证拒绝。
+        3. 连续65秒核对零签名提交及A份额未解锁，保留拒绝层级。
+        """
+        # 1. 固定A独立退出地址和T赞助地址，持久化原SDK批准。
+        assert REVISION == "84333eea8488a8afc7e4474aa4bbd0e7e973cee9"
+        destination = self.a["shutdown_script"]
+        wallet = self.Ckb_cli.util_key_info_by_private_key(self.a["private_key"])
+        assert destination["args"] == wallet["lock_arg"]
+        assert destination != self.destination
+        policy_path = self.a["status_file"].parent / "store/watchtower-approvals.json"
+        self.control(
+            self.a,
+            "watchtower-authorize",
+            {"destination": destination, "max_fee": 10000},
+        )
+        policy = json.loads(policy_path.read_text())[self.a["channel_id"]]
+        assert policy == {"destination": destination, "max_fee": 10000}
+        self.record(
+            "independent-payout-intent",
+            destination=destination,
+            sponsor=self.destination,
+            policy=policy,
+        )
+
+        # 2. T真实强关成熟，核对错付候选并取得原SDK只验证拒绝。
+        self.close_and_mature(self.a)
+        self.current(self.a)
+        with self.budget(
+            self.phase_deadlines[(self.a["label"], "work")] - time.monotonic()
+        ):
+            seen = set()
+            while True:
+                assert len(seen) < 3, "three-work diagnostic limit"
+                result = self.control(
+                    self.a, "watchtower-diagnose", {"sponsor": self.destination}
+                )
+                request_id = result.get("request_id")
+                assert (
+                    request_id and request_id not in seen
+                ), "same invalid work repeated"
+                seen.add(request_id)
+                assert len(seen) <= 3, "three-work diagnostic limit"
+                if result.get("checkpoint_invalid"):
+                    assert result["sdk_called"] is False
+                    self.record("diagnostic-checkpoint-invalid", result=result)
+                    self.current(self.a)
+                    continue
+                assert result["sdk_called"] is True, result
+                assert result["prepared"] is False, result
+                assert result["rejection_layer"] in (
+                    "sdk_sponsor",
+                    "sdk_output_destination",
+                ), result
+                assert (
+                    result["snapshot_unchanged"] and result["approval_unchanged"]
+                ), result
+                assert (
+                    result["snapshot_before_hash"] == result["snapshot_after_hash"]
+                ), result
+                assert (
+                    result["check_only"]
+                    and not result["can_sign"]
+                    and not result["can_submit"]
+                )
+                assert all(result["checks"].values()), result
+                status = result["request"]
+                live = self.rpc(
+                    "get_live_cell",
+                    [
+                        status["content"]["transaction"]["inputs"][0][
+                            "previous_output"
+                        ],
+                        True,
+                    ],
+                )
+                if live["status"] != "live":
+                    self.record(
+                        "diagnostic-checkpoint-consumed", result=result, live=live
+                    )
+                    self.current(self.a)
+                    continue
+                fee = self.assert_operator_payout_candidate(status)
+                assert result["authorization_destination_rpc"] == destination
+                assert number(result["authorization"]["fee"]) == fee
+                assert (
+                    json.loads(policy_path.read_text())[self.a["channel_id"]] == policy
+                )
+                self.record("independent-payout-rejected", result=result)
+                break
+
+        # 3. 连续65秒核对零签名提交及A份额未解锁，保留拒绝层级。
+        assert (
+            self.total_due - time.monotonic() >= 75
+        ), "insufficient full observation budget"
+        store_snapshot = self.a["status_file"].parent / "store/snapshot.bin"
+        snapshot_before = hashlib.sha256(store_snapshot.read_bytes()).hexdigest()
+        with self.budget(75):
+            start = previous = time.monotonic()
+            samples, max_gap = 0, 0.0
+            while True:
+                sample_start = time.monotonic()
+                with self.budget(2):
+                    assert not self.a["gate"].watchtower_submissions
+                    assert (
+                        hashlib.sha256(store_snapshot.read_bytes()).hexdigest()
+                        == snapshot_before
+                    )
+                    assert not any(
+                        row["method"] == "submit_watchtower_signature"
+                        for row in self.a["gate"].audit_snapshot()["requests"]
+                    )
+                    assert not any(row["a"] for row in self.ledger(self.a))
+                    assert (
+                        json.loads(policy_path.read_text())[self.a["channel_id"]]
+                        == policy
+                    )
+                sampled = time.monotonic()
+                max_gap = max(max_gap, sampled - previous)
+                assert max_gap <= 2, f"negative sampling gap {max_gap:.3f}s"
+                previous, samples = sampled, samples + 1
+                if sampled - start >= 65:
+                    break
+                time.sleep(max(0, sample_start + 1 - time.monotonic()))
+            self.record(
+                "independent-payout-observation",
+                seconds=sampled - start,
+                samples=samples,
+                max_sample_gap=max_gap,
+                rejection_layer=result["rejection_layer"],
+                snapshot_sha256=snapshot_before,
+                error=result["error"],
+                independent_payout_verified=False,
+            )

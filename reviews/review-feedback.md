@@ -13,3 +13,12 @@
 - model: unavailable | cases: LSP-SUBSCRIPTION-01～07、10～13 完整前缀选择（侧边对话转达，替换此前 SUB 选择） | feedback: 那还是长一点吧
 - model: unavailable | cases: LSP-WATCHTOWER-02 | feedback: 接受02的分段验证边界，但不能标为原Agent自动恢复已覆盖。
 - model: unavailable | cases: LSP-SUBSCRIPTION-14～19 及签名订阅命名 | feedback: 可以推进 记得把「SSE」相关的名字改一下
+- model: unavailable | cases: LSP-DELIVERY-01～06 Gate2适配方案 | feedback: 再想想有没有更好的方案
+- model: unavailable | cases: PR #1623 LusoCryptoLabs 实测反馈场景 | feedback: 我不是让你根据他测出的失败场景添加用例嘛 你给我干哪去了
+- model: unavailable | cases: LSP 中文测试说明用词 | feedback: 请纠正这个说法 我希望不再出现。后续按实际含义使用“测试环境”“测试辅助代码”或“测试准备逻辑”，不再使用用户本次纠正的直译术语。
+- model: unavailable | cases: LSP 后续提交与测试推进（2026-10-30） | feedback: 按照顺序不断做 中间不必向我确认（即便是gate1、gate2这种） 除非有很高的权限要申请 我现在要休息了 我希望我几个小时后一打开就是你把工作做完并给我汇报
+- model: gpt-6.1-sol | cases: LSP-REFUND-01～03 重复次数与收尾范围（2026-10-30） | feedback: 本次退款以两轮独立通过收尾，不补第3/4轮
+- model: unavailable | cases: LSP 普通补充验证的主会话与门禁（2026-10-30） | feedback: 这个不是分支任务了 补充用例是主任务 你回到这个窗口做吧 继续给我gate1 gate2 gate3这样做下去
+- model: unavailable | cases: LSP 整体缺口盘点与重复评审（2026-10-30） | feedback: 我的妈你这样太浪费我时间了 你先整体看一遍 看下有哪些遗漏 再跟我说下一步做什么吧 你让我无畏的花了时间和token
+- model: unavailable | cases: LSP 测试运行与磁盘清理 | feedback: 我觉得你应该清理你自己产生的临时的产物 避免把磁盘塞满 影响下次测试 我今天凌晨还腾出了20多G呢 一直被你自己用完了 然后你一直找我要磁盘空间 这样无底洞的
+- model: unavailable | cases: PR #1623 核心逻辑覆盖与Gate1范围 | feedback: 你说的是执行进度 我问你的是测试用例实现完整度 有没有包含这个pr核心逻辑的测试 你一直没搞清方向
