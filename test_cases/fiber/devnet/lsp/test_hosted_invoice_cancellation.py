@@ -6,6 +6,7 @@ an operator credential or call settle_invoice directly from Python. Received
 cancellation (03) remains an open product-contract decision.
 """
 
+import copy
 import hashlib
 import json
 import os
@@ -14,8 +15,14 @@ import socket
 import tempfile
 import time
 
+import yaml
+
 from framework.util import get_project_root
-from test_cases.fiber.devnet.lsp._lsp_test import ChannelSigningTestBase, REVISION
+from test_cases.fiber.devnet.lsp._lsp_test import (
+    ChannelSigningTestBase,
+    REVISION,
+    RETEST_REVISION,
+)
 from test_cases.fiber.devnet.lsp.test_delayed_payment_recovery import (
     _DelayedPaymentBase,
     _number,
@@ -41,9 +48,86 @@ def _ckb_hash(preimage):
 class _CancellationBase(_DelayedPaymentBase):
     tenant_labels = ("A",)
 
+    @classmethod
+    def setup_class(cls):
+        root = Path(__file__).resolve().parents[4]
+        (root / "tmp").mkdir(exist_ok=True)
+        cls.tmp_path_name = str(
+            Path(tempfile.mkdtemp(prefix="lsp-cancel-", dir=root / "tmp")).relative_to(
+                root
+            )
+        )
+        super().setup_class()
+        cls.prepare_isolated_contract(root)
+
+    @classmethod
+    def prepare_isolated_contract(cls, root):
+        """Align this class's devnet before FNN starts, as the watchtower suite does."""
+        path = root / "source/contract/fiber/commitment-lock"
+        expected = path.read_bytes()
+        assert hashlib.sha256(expected).hexdigest() == (
+            "a7762721ef239b15adbdddca8d772db6e1c001d9f81e23ccc74e1392329931d7"
+        ), "not the reviewed 04c2064 commitment-lock"
+        script = {
+            "code_hash": "0x" + "00" * 25 + "545950455f4944",
+            "hash_type": "type",
+            "args": "0x082d30abbb75c3db217a78eee4f3e0d5a46c90b56c11dec77f3060319f323808",
+        }
+        client = cls.node.getClient()
+        search = {
+            "script": script,
+            "script_type": "type",
+            "script_search_mode": "exact",
+            "with_data": True,
+        }
+        cells = client.get_cells(search, "asc", "0x10", None)["objects"]
+        assert len(cells) == 1, cells
+        old = cells[0]
+        report_root = Path(os.environ.get("LSP_PAYMENT_REPORT_DIR", root / "report"))
+        report_root.mkdir(parents=True, exist_ok=True)
+        evidence_path = report_root / f"{cls.__name__}-isolated-contract.json"
+        assert not evidence_path.exists(), evidence_path
+        evidence = {
+            "revision": REVISION,
+            "chain_dir": cls.node.ckb_dir,
+            "before": old,
+            "expected_sha256": hashlib.sha256(expected).hexdigest(),
+        }
+        evidence_path.write_text(json.dumps(evidence, indent=2) + "\n")
+        tx_hash = cls.Contract.upgrade_ckb_type_contract(
+            cls.Config.MINER_PRIVATE_1,
+            str(path),
+            old["out_point"]["tx_hash"],
+            int(old["out_point"]["index"], 16),
+            fee=200000,
+            api_url=cls.node.rpcUrl,
+        )
+        evidence["submitted"] = tx_hash
+        evidence_path.write_text(json.dumps(evidence, indent=2) + "\n")
+        confirmed = cls.Miner.miner_until_tx_committed(cls.node, tx_hash)
+        tx = confirmed["transaction"]
+        assert tx["outputs"][0]["type"] == script
+        assert tx["outputs"][0]["lock"] == old["output"]["lock"]
+        assert any(i["previous_output"] == old["out_point"] for i in tx["inputs"])
+        assert bytes.fromhex(tx["outputs_data"][0].removeprefix("0x")) == expected
+        header = client.call("get_header", [confirmed["tx_status"]["block_hash"]])
+        assert client.get_block_hash(header["number"]) == header["hash"]
+        live = client.get_live_cell("0x0", tx_hash, True)
+        assert live["status"] == "live"
+        assert bytes.fromhex(
+            live["cell"]["data"]["content"].removeprefix("0x")
+        ) == expected
+        cells = client.get_cells(search, "asc", "0x10", None)["objects"]
+        assert len(cells) == 1 and cells[0]["out_point"] == {
+            "tx_hash": tx_hash,
+            "index": "0x0",
+        }
+        evidence.update(confirmed=confirmed, canonical_header=header, after=cells[0])
+        evidence_path.write_text(json.dumps(evidence, indent=2) + "\n")
+
     def setup_method(self, method):
-        assert (
-            REVISION == FIXED_REVISION
+        assert REVISION == FIXED_REVISION or (
+            RETEST_REVISION is not None and REVISION == RETEST_REVISION
         ), "use a separately reviewed revision for repair regression"
         self.preparation_started = time.monotonic()
         self.preparation_until = self.preparation_started + 240
@@ -196,6 +280,52 @@ class _CancellationBase(_DelayedPaymentBase):
         assert self._invoice(tenant, payment, until)["status"] == "Cancelled"
         return result
 
+    def _authorize_cancellation(self, tenant, payment, until):
+        self._control(
+            tenant,
+            "cancel",
+            until,
+            {"payment_hash": payment["hash"]},
+        )
+        self._record("local_cancel_authorized", payment_hash=payment["hash"])
+
+    def _pause_submissions(self, tenant):
+        with tenant["gate"].lock:
+            tenant["gate"].passthrough = False
+
+    def _release_submissions(self, tenant):
+        tenant["gate"].release()
+
+    def _wait_new_submission(self, tenant, before, until):
+        while True:
+            with tenant["gate"].lock:
+                fresh = [
+                    request_id
+                    for request_id in tenant["gate"].submissions
+                    if request_id not in before
+                ]
+            if fresh:
+                return fresh[0]
+            self._pause(until, 0.05)
+
+    def _submit_held(self, tenant, request_id, until):
+        with tenant["gate"].lock:
+            submission = copy.deepcopy(tenant["gate"].submissions[request_id])
+        assert submission["channel_id"] == tenant["channel_id"], submission
+        result = self._rpc(
+            tenant["client"],
+            "submit_channel_signature",
+            [submission],
+            until,
+        )
+        assert result["type"] in ("Applied", "AlreadyApplied"), result
+        self._record(
+            "held_signature_submitted",
+            request_id=request_id,
+            result=result,
+        )
+        return result
+
     def _payment(self, payment, until):
         return self._rpc(
             self.fiber2.client,
@@ -249,6 +379,22 @@ class _CancellationBase(_DelayedPaymentBase):
             tip=tip,
         )
 
+    @staticmethod
+    def _active_tlcs(view):
+        # list_channels exposes every TLC record, including removed ones whose
+        # status is RemoveAckConfirmed. Those are terminal bookkeeping, not
+        # still-pending funds; only non-terminal records count as pending.
+        active = []
+        for tlc in view["pending_tlcs"]:
+            status = tlc.get("status")
+            if isinstance(status, dict):
+                state = next(iter(status.values()), None)
+            else:
+                state = status
+            if state != "RemoveAckConfirmed":
+                active.append(tlc)
+        return active
+
     def _assert_settled_funds(self, sample, recipient, amount, fee):
         assert 0 <= fee <= FEE_CAP
         expected = {key: 0 for key in self.baseline}
@@ -274,7 +420,7 @@ class _CancellationBase(_DelayedPaymentBase):
             ), key
             assert _number(view["offered_tlc_balance"]) == 0, key
             assert _number(view["received_tlc_balance"]) == 0, key
-            assert not view["pending_tlcs"], key
+            assert not self._active_tlcs(view), key
         for key in ("A", "B"):
             if key in views:
                 assert (
@@ -318,15 +464,25 @@ class _CancellationBase(_DelayedPaymentBase):
         return body["result"]
 
     def _configure_chain(self, tenant, until):
-        # The local binaries are separately checked against genesis by DevChain.
-        contracts = str(Path(get_project_root()) / "source/contract/fiber")
+        # Resolve the deployed Type ID contracts independently instead of comparing
+        # the fixed devnet genesis against the local contract directory.
+        config = yaml.load(
+            Path(self.fiber1.fiber_config_path).read_text(), Loader=yaml.BaseLoader
+        )
+        scripts = {item["name"]: item for item in config["fiber"]["scripts"]}
         result = self._sdk_control(
             tenant,
-            "preimage-configure",
+            "preimage-configure-deployed",
             until,
             {
-                "ckb_rpc_url": self.node.rpcUrl,
-                "contracts_dir": contracts,
+                "config": {
+                    "url": self.node.rpcUrl,
+                    "scripts": scripts,
+                    "contracts": str(
+                        Path(get_project_root()) / "source/contract/fiber"
+                    ),
+                    "audit": str(self.evidence_dir / "independent-chain.jsonl"),
+                }
             },
         )
         assert result["configured"] is True
@@ -345,9 +501,14 @@ class _CancellationBase(_DelayedPaymentBase):
             ):
                 break
             self._pause(until, 0.1)
+        while True:
+            invoice = self._invoice(tenant, payment, until)
+            if invoice["status"] == "Received":
+                break
+            self._pause(until, 0.1)
         result = self._sdk_control(
             tenant,
-            "release-preimage",
+            "release-preimage-deployed",
             until,
             {
                 "payment_hash": payment["hash"],
@@ -369,7 +530,7 @@ class _CancellationBase(_DelayedPaymentBase):
                 and sample["invoice"]["status"] == expected_invoice
             ):
                 if all(
-                    not v["pending_tlcs"]
+                    not self._active_tlcs(v)
                     and _number(v["offered_tlc_balance"]) == 0
                     and _number(v["received_tlc_balance"]) == 0
                     for v in sample["views"].values()
@@ -392,7 +553,15 @@ class TestHostedInvoiceCancellation(_CancellationBase):
         self._cancel(self.tenant, old, until)
 
         # 2. 旧 hash 没有 SDK 预像释放，异步终态和四端资金均需证实。
+        # 先扣住新 TLC 的签名，等 TLC 在 SDK 状态中存在后再写本地退款授权；
+        # 这样失败移除到达时 SDK 已能接受，而不是在“新 TLC 已 resolved”处拒绝。
+        before = set(self.tenant["gate"].submissions)
+        self._pause_submissions(self.tenant)
         self._send_payment(old, until)
+        request_id = self._wait_new_submission(self.tenant, before, until)
+        self._authorize_cancellation(self.tenant, old, until)
+        self._release_submissions(self.tenant)
+        self._submit_held(self.tenant, request_id, until)
         failed = self._wait_terminal(old, "Failed", "Cancelled", until)
         assert _number(failed["payer"]["fee"]) == 0
         self._assert_settled_funds(failed, None, 0, 0)

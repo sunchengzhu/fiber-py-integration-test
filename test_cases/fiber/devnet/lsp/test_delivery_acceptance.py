@@ -13,6 +13,7 @@ from test_cases.fiber.devnet.lsp._lsp_test import (
     BUNDLE,
     ChannelSigningTestBase,
     REVISION,
+    RETEST_REVISION,
 )
 from test_cases.fiber.devnet.lsp.test_delayed_payment_recovery import (
     _DelayedPaymentBase,
@@ -26,7 +27,9 @@ class _DeliveryBase(_DelayedPaymentBase):
     lsp_config_extra = {"max_buffer_duration_ms": 600000}
 
     def setup_method(self, method):
-        assert REVISION == "84333eea8488a8afc7e4474aa4bbd0e7e973cee9"
+        assert REVISION == "84333eea8488a8afc7e4474aa4bbd0e7e973cee9" or (
+            RETEST_REVISION is not None and REVISION == RETEST_REVISION
+        ), "use a separately reviewed revision for repair regression"
         self.preparation_started = time.monotonic()
         self.row_until = self.preparation_started + 480
         self.preparation_until = self.preparation_started + 240
@@ -832,9 +835,11 @@ class _DeliveryBase(_DelayedPaymentBase):
                 break
             self._pause(fault_until, 0.02)
         assert len(timeout) == 1, timeout
+        log = self._log_since_send()
         assert (
-            "Failed to consult LSP delivery service: timeout" in self._log_since_send()
-        )
+            ("Hosted trampoline delivery unavailable" in log and "timeout" in log)
+            or "Failed to consult LSP delivery service: timeout" in log
+        ), log
         snapshot = self._snapshot_delivery(fault_until)
         captures = snapshot["captures"]
         original = captures[0]
@@ -885,7 +890,7 @@ class _DeliveryBase(_DelayedPaymentBase):
         elif variant == "amount":
             assert (
                 response["reply"]
-                == 'Ok(Err("delivery amount does not match hosted invoice"))'
+                == 'Ok(Err("hosted payment execution already exists with different data"))'
             ), response
         else:
             assert (
@@ -998,11 +1003,11 @@ class TestDeliveryAcceptance(_DeliveryBase):
         self._stable(True)
 
     # TEST-MAP: LSP-DELIVERY-05
-    def test_amount_conflict_rejected_before_existing_key_comparison(self):
+    def test_amount_conflict_rejected_as_existing_key_replay(self):
         """
         1. 原付款真实 InFlight，扣住 A 的原 SDK 签名。
-        2. 仅将转发额 M 改成 M+1，确认发票金额阶段拒绝且原状态不变。
-        3. 放行原签名，仅原 M 结算并核对实际费用与稳定资金。
+        2. 同 key 仅改 amount_to_forward 后重投：按 replay 冲突在 existing-key 拒绝，不 dispatch。
+        3. 金额字段校验另用不同 TLC/key 覆盖；放行原签名后仅原 M 结算。
         """
         # 1. 准备原真实付款和签名窗口。
         self._arm("observe")

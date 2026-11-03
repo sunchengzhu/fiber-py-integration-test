@@ -13,6 +13,12 @@ use fiber_types::{ChannelActorData, Hash256};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{io::Read, path::PathBuf};
+
+fn parse_pubkey(value: &str) -> Result<fiber_types::Pubkey> {
+    let bytes = hex::decode(value.trim_start_matches("0x")).context("decode public key")?;
+    fiber_types::Pubkey::from_slice(&bytes).context("parse public key")
+}
+
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::TcpListener,
@@ -367,6 +373,10 @@ async fn control(
         .open_channel(agent.binding(channel).context("unbound channel")?)
         .await?;
     match operation {
+        "cancel" => {
+            let hash: Hash256 = value["payment_hash"].as_str().context("hash")?.parse()?;
+            signer.authorize_cancellation(hash).await?;
+        }
         "invoice" => {
             let terms: PaymentAuthorization =
                 serde_json::from_value(value["authorization"].clone())?;
@@ -497,6 +507,10 @@ async fn main() -> Result<()> {
         AgentConfig {
             store_dir: args.store,
             status_file: Some(args.status_file),
+            lsp_node_id: parse_pubkey(
+                &std::env::var("LSP_NODE_ID")
+                    .context("LSP_NODE_ID must identify the hosted LSP")?,
+            )?,
         },
     )
     .await?;

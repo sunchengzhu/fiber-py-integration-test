@@ -29,6 +29,7 @@ class RetrySignatureGate:
         self.forwarded = []
         self.errors = []
         self.passthrough = False
+        self.hold_once = False
         self.hold_watchtower = False
         self.watchtower_submissions = {}
         self.fault_mode = None
@@ -113,7 +114,7 @@ class RetrySignatureGate:
                             gate.submission = copy.deepcopy(params)
                             gate.captured.set()
                         if not gate.passthrough:
-                            action = "pause"
+                            action = "block" if gate.hold_once else "pause"
                     if method == "submit_watchtower_signature":
                         gate.watchtower_submissions[params["request_id"]] = (
                             copy.deepcopy(params)
@@ -139,6 +140,12 @@ class RetrySignatureGate:
                     self.close_connection = True
                     self.connection.shutdown(socket.SHUT_RDWR)
                     return
+                if action == "block":
+                    # Keep the real SDK request alive until the test has recorded
+                    # its local authorization; then forward the same request.
+                    while not gate.passthrough and not gate.stopped.is_set():
+                        time.sleep(0.05)
+                    action = "forward"
                 if action == "pause":
                     reply = {
                         "jsonrpc": "2.0",
@@ -230,10 +237,16 @@ class RetrySignatureGate:
             self.fault_mode = mode
             self.fault_submission = copy.deepcopy(submission)
 
+    def hold_next_submission(self):
+        with self.lock:
+            self.hold_once = True
+            self.passthrough = False
+
     def release(self):
         with self.lock:
             self.fault_mode = None
             self.fault_submission = None
+            self.hold_once = False
             self.passthrough = True
 
     def close(self):

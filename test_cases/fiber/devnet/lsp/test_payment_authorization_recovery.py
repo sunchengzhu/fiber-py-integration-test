@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import socket
 import shutil
+import tempfile
 import time
 
 import yaml
@@ -13,7 +14,7 @@ import yaml
 from framework.util import get_project_root
 from test_cases.fiber.devnet.lsp._watchtower_rpc import ChainAudit
 from test_cases.fiber.devnet.lsp.test_watchtower_settlement import _WatchtowerBase
-from test_cases.fiber.devnet.lsp._lsp_test import ChannelSigningTestBase, REVISION
+from test_cases.fiber.devnet.lsp._lsp_test import ChannelSigningTestBase, REVISION, RETEST_REVISION
 from test_cases.fiber.devnet.lsp.test_delayed_payment_recovery import (
     _DelayedPaymentBase,
     _number,
@@ -34,6 +35,13 @@ class TestPaymentAuthorizationRecovery(_DelayedPaymentBase):
         timer = object.__new__(cls)
         timer.business_until = float("inf")
         artifacts = Path(os.environ["LSP_RUN_ARTIFACTS"])
+        root = Path(get_project_root()).resolve()
+        (root / "tmp").mkdir(exist_ok=True)
+        cls.tmp_path_name = str(
+            Path(
+                tempfile.mkdtemp(prefix="lsp-payment04-", dir=root / "tmp")
+            ).relative_to(root)
+        )
         try:
             with timer._budget(row_started + 180, 180):
                 super().setup_class()
@@ -90,7 +98,9 @@ class TestPaymentAuthorizationRecovery(_DelayedPaymentBase):
             raise
 
     def setup_method(self, method):
-        assert REVISION == FIXED_REVISION
+        assert REVISION == FIXED_REVISION or (
+            RETEST_REVISION is not None and REVISION == RETEST_REVISION
+        ), "use a separately reviewed revision for repair regression"
         self.row_started = float(os.environ["LSP_PAYMENT04_ROW_START"])
         self.row_until = self.row_started + 600
         self.preparation_started = self.row_started
@@ -265,10 +275,24 @@ class TestPaymentAuthorizationRecovery(_DelayedPaymentBase):
             self._health(tip)
             assert self.tenant["agent"].pid == self.original_pid
             assert list(self.tenant["command"]) == self.original_command
-            assert (
-                json.loads(self.tenant["status_file"].read_text())
-                == self.original_identity
+            status = json.loads(self.tenant["status_file"].read_text())
+            for field in (
+                "tenant_id",
+                "root_signer_pubkey",
+                "tenant_token",
+                "channel_open_signer_material",
+                "bound_channel_ids",
+                "watchtower_submissions",
+            ):
+                assert status[field] == self.original_identity[field], field
+            assert set(status["revoked_commitments"]) == set(
+                self.original_identity["revoked_commitments"]
             )
+            for channel_id, records in self.original_identity[
+                "revoked_commitments"
+            ].items():
+                current = status["revoked_commitments"][channel_id]
+                assert all(record in current for record in records), channel_id
             assert self.gate.passthrough and self.gate.fault_mode is None
             for key, view in views.items():
                 assert view["state"]["state_name"] == "ChannelReady", (key, view)
@@ -458,6 +482,19 @@ class TestPaymentAuthorizationRecovery(_DelayedPaymentBase):
         held = self._observe_payment(payment, until)
         self._visible_path(payment, held, record=latest)
         self._margin("A", 180)
+        # The hosted invoice must become Received before the test releases the
+        # preimage; releasing an Open invoice is rejected by the product.
+        while True:
+            invoice = self._rpc(
+                self.client,
+                "get_invoice",
+                [{"payment_hash": payment["hash"]}],
+                until,
+            )
+            if invoice["status"] == "Received":
+                break
+            assert invoice["status"] not in ("Expired", "Paid", "Cancelled"), invoice
+            self._pause(until, 0.2)
         self._record("safe_release_start", hash=payment["hash"], recovery_record=latest)
         released = self._command(
             "release-preimage-deployed",

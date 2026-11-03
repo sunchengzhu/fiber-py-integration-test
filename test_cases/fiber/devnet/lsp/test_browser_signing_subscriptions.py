@@ -321,7 +321,10 @@ class _BrowserSubscriptionBase(SubscriptionTestBase):
                 tenant["subscription_proxy"].close_streams()
                 tenant["gate"].release()
                 tenant["agent"] = subprocess.Popen(
-                    tenant["command"], stdout=tenant["log"], stderr=subprocess.STDOUT
+                    tenant["command"],
+                    stdout=tenant["log"],
+                    stderr=subprocess.STDOUT,
+                    env={**os.environ, "LSP_NODE_ID": str(self.public_key)},
                 )
                 self.addCleanup(stop_agent, tenant["agent"])
             while True:

@@ -26,7 +26,7 @@ CASES = [
     "TestDeliveryAcceptance::test_buffered_reply_lost_after_real_acceptance",
     "TestDeliveryAcceptance::test_same_key_replay_preserves_inflight_execution",
     "TestDeliveryAcceptance::test_same_key_replay_preserves_succeeded_execution",
-    "TestDeliveryAcceptance::test_amount_conflict_rejected_before_existing_key_comparison",
+    "TestDeliveryAcceptance::test_amount_conflict_rejected_as_existing_key_replay",
     "TestDeliveryTargetConflict::test_valid_other_tenant_target_cannot_replace_original_key",
 ]
 PORTS = (8114, 8125, 8227, 8228, 8229, 8230)

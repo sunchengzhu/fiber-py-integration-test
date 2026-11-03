@@ -13,16 +13,16 @@ python scripts/run_lsp_delivery_batch.py --source <干净843源码> \
 
 范围：[已确认 Gate1](field-feedback-scope.md) 的方向 5/6/7：接纳前超时、持久化接纳后丢回复、同 incoming key 原样及冲突重投。固定 FNN/SDK/产品库 `84333eea8488a8afc7e4474aa4bbd0e7e973cee9`。2026-10-29 用户已明确确认本文件 `LSP-DELIVERY-01～06` 行集、资金断言和调整后的薄包装方案，并授权 Gate3 的实现、GPT 6 sol 复核、资格验证及六行单次执行；产品代码、原工作区与退款夜跑不动。下文历史 Gate2 提案文字保留，执行结果另记于 LSP 运行说明。
 
-**已确认的方案：现有外部 FNN + Python/SDK 夹具没有内部接纳门禁；测试侧薄包装直接复用原 `run_node`，通过同进程 actor registry 接入接纳代理。** 前版分别调用 `start_network` 等接口重建启动流程的方案被替换，减少启动接线的复制和偏离；六行与资金判据不变。独立测试产物仍须编译和取得资格，组件 mock 通过不能替代这六行。六行已建立 Python TEST-MAP；映射仅表示有代码，不表示执行通过。
+**已确认的方案：现有外部 FNN + Python/SDK 测试代码没有内部接纳门禁；测试侧薄包装直接复用原 `run_node`，通过同进程 actor registry 接入接纳代理。** 前版分别调用 `start_network` 等接口重建启动流程的方案被替换，减少启动接线的复制和偏离；六行与资金判据不变。独立测试产物仍须编译和取得资格，组件 mock 通过不能替代这六行。六行已建立 Python TEST-MAP；映射仅表示有代码，不表示执行通过。
 
 ## 接口、状态与共同前提
 
 - `K=(incoming_channel_id, incoming_tlc_id)` 标识 T 收到的一次具体 TLC，**不含 tenant，也不等同 payment hash**。`AcceptTrampolineDelivery(request, reply)` 是进程内 actor 消息，不是 HTTP/WS RPC。公开 `lsp_get_payment_delivery({payment_hash})` 返回 active 或最近记录，单凭它不能证明原 K。
 - 843 的调用方等待 5,000ms；服务执行 `accept` 后先安排 deadline/Resume，再发送回复；回复失败不回滚。正常持久状态为 `Deferred → Dispatching → InFlight → SettlingUpstream → Succeeded/Failed`，临时错误可能回到 Deferred。`Succeeded` 应包括上游兑现，`attempt_count` 是 dispatch 尝试次数，不能当作有效付款次数。
 - dispatch 前还有真实上游检查：Removed 会阻止支出，Unknown 会等待。因此源码显示风险窗口，**不证明本地已复现资金损失**。两个超时行必须保留完整事件顺序、真实上游结果和下游结果，安全收敛也如实报告所取得分支。
-- 每行新建 Fiber/SDK 数据和通道；P 是普通付款节点，T 是公共 LSP，A 是 Hosted 租户。使用真实 CKB devnet、RocksDB、SDK 密钥/批准/签名和 P—T—A 路径，plain CKB、禁 MPP。06 增加真实 B—T 私有通道、B 独立身份和有效发票，仅用于 Gate1 已包含的目标冲突，不展开跨租户矩阵。开通资金沿用已有夹具：P 提供 1,000 CKB，A/T（06 的 B/T）各 500 CKB，以实际资金可用量和储备检查为准。
+- 每行新建 Fiber/SDK 数据和通道；P 是普通付款节点，T 是公共 LSP，A 是 Hosted 租户。使用真实 CKB devnet、RocksDB、SDK 密钥/批准/签名和 P—T—A 路径，plain CKB、禁 MPP。06 增加真实 B—T 私有通道、B 独立身份和有效发票，仅用于 Gate1 已包含的目标冲突，不展开跨租户矩阵。开通资金沿用已有测试代码：P 提供 1,000 CKB，A/T（06 的 B/T）各 500 CKB，以实际资金可用量和储备检查为准。
 - 各通道 ChannelReady、无 pending TLC/待签/锁定额后保存基线。每行原 A 发票净额 `M=1,000,000 Shannon`，06 的 B 发票相同金额、不同 hash；各自有匹配的真实 SDK 本地授权。发票/授权有效期 3,600s，final TLC delta 3,600,000ms，payment expiry limit 86,400,000ms，`max_fee_amount=10,000 Shannon`。T 的公开配置 `lsp-max-buffer-duration-ms=600000` 限制 buffering；保存实际 hint/expiry/deadline，不能用 buffer=0 绕过接纳。原 RPC 仅调用一次 `send_payment`，timeout 120s；这不是强关或链上退款测试。
-- **一次 RPC 不等于一次 incoming。** 产品可能自动重试新 K，保留这些尝试，不改重试常量、不由代理伪造拒绝来禁重试。`send_payment_with_router` 会清除 trampoline hops，不能用它替代本路径。按 K 保存每次 TLC/请求/下游 session，原 K 失败不能被同 hash 后续成功覆盖；无法逐 K 归因时为夹具不合格。120s payment timeout 也不等于即时终止，产品状态检查有周期，不能以到时自动判 Failed。
+- **一次 RPC 不等于一次 incoming。** 产品可能自动重试新 K，保留这些尝试，不改重试常量、不由代理伪造拒绝来禁重试。`send_payment_with_router` 会清除 trampoline hops，不能用它替代本路径。按 K 保存每次 TLC/请求/下游 session，原 K 失败不能被同 hash 后续成功覆盖；无法逐 K 归因时为测试代码不合格。120s payment timeout 也不等于即时终止，产品状态检查有周期，不能以到时自动判 Failed。
 - 03/05/06 在**真实 InFlight 且 A 的目标签名被现有 HTTP gate 暂扣**的稳定窗口操作，SDK 仍在线；这个 gate 仅固定重投观察窗口，不能用来声称控制了内部接纳超时。04 先正常完成一笔付款并保存 Succeeded。所有 replay 均在原 hint/授权有效期内，过期后的 replay 不在本批承诺内。
 
 ## Spec
@@ -85,7 +85,7 @@ Testing: required
 | `LSP-DELIVERY-02` | - [x] 原 K 已真实持久化、服务返回 Buffered 并安排恢复；代理不传回该回复，保留原 reply port 至原调用真实 5 秒超时，随后解除故障 | 按原 K 查清已接纳事实，原执行上下游结果一致且最多一次有效付款；成功有对应上游收入，失败无下游支出，不能仅凭回复超时判业务失败或通过 | 已接纳工作继续付款而上游已经失败，或恢复重复付款 | P0 |
 | `LSP-DELIVERY-03` | - [x] A 原 K 真实 InFlight，暂扣目标签名固定状态；将捕获的完整原请求按同 K 重投一次，再放行原签名 | 重投被接纳为原执行，暂停窗口原记录和资金不变，不新增 dispatch；恢复后仅原付款成功一次，双段余额、实际费用和零 TLC 锁定额一致 | 同 key 重投生成第二次付款或延长原 delivery 生命周期 | P0 |
 | `LSP-DELIVERY-04` | - [x] 原 K 已正常 Succeeded、上下游结算且无锁定，原 hint 仍有效；完整原请求按同 K 重投一次 | 返回原接纳结果，原 Succeeded 记录、dispatch 次数和余额保持不变；连续 30 秒没有新 TLC、签名工作或有效付款 | 已完成执行被重放后复活或重复扣款 | P0 |
-| `LSP-DELIVERY-05` | - [x] A 原 K 真实 InFlight 并暂扣签名；保持原 invoice/hash/key，仅把 amount_to_forward 从 M 改为 M+1 重投一次，再放行原签名 | 真实发票金额校验拒绝，原记录和暂停窗口资金不变；仅原 M 完成，最终费用与余额正确；不把该结果计为 existing-key 比较覆盖 | 冲突金额覆盖原付款，或把早期拒绝误当幂等冲突检查通过 | P1 |
+| `LSP-DELIVERY-05` | - [x] A 原 K 真实 InFlight 并暂扣签名；保持原 invoice/hash/key，仅把 amount_to_forward 从 M 改为 M+1 重投一次，再放行原签名 | 同一 incoming TLC 的 replay 冲突在 existing-key 检查拒绝（already exists with different data），不 dispatch、原记录和暂停窗口资金不变；金额字段校验另用不同 TLC/key 覆盖；放行后仅原 M 结算一次，最终费用与余额正确 | 同 key 改金额被当新执行或二次付款，或把 replay 冲突误当金额校验覆盖 | P1 |
 | `LSP-DELIVERY-06` | - [x] A 原 K 真实 InFlight 并暂扣签名；B 已有真实通道和合法同额发票，保留原 K 改投 B 的合法 hash/目标一次，再恢复 A | 前置校验成立后在 existing-key 冲突处拒绝；A 原记录不变，B 无 delivery/TLC/资金变化且发票仍 Open；最后仅 A 收到 M | incoming key 被另一合法租户目标占用，或只改被规范化覆盖的字段造成假覆盖 | P0 |
 <!-- TEST-CASES-END -->
 
@@ -126,7 +126,7 @@ dev RPC 的 `add_tlc` 不构造本路径的 trampoline onion/previous_tlc，也�
 
 原产品的 Timeout 日志不带 K，资格阶段必须建立唯一在途故障 K 与代理事件、原 reply port 的 5s timeout/持续持有/关闭变化、真实 NetworkActor Timeout 日志及 actor 存活的对应关系。port 关闭单独不能区分超时与调用任务退出；并发调用造成无法关联时停止为资格失败。02 读回记录时 Resume 可能已经推进状态，允许 Deferred 或可验证的合法后继状态，不能为保留 Deferred 而挡住真实恢复。
 
-上述同 K 内部重投验证服务的防御行为，不宣称是外部用户可直接调用的 RPC，也不声称真实 P2P 必然产生这种冲突。正常对照必须证明真实发票路径确实进入 Accept 而非 NotHosted。资格自检检查代理一次性命中、非目标透传、原 port 生命周期、按 K 读取及退出清理；随后一次无故障真实 P→T→A 控制付款核对完整资金。出现 FakeRuntimeFactory/NoopNetworkActor、只能借测试模块 mock chain、需要复制支付业务或新产品钩子时立即停为夹具缺口，不扩大适配。
+上述同 K 内部重投验证服务的防御行为，不宣称是外部用户可直接调用的 RPC，也不声称真实 P2P 必然产生这种冲突。正常对照必须证明真实发票路径确实进入 Accept 而非 NotHosted。资格自检检查代理一次性命中、非目标透传、原 port 生命周期、按 K 读取及退出清理；随后一次无故障真实 P→T→A 控制付款核对完整资金。出现 FakeRuntimeFactory/NoopNetworkActor、只能借测试模块 mock chain、需要复制支付业务或新产品钩子时立即停为测试代码缺口，不扩大适配。
 
 ## 资金断言与结果分类
 

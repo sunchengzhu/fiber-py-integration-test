@@ -54,14 +54,15 @@ mod upstream {
 use fnn::{
     fiber::{
         channel::ChannelActorStateStore,
+        delivery::{
+            DeliveryDecision, HostedDeliveryPort, PaymentOutcomeDecision, PaymentOutcomeRequest,
+            SettledPaymentOutcome, TrampolineForwardingRequest,
+        },
         graph::NetworkGraphStateStore,
         network::{NetworkActorMessage, PublicNetworkCommand},
     },
     fiber_types::{Hash256, Pubkey},
-    lsp::{
-        LspDeliveryDecision, LspPaymentDeliveryKey, LspPaymentDeliveryStore, LspServiceMessage,
-        TrampolineForwardingRequest,
-    },
+    lsp::{LspDeliveryPort, LspPaymentDeliveryKey, LspPaymentDeliveryStore, LspServiceMessage},
     store::{NodeNamespace, Store},
 };
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort};
@@ -74,7 +75,7 @@ use std::{
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
-type Reply = Result<LspDeliveryDecision, String>;
+type Reply = Result<DeliveryDecision, String>;
 static STATE: OnceLock<Arc<Mutex<State>>> = OnceLock::new();
 static STORE: OnceLock<Store> = OnceLock::new();
 static START: OnceLock<Instant> = OnceLock::new();
@@ -124,7 +125,8 @@ impl<S: tracing::Subscriber> Layer<S> for TimeoutLayer {
         if e.metadata().target() != "fnn::fiber::network"
             || !fields
                 .0
-                .contains("Failed to consult LSP delivery service: timeout")
+                .contains("Hosted trampoline delivery unavailable")
+            || !fields.0.contains("timeout")
         {
             return;
         }
@@ -229,6 +231,44 @@ impl Actor for Proxy {
         Ok(())
     }
 }
+
+#[derive(Debug)]
+struct HostedPortProxy {
+    real: Arc<LspDeliveryPort>,
+    proxy: ActorRef<LspServiceMessage>,
+}
+
+#[async_trait::async_trait]
+impl HostedDeliveryPort for HostedPortProxy {
+    async fn accept_trampoline_delivery(
+        &self,
+        request: TrampolineForwardingRequest,
+    ) -> Result<DeliveryDecision, String> {
+        ractor::call_t!(
+            self.proxy,
+            |reply| LspServiceMessage::AcceptTrampolineDelivery(request, reply),
+            5_000
+        )
+        .map_err(|error| format!("delivery proxy unavailable: {error}"))?
+    }
+
+    async fn decide_payment_outcome(
+        &self,
+        request: PaymentOutcomeRequest,
+    ) -> Result<PaymentOutcomeDecision, String> {
+        self.real.decide_payment_outcome(request).await
+    }
+
+    fn report_settled_payment(&self, outcome: SettledPaymentOutcome) {
+        self.real.report_settled_payment(outcome)
+    }
+
+    fn report_tenant_channel(&self, tenant_pubkey: Pubkey, channel_id: Hash256, online: bool) {
+        self.real
+            .report_tenant_channel(tenant_pubkey, channel_id, online)
+    }
+}
+
 async fn forward_observed(
     real: ActorRef<LspServiceMessage>,
     request: TrampolineForwardingRequest,
@@ -253,7 +293,7 @@ async fn forward_observed(
     let mut s = STATE.get().unwrap().lock().unwrap();
     s.captures[i].reply = Some(reply.clone());
     event(
-        if matches!(&result, Ok(Ok(LspDeliveryDecision::Buffered))) {
+        if matches!(&result, Ok(Ok(DeliveryDecision::Buffered))) {
             "buffered"
         } else {
             "service_reply"
@@ -477,10 +517,15 @@ async fn control(
     let (proxy, _) = Actor::spawn(Some("delivery test proxy".into()), Proxy, real.clone())
         .await
         .map_err(|e| e.to_string())?;
+    let real_port = LspDeliveryPort::new(real.clone());
     STATE.get().unwrap().lock().unwrap().real = Some(real);
+    let delivery_port = Arc::new(HostedPortProxy {
+        real: real_port,
+        proxy: proxy.clone(),
+    });
     network
         .send_message(NetworkActorMessage::new_command(
-            PublicNetworkCommand::SetLspService(proxy.clone()),
+            PublicNetworkCommand::SetDeliveryPort(delivery_port),
         ))
         .map_err(|e| e.to_string())?;
     let info = ractor::call_t!(

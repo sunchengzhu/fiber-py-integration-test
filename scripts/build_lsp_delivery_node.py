@@ -18,12 +18,12 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def product_clean(source):
+def product_clean(source, revision):
     assert (
         subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=source, text=True
         ).strip()
-        == REVISION
+        == revision
     )
     assert not subprocess.check_output(
         ["git", "status", "--porcelain"], cwd=source, text=True
@@ -43,6 +43,7 @@ def main():
     parser.add_argument("--base-bundle", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--target-dir", type=Path, required=True)
+    parser.add_argument("--revision", default=REVISION, help="Exact reviewed Fiber commit")
     args = parser.parse_args()
     source, base, output, target = (
         p.resolve()
@@ -50,9 +51,9 @@ def main():
     )
     assert not output.exists(), "output must be a new directory"
     assert output.is_relative_to(ROOT), "bundle must remain in this checkout"
-    product_clean(source)
+    product_clean(source, args.revision)
     base_manifest = json.loads((base / "build.json").read_text())
-    assert base_manifest["revision"] == REVISION
+    assert base_manifest["revision"] == args.revision
     assert base_manifest["cargo_lock_sha256"] == digest(source / "Cargo.lock")
     assert base_manifest["profile"] == "dev"
     for name, checksum in base_manifest["sha256"].items():
@@ -65,7 +66,7 @@ def main():
         assert digest(suite / name) == base_manifest[key], "base SDK adapter is stale"
     version = subprocess.check_output([base / "fnn", "--version"], text=True).strip()
     assert version == base_manifest["fnn_version"] and "dirty" not in version
-    assert REVISION[:7] in version
+    assert args.revision[:7] in version
     upstream_main = source / "crates/fiber-bin/src/main.rs"
     upstream_hash = digest(upstream_main)
     output.mkdir(parents=True)
@@ -78,12 +79,18 @@ def main():
     dependencies = original_manifest.split("[features]", 1)[1]
     dependencies = dependencies.split("[dev-dependencies]", 1)[0]
     dependencies = dependencies.replace(
+        'fnn = { path = "../fiber-lib", default-features = false }',
+        "fnn = { path = "
+        + json.dumps(str(source / "crates/fiber-lib"))
+        + ", default-features = false }",
+    )
+    dependencies = dependencies.replace(
         'fnn = { path = "../fiber-lib" }',
         "fnn = { path = " + json.dumps(str(source / "crates/fiber-lib")) + " }",
     )
     dependencies = dependencies.replace(
         "[dependencies]\n",
-        '[dependencies]\nserde_json = "1"\n',
+        '[dependencies]\nasync-trait = "0.1"\nserde_json = "1"\n',
         1,
     )
     (build / "Cargo.toml").write_text(
@@ -140,7 +147,7 @@ def main():
         "debug-add-tlc",
     ]
     subprocess.run(command, env=env, cwd=source, check=True)
-    product_clean(source)
+    product_clean(source, args.revision)
     assert digest(upstream_main) == upstream_hash
     assert adapter_hashes == {p.name: digest(p) for p in adapter_sources}
     for name, checksum in base_manifest["sha256"].items():
@@ -164,7 +171,7 @@ def main():
         },
     }
     (output / "build.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    print(f"Built fixed {REVISION[:7]} original-entry wrapper: {output}")
+    print(f"Built fixed {args.revision[:7]} original-entry wrapper: {output}")
 
 
 if __name__ == "__main__":
