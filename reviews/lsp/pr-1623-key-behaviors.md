@@ -1,0 +1,143 @@
+# PR #1623 关键行为清单（56c761c）
+
+范围：`nervosnetwork/fiber#1623` 的 hosted LSP 关键行为。基线 `84333ee`，当前候选 `56c761c`。本文是**行为覆盖清单**，不是 Case 表；Case ID 只用于指向现有证据，不在这里新增或改动用例预期。
+
+勾选语义：
+
+- `[x]`：当前候选版本有**通过**的真实执行证据，且断言覆盖该行为；
+- `[ ]`：未完成、未覆盖、产品失败、契约未确认或仅有设计稿；状态在行内说明；
+- “已覆盖-失败”不算完成，不能用产品失败换勾；
+- 产品未实现的行为可以先有设计，但不能标通过。
+
+进度：**25/43 个关键行为完成（约 58%）**。另有 22 个未完成，其中部分是已设计待实现，部分是产品/契约阻塞。这个比例是**行为覆盖**，不等于 76 条用例的通过率。
+
+## A. 租户生命周期、查询与权限（6）
+
+- [x] **A1 租户注册、身份与 token scope**  
+  A/B 真实注册、tenant token、身份绑定。证据：SIGN-01～03、SUBSCRIPTION-01～28、WATCHTOWER-02～05。
+- [x] **A2 默认命名空间查询隔离**  
+  B 不带 `tenant_id` 查 A 的 invoice，不得到 A 数据。证据：`LSP-TENANT-QUERY-01`，真实 A/B 通道，99.28s。
+- [x] **A3 显式 `tenant_id` 授权**  
+  B 不能显式指向 A；operator 可正向读取 A。证据：`LSP-TENANT-QUERY-02`，真实 A/B 通道，95.40s。
+- [x] **A4 operator-only admin 权限**  
+  tenant token 不能调 `lsp_list_tenants` / `lsp_evict_tenant`；operator 正向可用。证据：`LSP-ADMIN-AUTH-01/02`，89.95s / 88.90s。
+- [x] **A5 operator-only 方法分类**  
+  tenant token 不能调 `parse_invoice` 等 operator-only 方法。证据：`LSP-ADMIN-AUTH-03`，87.84s。
+- [ ] **A6 eviction 门禁与 runtime 状态**  
+  有 pending 签名、delivery 或 active TLC 时不能驱逐；驱逐后状态字段正确。状态：未覆盖；需要 pending-work fixture。
+
+## B. 外部签名、重试与恢复（7）
+
+- [x] **B1 external signer 开通与 funding**  
+  `open_channel_with_external_funding`、真实 SDK 签名、通道就绪。证据：SIGN、RECOVERY-01。
+- [x] **B2 跨租户签名查询/提交隔离**  
+  A 不能读/提交 B 的签名请求。证据：SIGN-02/03。
+- [x] **B3 相同/冲突/旧签名重试**  
+  Applied/AlreadyApplied、冲突拒绝、旧请求不消耗。证据：RETRY-01～06。
+- [x] **B4 SDK 重启恢复已保存签名**  
+  未提交 S1、原存储、新 subscription、首次 Applied。证据：RECOVERY-02/03/06/07。
+- [x] **B5 SDK 重启恢复未知结果**  
+  已知已应用、未知结果、R2 恢复。证据：RECOVERY-03/06/07。
+- [x] **B6 FNN 重启恢复 pending 签名/支付**  
+  原数据重启、subscription 恢复、receipt/next request。证据：RECOVERY-04/05。
+- [x] **B7 撤销、关闭授权与连续付款**  
+  撤销签名、关闭授权、十笔连续付款及第 9 笔重启。证据：RECOVERY-06/07/08。
+
+## C. 订阅（5）
+
+- [x] **C1 当前工作补发与下一请求**  
+  初始 R1、应用 S1 后原订阅收到 R2。证据：SUBSCRIPTION-01/02。
+- [x] **C2 重连/重放/按连接取消**  
+  未提交请求重连补发、只重放当前请求、独立订阅/取消。证据：SUBSCRIPTION-05/06/07/11/12/13。
+- [x] **C3 订阅租户隔离**  
+  A/B 只收到各自事件，host 不读私有工作。证据：SUBSCRIPTION-03/10。
+- [x] **C4 浏览器鉴权与子协议**  
+  注册 token、padded/Bearer、缺失/多凭证/非法编码。证据：SUBSCRIPTION-14～19。
+- [x] **C5 订阅过滤、参数与上限**  
+  默认/显式/空过滤、非法参数、256/257、固定数组兼容。证据：SUBSCRIPTION-20～28。
+
+## D. 发票、取消与付款（5）
+
+- [x] **D1 Open 发票取消与跨租户隔离**  
+  A 取消自己的 Open 发票；B 不能取消 A。证据：INVOICE-CANCEL-01/02。
+- [ ] **D2 Received 状态取消**  
+  Received、无节点 preimage 时取消并安全清理。状态：契约未确认；无 Case。
+- [x] **D3 入站付款、延迟签名、SDK 离线**  
+  P→T→A 正常付款、在线延迟、SDK 完全离线。证据：PAYMENT-01/02。
+- [x] **D4 缺授权后的同进程恢复**  
+  真实拒签、补授权、原请求恢复、下一笔付款。证据：PAYMENT-04。
+- [ ] **D5 external-signer outbound payment**  
+  hosted 租户主动 `send_payment` 的完整 E2E。状态：Fiber 文档明确仍缺；未覆盖。
+
+## E. Delivery（6）
+
+- [ ] **E1 接纳后丢回复的最终一致性**  
+  原 K 已持久化、丢 reply、最终资金/30 秒稳定。状态：DELIVERY-02 产品失败；不能勾。
+- [x] **E2 同 key 重投/幂等/冲突**  
+  InFlight/Succeeded replay、金额冲突、另一租户目标。证据：DELIVERY-01/03/04/05/06。
+- [ ] **E3 多通道选择与 reselect**  
+  同租户多通道、离线/关闭通道、dispatch 前重选、dispatch 后固定。状态：未覆盖；`d96dfecb` 的直接回归。
+- [ ] **E4 Delivery FNN 重启恢复**  
+  Deferred/InFlight 持久化恢复、不重复 dispatch。状态：未覆盖。
+- [ ] **E5 Delivery downstream MPP**  
+  `max_parts > 1`、部分失败/全部失败/最终成功。状态：未覆盖。
+- [ ] **E6 Delivery 限额和 pending 清理**  
+  `max_pending_deliveries`、per-tenant、buffer 期限。状态：未覆盖。
+
+## F. Watchtower（4）
+
+- [x] **F1 缺批准拒签与显式批准后适配结算**  
+  130 秒无结算、批准后真实提交。证据：WATCHTOWER-02。
+- [x] **F2 跨租户读取/提交隔离**  
+  B 不能读/提交 A 的 watchtower 工作。证据：WATCHTOWER-03/04。
+- [ ] **F3 独立收款正向到账与 sponsor 分离**  
+  D_A ≠ operator sponsor，A 份额完整进入 D_A。状态：产品新要求未完成；无 Case。
+- [ ] **F4 payout lock 替换拒绝与陈旧请求**  
+  check-only 拒绝替换、旧请求/新请求排序。状态：WATCHTOWER-06 未自动化；陈旧请求只有部分证据。
+
+## G. 期限、强关与竞争（4）
+
+- [x] **G1 外部注资超时中止与晚到提交**  
+  注资超时、输入未花费、晚到钱包签名拒绝。证据：TIMEOUT-01/02/03/06。
+- [x] **G2 签名期限、强关承诺与 loser 恢复**  
+  受控强关、承诺哈希、恢复窗口。证据：TIMEOUT-07/08/10/11/12。
+- [ ] **G3 #1674 普通开通超时/晚到通道签名**  
+  TIMEOUT-04/05 仍失败；不能勾完成。
+- [ ] **G4 自然双方强关竞争/race 覆盖**  
+  受控竞争通过，但自然竞争/多轮概率未覆盖。状态：未覆盖。
+
+## H. 系统边界与安全（6）
+
+- [ ] **H1 同一租户多通道生命周期**  
+  多通道开户、状态 `channels[]`、通道关闭后仍可继续其他通道。状态：未覆盖。
+- [ ] **H2 资源上限与拒绝**  
+  `max_active_tenants`、pending delivery、buffer 上限的边界行为。状态：未覆盖。
+- [ ] **H3 跨租户并发/竞争**  
+  同时开通道、签名、订阅、取消的隔离。状态：文档明确仍缺。
+- [ ] **H4 严格 nonce-reuse / fail-closed**  
+  nonce 重用和缺失 material 的 fail-closed。状态：文档列为 release gate，产品未完成。
+- [ ] **H5 `lsp` feature 关闭的构建/启动回归**  
+  不带 lsp feature 的 FNN 正常启动；配置报错明确。状态：未覆盖；现有用例全是 LSP 开启。
+- [ ] **H6 当前 head 退款链路**  
+  REFUND-01～03 在 843 已接受；56c761c 未重跑。状态：已接受历史结果/可选。
+
+## 未完成项优先级
+
+| 优先级 | 关键行为 | 状态/成本 |
+| --- | --- | --- |
+| P0 | E1 Delivery-02 最终一致性 | 等产品修复，修复后复验 |
+| P0 | E3 多通道 reselect | 需要多通道 fixture，直接覆盖 `d96dfecb` |
+| P0 | E4 Delivery 重启恢复 | 需要 FNN 重启 fixture |
+| P0 | D2 Received 取消 | 等契约确认 |
+| P0 | F3 独立收款正向 | 等产品新要求 |
+| P0 | G3 TIMEOUT-04/05 | 等 #1674 |
+| P0 | A2～A5 租户查询/admin 边界 | 已设计 G1，低成本，待实现 |
+| P1 | A6 eviction 门禁、D5 outbound、E5 MPP、H1～H3 | 需要新 fixture/产品确认 |
+| P1 | H4 nonce、H5 feature-off | 产品/构建级门禁 |
+
+## 维护规则
+
+1. 只有当前 head 有真实通过证据才勾选；产品失败、契约未确认、只设计不实现都不勾。
+2. 新行为先进入本清单，再按需要创建/更新 Case；Case ID 不在这里重复定义。
+3. 每次测试完成后更新本文件和 `COMPLETION.md`，不维护第二份通过率台账。
+4. 清单是**行为覆盖**，不能替代 Case 表、Spec 和 B review；Case 仍走 ai-test-agent 的 G1/G2。
