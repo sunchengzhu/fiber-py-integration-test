@@ -1410,7 +1410,7 @@ class TestMixedVersionLongPathSuccess(_MixedVersionAdversarialSupport):
     # TEST-MAP: H32V2-32
     # TEST-EVIDENCE-BEGIN: H32V2-32
     # Evidence | covered | 与 H32V2-30 同一「上游 V1→下游 Legacy」三跳拓扑，但下游对端改用
-    # 普通旧版节点 V091_DEV（不宣告完整哈希 → 协商 Legacy），不依赖对抗/故障注入夹具；
+    # 普通旧版节点 V091_DEV（不宣告完整哈希 → 协商 Legacy），不依赖对抗/故障注入测试工具；
     # 判别输入换成完整 32 字节 hash 正确的真实原像：invoice hash == sha256(preimage)。
     # 下游链上结算由**提供该 TLC 的一侧（relay2）**强关触发：只有它的承诺带着这笔 offered TLC，
     # 对端才有可被消费的精确 TLC；若让收款方强关，链上承诺里没有该 TLC，无从结算。
@@ -1464,7 +1464,7 @@ class TestMixedVersionLongPathSuccess(_MixedVersionAdversarialSupport):
         payer, relay1 = self.fiber1, self.fiber2
         relay2 = self._start_extra("relay2_32", FiberConfigPath.V091_DEV)
         # 证明点 1：下游两端用普通 V091 节点建立 Legacy 通道，再原地升级为 CURRENT_DEV。
-        # 不用对抗/故障注入夹具：本行验证真实原像的正常消费。
+        # 不用对抗/故障注入测试工具：本行验证真实原像的正常消费。
         adversary = self._start_extra("adversary_32", FiberConfigPath.V091_DEV)
 
         # 证明点 1：同 H32V2-30 的三跳拓扑：payer --V1--> relay1 --V1--> relay2 --Legacy--> adversary。

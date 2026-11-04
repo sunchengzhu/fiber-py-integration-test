@@ -13,7 +13,7 @@
 | 项目 | 固定输入或检查 |
 | --- | --- |
 | VM 与资格 | 专用 Lima VZ/plain Linux ARM64；**正式产品样本**要求下文两类隔离预检均通过且与冻结配置/产物一致，每轮由无业务基础镜像新建实例。合并预检只要求匹配基础构建、纯时钟及旧适配成功，经受限preflight入口生成第二类资格，不要求已有自身证据。CKB/miner、FNN、SDK、Python 和观察器同处guest；宿主只做控制/截止/证据收集，每个实例最多一次正向跳变 |
-| 拓扑和资金 | A 为 Hosted 租户，T 为公共 LSP；仅一条 A–T 私有 plain CKB 通道，A/T 各按现有夹具注资 500 CKB。双方真实就绪，无旧 TLC/付款；T sponsor 钱包另有至少 1,000 CKB 可用 plain cells。沿用一 epoch 承诺延迟 `0x10000000001`、60 秒 watchtower 扫描及原 Hosted 300 秒关闭识别，不改这些周期 |
+| 拓扑和资金 | A 为 Hosted 租户，T 为公共 LSP；仅一条 A–T 私有 plain CKB 通道，A/T 各按现有测试代码注资 500 CKB。双方真实就绪，无旧 TLC/付款；T sponsor 钱包另有至少 1,000 CKB 可用 plain cells。沿用一 epoch 承诺延迟 `0x10000000001`、60 秒 watchtower 扫描及原 Hosted 300 秒关闭识别，不改这些周期 |
 | 发票 | 测试生成 preimage 并仅在测试端保留，以 SHA-256 得到 H；T 调用一次 `new_invoice`，金额 `Q=100,000,000 Shannon`（1 CKB），`currency="Fibd"`、`payment_hash=H`、`hash_algorithm="sha256"`、`allow_mpp=false`、`expiry=21600` 秒、`final_expiry_delta=300000` 毫秒。数值按 RPC 用 `hex()`；不传 `payment_preimage`。读取/解析返回发票，核对收款公钥、H、金额、资产、算法、到期与非 MPP 属性 |
 | A 的独立付款批准 | 发起付款前紧邻记录 guest 墙钟 `t_auth`（毫秒），调用真实 SDK `authorize_payment`：`inbound=false`、H、SHA-256、精确 Q；`expires_at_ms=t_auth+120000`、`min_tlc_expiry_delta_ms=14580000`、`max_tlc_expiry_ms=t_auth+14820000`。这些是 SDK 原生整数，不能照搬 RPC hex。等待保存成功；不从后来的待签内容反推授权、不放宽金额或时间范围 |
 | 唯一付款调用 | 从 `t_auth` 起 10 秒内完成批准持久化并开始发送，以 A 的原租户 token 调用一次 `send_payment`：返回的 `invoice`、`final_tlc_expiry_delta=hex(300000)`、`tlc_expiry_limit=hex(14700000)`、`timeout=hex(21600)`、`max_fee_amount=hex(0)`、`max_parts=hex(1)`、`keysend=false`、`allow_self_payment=false`；不指定 trampoline、UDT、dry_run 或另一条路线。要求实际直达 T、金额 Q、路由费 0；不使用会重发业务的框架付款 helper |

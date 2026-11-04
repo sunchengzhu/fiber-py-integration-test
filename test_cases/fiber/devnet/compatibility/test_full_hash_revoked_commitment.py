@@ -27,7 +27,7 @@ head 节点之间新开通的通道则协商为 V1。安装 ``OLD_CONTRACT`` 只
 
 共同前提：
 - 承诺版本只由开通时的 P2P 特性宣告决定，与链上部署哪份合约无关。
-- 被撤销承诺用文件原有的 store 回滚夹具产生：付款前 ``shutil.copytree`` 拷贝
+- 被撤销承诺用文件原有的 store 回滚测试步骤产生：付款前 ``shutil.copytree`` 拷贝
   ``<tmp>/fiber/store``，强关前停节点 → 换回 store → 启动 → 重连 →
   ``shutdown_channel(force=True)``，于是该节点广播的正是付款 RAA 刚撤销的那格承诺。
 - 惩罚方是 head 对端的内置 watchtower；惩罚只从链上证据断言，不看日志。
@@ -96,7 +96,7 @@ PUNISHER_BALANCE_INDEX = 0
 
 
 class RevokedCommitmentSupportMixin:
-    """H32V2-11 两个方向共用的链上证据与 store 回滚夹具；不含测试方法。"""
+    """H32V2-11 两个方向共用的链上证据与 store 回滚测试步骤；不含测试方法。"""
 
     # 默认监控本文件使用的共享节点；有额外对端的子类可追加端口。
     extra_monitored_ports = ()
@@ -200,7 +200,7 @@ class RevokedCommitmentSupportMixin:
         assert result["tx_status"]["status"] == "committed", result
         return result["transaction"]
 
-    # ---- store 回滚夹具（付款前拷贝 → 停 → 换回 → 启动 → 重连 → 强关）------
+    # ---- store 回滚测试步骤（付款前拷贝 → 停 → 换回 → 启动 → 重连 → 强关）------
 
     def _snapshot_store(self, fiber):
         """拷贝付款前的 store：那正是随后 RAA 会撤销的那格状态。"""

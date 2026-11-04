@@ -8,7 +8,7 @@
 
 ## 版本与已有证据
 
-- 用户已批准执行基线切换至 **`04c206465b48da85b99aa58e80afe9801a2cb2db`**。2026-10-24 重新获取固定提交，`download/fiber/source-pr-1623` 干净；FNN、官方 SDK agent、本地集成驱动同源构建，产物为 `download/fiber/pr-1623-04c2064/`，构建时未改产品代码。当前 Python 夹具与构建脚本均锁定此 SHA。
+- 用户已批准执行基线切换至 **`04c206465b48da85b99aa58e80afe9801a2cb2db`**。2026-10-24 重新获取固定提交，`download/fiber/source-pr-1623` 干净；FNN、官方 SDK agent、本地集成驱动同源构建，产物为 `download/fiber/pr-1623-04c2064/`，构建时未改产品代码。当前 Python 测试代码与构建脚本均锁定此 SHA。
 - [相对 24b5c38 的差异](https://github.com/chenyukang/fiber/compare/24b5c38bc098aeb29de5f6af7ac28dc667f218e3...04c206465b48da85b99aa58e80afe9801a2cb2db)只有浏览器 WS 鉴权、无填充 base64url token 及相关测试/文档/依赖，没有修改 watchtower、SDK 链验证、通道或合约逻辑。以下源码依据均已对照此固定版本。
 - 新版最小兼容回归为 **2 passed in 201.45s，退出 0**：`LSP-RECOVERY-01` 与 `LSP-SUBSCRIPTION-02`。覆盖新注册 token、HTTP Bearer、现有 SDK 的 WS 签名事件送达、开通、真实付款和协作关闭，详见 [运行记录](../../test_cases/fiber/devnet/lsp/README.md#04c2064-最小兼容回归2026-10-24)。**这两条不证明 watchtower 结算、浏览器 subprotocol 或其余 42 条方法通过。**
 - 原 `download/fiber/pr-1623/` 的 `24b5c38` 构建及全部历史结果保留；旧版已通过的付款恢复、超时强关和败方识别不转记为新版结果。`LSP-TIMEOUT-04/05` 继续关联 [#1674](https://github.com/nervosnetwork/fiber/issues/1674)，本批未重跑或宣称解决。

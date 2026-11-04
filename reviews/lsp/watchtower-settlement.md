@@ -15,7 +15,7 @@
 ## 历史共同前提与接口（02～04 沿用）
 
 - A 是 Hosted 租户，T 是公共 LSP，B 仅用于隔离对照。各用例使用新 Fiber 状态及独立 SDK 身份/存储；沿用现有 CKB 快照，不要求整个链按方法重置。A–T 为私有 plain CKB 通道，正常外部注资和开通，不制造付款或注入 TLC。
-- 初始注资沿用 A/T 各 500 CKB 的夹具参数；以实际 funding 输出、双方余额与 SDK 已验证完整 recovery record 核对，A/T 的待结算金额均非零，零 pending TLC。强关前不重启/驱逐 FNN 或 SDK。
+- 初始注资沿用 A/T 各 500 CKB 的测试参数；以实际 funding 输出、双方余额与 SDK 已验证完整 recovery record 核对，A/T 的待结算金额均非零，零 pending TLC。强关前不重启/驱逐 FNN 或 SDK。
 - 在开通前给 T 钱包准备额外、未被占用的 plain CKB sponsor cells，总容量至少 1,000 CKB；两个通道按需预留独立资金，不能在待签后让充值/其他测试消耗已引用输入。实际输入、找零和费用仍独立核算。
 - 目的地址 D 是测试从本地 T 钱包配置/公钥推导的完整 secp lock，事先保存。批准的 `max_fee=10_000` Shannon 是**每笔待签交易全部输入输出之差**的上限，不是全通道累计限额或从 A 余额扣款的上限。实际费用超过时失败，不自动提高授权；不是产品固定费率契约。
 - 通道延迟沿用 `commitment_delay_epoch=0x10000000001`（一个 epoch）；watchtower 保持模板的 60 秒扫描。独立读取真实 CKB epoch 分数与输入 `since`；SDK 开通使用的 2,000ms epoch 配置不能代替链上 maturity 判断。
@@ -98,7 +98,7 @@ Testing: required
 | `LSP-WATCHTOWER-02` | - [x] 沿用历史 D=S 判据的 A/T 非零份额、无 TLC 私有 CKB 通道中，不授予 A 本地 watchtower 批准；取得有效请求及原 Agent.handle_event 的缺批准拒签后观察至少 130 秒，再调用原批准 API 并经适配入口完成原通道 | 已确认分段验证边界；批准前 SDK 不产生/提交 A 的 Settlement，A 份额未结算；明确批准后真实 SDK 验链、签名及资金终态满足历史 D=S 共同判据，不扩展为独立收款，也不宣称原 agent 自动事件链仅补批准即可恢复 | 测试驱动自行拦截被误算成 SDK 拒签，或绕过本地批准直接调用 verified 入口却宣称完整授权恢复 | P0 |
 | `LSP-WATCHTOWER-03` | - [x] A/B 自身 watchtower 查询均成功；T 强关 A 后，捕获并扣住 A 对当前有效 Settlement 的真实签名，用 B token 读取 A 的同一 channel，再用 A 处理该工作 | B 读取失败且未返回 A 请求内容；操作前后 A 当前工作及可用输入未被 B 改变；A 的真实提交、结算与共同资金断言通过 | 跨租户泄露签名上下文，或因 B token 无效/无权限而取得假阳性 | P0 |
 | `LSP-WATCHTOWER-04` | - [x] 先让 B 在自己的通道上真实提交有效 Settlement 并完成结算作为写权限对照；再取得 A 通道当前有效请求和扣留的真实 SDK 签名，用 B token 原样提交 A 的 channel/request/signature，随后由 A 提交 | B→A 提交失败，A 原工作不被应用或替换；A 提交同一仍有效签名真实 Applied 且结算守恒；不能用错误签名、过期请求或 AlreadyApplied 代替身份隔离 | 租户身份未参与签名提交路由，或缺少合法写权限/有效签名对照而错误判定隔离成功 | P0 |
-| `LSP-WATCHTOWER-05` | - [x] A 只批准独立 D_A，在当前 843 的真实有效 Settlement 工作把 A 份额付往 S 时，以原授权和真实链证据调用原 SDK 验证并观察至少 65 秒 | SDK 拒签且无 A Settlement 签名或提交，A 份额未解锁；明确最先拒绝层级，sponsor 限制拒绝不算输出目的地校验或正向取回通过 | 为凑结算成功批准运营方收款，或把夹具提前拦截冒充 SDK 目的地防护 | P0 |
+| `LSP-WATCHTOWER-05` | - [x] A 只批准独立 D_A，在当前 843 的真实有效 Settlement 工作把 A 份额付往 S 时，以原授权和真实链证据调用原 SDK 验证并观察至少 65 秒 | SDK 拒签且无 A Settlement 签名或提交，A 份额未解锁；明确最先拒绝层级，sponsor 限制拒绝不算输出目的地校验或正向取回通过 | 为凑结算成功批准运营方收款，或把测试代码提前拦截冒充 SDK 目的地防护 | P0 |
 | `LSP-WATCHTOWER-06` | - [ ] 独立 D_A/S 授权下的自然候选先通过原 SDK prepare；保持原授权、输入、金额、费用等不变，仅将 A payout lock 分别换成 S、独立 D_X，逐个 check-only | 两个变体均因收款归属约束拒绝，原样对照仍可 prepare；全过程不签名、不提交，SDK 状态不变；无有效原样对照或更早拒绝均不得记通过 | 金额守恒掩盖错付，或用修改批准、陈旧摘要及其他校验拒绝取得假阳性 | P1 |
 <!-- TEST-CASES-END -->
 
@@ -204,7 +204,7 @@ Gate3 拟仅扩展 LSP 目录的 Python 用例/gate、`_sdk_driver.rs` 及同目
 - 增加显式 `watchtower-authorize` 控制，调用**原** `Agent.authorize(FixtureAuthorization::Watchtower)`；从其实际持久化 `watchtower-approvals.json` 读取同通道 D/max_fee。不同身份的 policy/存储不复用，未批准时不得启动 generic 签名路径。
 - 增加当前工作处理入口及只读 record 导出：来源为真实 RPC/WS 和真实 SDK 存储；导出完整已验证 public settlement 数据/交易/reference/公钥，支持 Python 独立资金判断。精确 OnchainSpendAuthorization 不由 Python 随意传入，而由适配器读取固定批准和可信链数据构造。
 - 正向使用公开 `Agent.poll_watchtower_verified(channel_id, authorization, chain)`，保留真正的 SDK prepare/confirm、独立验证和真实 RPC 提交。该函数会再查询当前 status；若与构造授权时的 R 不同，不放宽授权，记录拒绝并在既定次数/截止内重新核对。
-- watchtower 事件路由：未批准时交给原 `Agent.handle_event` 取得真实拒签；已批准时调用上述适配流程。普通 channel_signing 仍走原处理。该路由和 policy 读取属于测试夹具，**不证明原 agent configure_chain + 自动事件链的正向兼容**。02 必须明确分段证据；不以驱动自身 `if` 的错误字符串冒充原函数错误。
+- watchtower 事件路由：未批准时交给原 `Agent.handle_event` 取得真实拒签；已批准时调用上述适配流程。普通 channel_signing 仍走原处理。该路由和 policy 读取属于测试代码，**不证明原 agent configure_chain + 自动事件链的正向兼容**。02 必须明确分段证据；不以驱动自身 `if` 的错误字符串冒充原函数错误。
 - gate 增加 watchtower 查询/提交审计与按 node/channel/request 扣留真实签名。01/02 不扣提交，03/04 只扣 A；真实上游返回错误/回执原样记录，不伪造产品 Applied。SDK 日志、control、HTTP/WS、CKB 查询和交易都落入每轮独立证据目录。
 
 ### 可信合约与 deps 从哪里来
@@ -252,7 +252,7 @@ Gate2 交接时四行均未映射、未运行。以下为当时评审要求：�
 
 - 复用 `_lsp_test.py` 中真实租户 A 的 `shutdown_script` 作为 D_A；它已用于 open/funding 绑定。S 从 T 本地钱包公钥推导。完整 lock 与 key 归属独立核对，要求 D_A≠S；D_X 为另外一个独立 secp lock，三者两两不同。私钥不写报告，不能从待签输出反推批准。
 - A/T 各 500 CKB 开通参数、双方非零份额、无付款/TLC；完整 verified record 与资金基线必须匹配。T 额外准备至少 1,000 CKB plain sponsor cells。禁止 D_A 资金充作辅助输入，禁止无关业务同时使用 S 输入。
-- A 原 `Agent.authorize` 保存 D_A 与每笔 `max_fee=10_000` Shannon。另从独立本地配置冻结 sponsor S、plain CKB 限制及费用承担意图；**这份夹具意图不等于产品已支持双地址授权**。843 的诊断只送原 SDK prepare，绝不据此启动签名；未来须映射到修复版真实授权接口，不能擅自扩展原单 destination 的含义。
+- A 原 `Agent.authorize` 保存 D_A 与每笔 `max_fee=10_000` Shannon。另从独立本地配置冻结 sponsor S、plain CKB 限制及费用承担意图；**这份测试代码意图不等于产品已支持双地址授权**。843 的诊断只送原 SDK prepare，绝不据此启动签名；未来须映射到修复版真实授权接口，不能擅自扩展原单 destination 的含义。
 - 仍用一个 epoch 的原通道延迟、真实 CKB maturity、60 秒 watchtower 扫描和可信 deps；不加 VM、不改时间、不改产品或快照，不广播自制交易。强关祖先、签名真实使用及后继状态沿用上文独立验证规则。
 
 ### 费用分配提案与独立资金断言
@@ -287,7 +287,7 @@ P_A/P_T 是独立推导的合法应得值。末尾跨过至少一轮扫描、连
 
 1. 整批54分钟计时从首个产物预检前开始；05的17分钟计时从该阶段开始，实际截止取该阶段截止与整批剩余截止的较早者，业务截止至少提前60秒用于清理。核对843同源 FNN/SDK、新驱动清单、原快照/可信合约及空闲资源。只准备一条 A–T 通道，记录 D_A≠S、开通绑定、原批准、费用意图、完整 record 和资金基线。关闭后台 watchtower 自动签署路径，channel signing 保持原行为。
 2. T 仅强关一次；独立确认、推进真实 maturity/indexer 并取得当前 live Settlement R。检查 source、key purpose、祖先、deps、原始交易和真实 S inputs/outputs，证明该候选把 A 应得份额送到 S。若 T 合法先结算，只在原截止内沿已验证后继重新读取，最多 3 个不同真实工作；不删除陈旧请求、不重新开通。未取得有效工作只记场景未取得。
-3. 原授权仍为 D_A。专用诊断入口从真实链构造 source、fee、additional_inputs 与可信 deps，直接调用未修改的 `prepare_onchain`；不先用现有 `lock==destination` 的夹具检查代替产品判断。所有 S 输入仍须匹配事先独立冻结的 S、plain/type/data/去重与 live 规则，不能让任意输入通过。保留原 SDK 返回；预计先命中 sponsor/destination 不兼容，按实际最先拒绝层级报告。
+3. 原授权仍为 D_A。专用诊断入口从真实链构造 source、fee、additional_inputs 与可信 deps，直接调用未修改的 `prepare_onchain`；不先用现有 `lock==destination` 的测试代码检查代替产品判断。所有 S 输入仍须匹配事先独立冻结的 S、plain/type/data/去重与 live 规则，不能让任意输入通过。保留原 SDK 返回；预计先命中 sponsor/destination 不兼容，按实际最先拒绝层级报告。
 4. 从有效真实请求及原 SDK 拒绝齐备时观察 ≥65 秒（阶段最多75秒，完成采样间隔≤2秒）。比较每次prepare调用前后的SDK signing state、revision/nonce/签名历史，证明验证调用没有写入；65秒全窗口另核提交审计及无A Settlement签名/submit/Applied，不把普通事件接收的观察记录变化当成prepare写状态。沿真实祖先与 witness 确认 A 份额仍未解锁。允许 T 合法解锁自身份额，但必须保存前后继与未结算 A 份额，不能仅凭原 outpoint 已死判 A 结算。
 5. 保存证据并清理本批进程。报告“05 的有限拒签结果及拒绝层级；01 独立到账、06 单变量目的地验证未运行”。适配器提前拒绝、缺链配置、无效 token、旧输入或无 SDK 调用均不能算05通过；若 SDK 意外 prepare 成功也不签名，停止并报告授权安全问题。
 

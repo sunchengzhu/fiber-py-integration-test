@@ -11,7 +11,7 @@
 - 2026-10-27 只读 GitHub API：PR #1623 为 open，head 仍是 `04c206465b48da85b99aa58e80afe9801a2cb2db`；base `develop` 为 `2620b5b3fdca082092ce57797d0c22b65c33af59`，本地实际 merge-base 也是该 SHA。本轮只读选定资金路径及相关 diff，不作整个 PR 验收。
 - 测试分支 `codex/lsp-core-regressions`，HEAD `cf937275618d8e51b35a7537788702cf4b67bc31`，保留全部原有改动。产品 `download/fiber/source-pr-1623` 干净且 HEAD 为上述 04；实际 `fnn --version` 为 `fnn Fiber v0.10.0-rc1 (04c2064 2026-10-23)`。FNN、官方 SDK agent、本地驱动、Cargo.lock 及驱动/链适配源码摘要与 `download/fiber/pr-1623-04c2064/build.json` 一致；未切换、重建或更新版本。
 - 原快照与两份可信 commitment-lock 对照已有 `original-inputs.sha256` 全部 OK。此前已解决的隔离链合约预检问题不再记为当前阻断；将来运行仍需新建隔离工作副本，核对实际部署字节。原快照、24 产物及所有运行证据保持不变。
-- TIMEOUT-04/05 沿用 [#1674](https://github.com/nervosnetwork/fiber/issues/1674) 归因；WATCHTOWER-02 沿用 [#1706](https://github.com/nervosnetwork/fiber/issues/1706) 归因。08/10 的竞争假设、TIMEOUT-12 的 330 秒败方识别与夹具修正按交接最终结论处理，均不重新调查。24 的通过不记作 04 通过。
+- TIMEOUT-04/05 沿用 [#1674](https://github.com/nervosnetwork/fiber/issues/1674) 归因；WATCHTOWER-02 沿用 [#1706](https://github.com/nervosnetwork/fiber/issues/1706) 归因。08/10 的竞争假设、TIMEOUT-12 的 330 秒败方识别与测试代码修正按交接最终结论处理，均不重新调查。24 的通过不记作 04 通过。
 
 ## 剩余缺口核对
 
