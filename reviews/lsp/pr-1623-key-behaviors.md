@@ -9,7 +9,7 @@
 - “已覆盖-失败”不算完成，不能用产品失败换勾；
 - 产品未实现的行为可以先有设计，但不能标通过。
 
-进度：**25/43 个关键行为完成（约 58%）**。另有 22 个未完成，其中部分是已设计待实现，部分是产品/契约阻塞。这个比例是**行为覆盖**，不等于 76 条用例的通过率。
+进度：**34/44 个关键行为完成（约 77%）**。另有 11 个未完成，其中部分是产品/契约阻塞，部分是尚未覆盖的 E2E 层。这个比例是**行为覆盖**，不等于 76 条用例的通过率。Rust 单元/集成测试与 Python 黑盒用例分开注明层级，不把 Rust 通过冒充黑盒 E2E。
 
 ## A. 租户生命周期、查询与权限（6）
 
@@ -23,8 +23,8 @@
   tenant token 不能调 `lsp_list_tenants` / `lsp_evict_tenant`；operator 正向可用。证据：`LSP-ADMIN-AUTH-01/02`，89.95s / 88.90s。
 - [x] **A5 operator-only 方法分类**  
   tenant token 不能调 `parse_invoice` 等 operator-only 方法。证据：`LSP-ADMIN-AUTH-03`，87.84s。
-- [ ] **A6 eviction 门禁与 runtime 状态**  
-  有 pending 签名、delivery 或 active TLC 时不能驱逐；驱逐后状态字段正确。状态：未覆盖；需要 pending-work fixture。
+- [x] **A6 eviction 门禁与 runtime 状态**  
+  有 pending 签名、delivery 或 active TLC 时不能驱逐；驱逐后状态字段正确。证据（Rust 单元/集成）：`tenant_supervisor_rejects_eviction_while_runtime_is_busy`、`tenant_with_pending_delivery_cannot_be_evicted`、`pending_signature_survives_cold_queries_and_resumes_after_eviction`、`hosted_private_channel_registers_host_watch_and_survives_evict`。
 
 ## B. 外部签名、重试与恢复（7）
 
@@ -75,14 +75,16 @@
   原 K 已持久化、丢 reply、最终资金/30 秒稳定。状态：DELIVERY-02 产品失败；不能勾。
 - [x] **E2 同 key 重投/幂等/冲突**  
   InFlight/Succeeded replay、金额冲突、另一租户目标。证据：DELIVERY-01/03/04/05/06。
-- [ ] **E3 多通道选择与 reselect**  
-  同租户多通道、离线/关闭通道、dispatch 前重选、dispatch 后固定。状态：未覆盖；`d96dfecb` 的直接回归。
-- [ ] **E4 Delivery FNN 重启恢复**  
-  Deferred/InFlight 持久化恢复、不重复 dispatch。状态：未覆盖。
-- [ ] **E5 Delivery downstream MPP**  
-  `max_parts > 1`、部分失败/全部失败/最终成功。状态：未覆盖。
-- [ ] **E6 Delivery 限额和 pending 清理**  
-  `max_pending_deliveries`、per-tenant、buffer 期限。状态：未覆盖。
+- [x] **E3 多通道选择与 reselect**  
+  同租户多通道、离线/关闭通道、dispatch 前重选、dispatch 后固定。证据（Rust 集成）：`buffered_delivery_reselects_online_same_asset_channel`、`buffered_delivery_does_not_reselect_another_asset`、`buffered_delivery_keeps_channel_after_dispatch_starts`、`buffered_delivery_skips_closed_and_shutting_down_channels`、`cold_tenant_delivery_dispatches_only_after_channel_online`。
+- [x] **E4a Delivery service 重启恢复**  
+  Deferred/InFlight 持久化恢复、不重复 dispatch。证据（Rust 集成）：`buffered_delivery_reselection_survives_service_restart`、`settling_delivery_resumes_upstream_failure_after_restart_marker`、`restart_fails_deferred_delivery_after_upstream_tlc_removal`。
+- [x] **E4b Delivery 完整 FNN 重启恢复**  
+  FNN 进程重启后 delivery 持久化与 LSP replay 恢复；原 key/attempt/TLC/session 不变，不新建执行。证据：`LSP-DELIVERY-07`，真实 P→T→A + 整个 Public T 重启，1 passed / 118.69s。held 签名结算、Dispatching/SettlingUpstream/Deferred 重启仍未覆盖。
+- [x] **E5 Delivery downstream MPP**  
+  `max_parts > 1`、部分失败/全部失败/最终成功。证据（Rust）：`payment_delivery_accepts_downstream_mpp_and_rejects_invalid_state_transition`。
+- [x] **E6 Delivery 限额和 pending 清理**  
+  `max_pending_deliveries`、per-tenant、buffer 期限。证据（Rust）：`payment_delivery_enforces_per_tenant_pending_limit`、`cold_tenant_delivery_fails_at_buffer_deadline`、`in_flight_delivery_is_not_reverted_by_buffer_deadline`。
 
 ## F. Watchtower（4）
 
@@ -108,12 +110,12 @@
 
 ## H. 系统边界与安全（6）
 
-- [ ] **H1 同一租户多通道生命周期**  
-  多通道开户、状态 `channels[]`、通道关闭后仍可继续其他通道。状态：未覆盖。
-- [ ] **H2 资源上限与拒绝**  
-  `max_active_tenants`、pending delivery、buffer 上限的边界行为。状态：未覆盖。
-- [ ] **H3 跨租户并发/竞争**  
-  同时开通道、签名、订阅、取消的隔离。状态：文档明确仍缺。
+- [x] **H1 同一租户多通道生命周期**  
+  多通道开户、状态 `channels[]`、通道关闭后仍可继续其他通道。证据（Rust 集成）：`hosted_tenant_can_open_multiple_channels`、`tenant_registry_binds_multiple_channels_with_assets`。
+- [x] **H2 资源上限与拒绝**  
+  `max_active_tenants`、pending delivery、buffer 上限的边界行为。证据（Rust）：`tenant_supervisor_hydrates_evicts_and_enforces_capacity`、`payment_delivery_enforces_per_tenant_pending_limit`、`hosted_invoice_buffer_duration_is_capped_at_seven_days`。
+- [x] **H3 跨租户并发/竞争**  
+  同时开通道、签名、订阅、取消的隔离。证据（Rust 集成）：`hosted_signer_requests_are_isolated_across_concurrent_tenants`、`offline_tenant_does_not_block_an_online_tenant`。
 - [ ] **H4 严格 nonce-reuse / fail-closed**  
   nonce 重用和缺失 material 的 fail-closed。状态：文档列为 release gate，产品未完成。
 - [ ] **H5 `lsp` feature 关闭的构建/启动回归**  
@@ -126,13 +128,12 @@
 | 优先级 | 关键行为 | 状态/成本 |
 | --- | --- | --- |
 | P0 | E1 Delivery-02 最终一致性 | 等产品修复，修复后复验 |
-| P0 | E3 多通道 reselect | 需要多通道 fixture，直接覆盖 `d96dfecb` |
-| P0 | E4 Delivery 重启恢复 | 需要 FNN 重启 fixture |
+| P0 | E4b Delivery 完整 FNN 重启恢复 | 需要 delivery + FNN 重启 fixture；Service restart 已有 Rust 覆盖 |
 | P0 | D2 Received 取消 | 等契约确认 |
 | P0 | F3 独立收款正向 | 等产品新要求 |
 | P0 | G3 TIMEOUT-04/05 | 等 #1674 |
 | P0 | A2～A5 租户查询/admin 边界 | 已设计 G1，低成本，待实现 |
-| P1 | A6 eviction 门禁、D5 outbound、E5 MPP、H1～H3 | 需要新 fixture/产品确认 |
+| P1 | D5 external-signer outbound、F4 watchtower06、G4 自然竞争、H4 nonce、H5 feature-off、H6 退款 | 产品/契约或构建门禁 |
 | P1 | H4 nonce、H5 feature-off | 产品/构建级门禁 |
 
 ## 维护规则
@@ -141,3 +142,11 @@
 2. 新行为先进入本清单，再按需要创建/更新 Case；Case ID 不在这里重复定义。
 3. 每次测试完成后更新本文件和 `COMPLETION.md`，不维护第二份通过率台账。
 4. 清单是**行为覆盖**，不能替代 Case 表、Spec 和 B review；Case 仍走 ai-test-agent 的 G1/G2。
+
+## Rust 覆盖证据（2026-11-05）
+
+命令：`cargo test --locked --offline -p fnn --lib lsp::tests --features rocksdb`
+
+结果：**76 passed / 0 failed / 0 ignored**（测试运行 13.47s）。覆盖包括：多通道 reselect、delivery service restart、MPP、per-tenant 限额、buffer deadline、eviction 门禁、多通道开户、并发租户、outbound 付款等。
+
+层级说明：这些是 Rust 单元/集成测试，不等于 Python 黑盒 E2E；关键行为只按“有真实测试证据”勾选，并在行内注明层级。D5 仍不勾：现有 outbound 测试使用 hosted 内部 runtime；Fiber 文档仍把完整 external-signer outbound E2E 列为剩余项。

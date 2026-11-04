@@ -423,6 +423,31 @@ async fn command(v: Value, store: &Store) -> Result<Value, String> {
             }
             Ok(json!({"released":true,"automatic":true}))
         }
+        "replay_request" => {
+            let request: TrampolineForwardingRequest =
+                serde_json::from_value(v["request"].clone()).map_err(|e| e.to_string())?;
+            let real = STATE
+                .get()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .real
+                .clone()
+                .ok_or("not ready")?;
+            let result = ractor::call_t!(
+                real,
+                |p| LspServiceMessage::AcceptTrampolineDelivery(request.clone(), p),
+                5_000
+            );
+            let delivery = store
+                .namespaced(NodeNamespace::lsp_metadata())
+                .get_lsp_payment_delivery(&LspPaymentDeliveryKey::from_request(&request));
+            event(
+                "replay_request",
+                json!({"request":request,"reply":format!("{result:?}"),"delivery":delivery.as_ref().ok().and_then(|d|d.as_ref()),"store_error":delivery.as_ref().err()}),
+            );
+            Ok(json!({"request":request,"reply":format!("{result:?}"),"delivery":delivery.map_err(|e|e.to_string())?}))
+        }
         "replay" => {
             let (real, mut request) = {
                 let mut s = STATE.get().unwrap().lock().unwrap();
