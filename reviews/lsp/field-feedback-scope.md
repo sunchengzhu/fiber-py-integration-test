@@ -117,7 +117,7 @@ Testing: not_tested — Gate1 候选，当前 allowlist 阻断不得算取消业
 Condition: 发票有效，但 SDK 缺少相应本地授权，或授权与收到的 TLC 金额/方向不匹配。
 Expected: 不得为未批准状态签名或泄露 preimage；待确认：安全失败原付款并释放占用，还是允许明确补授权恢复。选定方案必须验证原付款终态和同一通道下一笔合法付款，不能以一条拒签日志代替收尾。不给“签取消”方案预先作安全承诺。
 Observable: 原始授权存储、真实 SDK 拒签、签名提交审计、原 TLC/付款/发票、余额、下一笔独立正常支付。
-Basis: [缺本地授权直接拒签](https://github.com/nervosnetwork/fiber/blob/84333eea8488a8afc7e4474aa4bbd0e7e973cee9/crates/fiber-lsp-sdk/src/commitment.rs#L471)；既有 PAYMENT/RECOVERY/TIMEOUT 夹具在发款前已写入本地授权，扣住的是有效签名。
+Basis: [缺本地授权直接拒签](https://github.com/nervosnetwork/fiber/blob/84333eea8488a8afc7e4474aa4bbd0e7e973cee9/crates/fiber-lsp-sdk/src/commitment.rs#L471)；既有 PAYMENT/RECOVERY/TIMEOUT 测试代码在发款前已写入本地授权，扣住的是有效签名。
 Source: inference
 Testing: not_tested — Gate1 候选，安全取消/补授权的目标终态须先确认。
 
@@ -178,7 +178,7 @@ Testing: not_tested — 明确保留为未来修复范围，先读实际 diff/�
 
 ## 用例：Gate1 候选场景
 
-以下二十个方向全部提交范围评审；“待产品/夹具”不表示忽略问题。Gate2 会按独立可观察结果拆分正式行，并复用已有 ID，不把本表一行机械等同一个执行实例。
+以下二十个方向全部提交范围评审；“待产品/测试代码”不表示忽略问题。Gate2 会按独立可观察结果拆分正式行，并复用已有 ID，不把本表一行机械等同一个执行实例。
 
 | 序号与候选场景 | 前提与操作 | 要验证的结果或待确认点 | 建议优先级 |
 | --- | --- | --- | --- |
@@ -212,9 +212,9 @@ Testing: not_tested — 明确保留为未来修复范围，先读实际 diff/�
 原定顺序为 **第一批收款归属 1/2 → 第二批接纳一致性 5/6/7 → 第三批发票取消 9/10/11**；三批已按此顺序进入各自 Gate2/Gate3，结果见各评审和运行记录。**12/13**仍须先明确安全收尾契约，**3/4/8/14～18**按对应修复及预算另行分批，**19/20**只保留为修复准入条件，不把未来实现混入 843 验收。已执行的三批不代表其余候选方向获准实施。
 
 - 目的地：当前 actor、SDK `OnchainSpendAuthorization` 和上游 agent 均把 sponsor 与 destination 耦合。可用独立 D_A 做真实拒签负向，但不能只改 Python expected 值就得到正向；不得将 S 额外批准后声称独立退出通过。首批 plain CKB、无 pending TLC，退款和 UDT 不顺带运行。
-- 接纳时序：现有签名 HTTP gate 不能阻塞服务 actor 邮箱，CPU 压力/随机 sleep 也不能证明发生在哪个持久化点。Gate2 先核查产品已有可复用测试入口或指定测试分支能力；没有入口就保留夹具缺口，不自行添加产品钩子或 Rust 压力测试。同 key 重投、接纳后崩溃也需各自可证明的触发点。
+- 接纳时序：现有签名 HTTP gate 不能阻塞服务 actor 邮箱，CPU 压力/随机 sleep 也不能证明发生在哪个持久化点。Gate2 先核查产品已有可复用测试入口或指定测试分支能力；没有入口就保留测试代码缺口，不自行添加产品钩子或 Rust 压力测试。同 key 重投、接纳后崩溃也需各自可证明的触发点。
 - 发票/授权：公开 RPC 与真实 SDK 授权存储可作入口；当前 allowlist 拒绝是待修复结果，不把它吞掉当业务通过。取消先核状态和 preimage，再看异步 delivery 与下一笔支付；只检查 `Cancelled` 或拒签日志不够。
-- 注册规模：须能只注册身份而不为每个 tenant 启动 agent/通道，才能区分服务查询成本与夹具开销；需要合法 challenge 签名和分项时延。不能凭 RPC 成功证明索引实际使用，也不直接规定必须支持一万租户。
+- 注册规模：须能只注册身份而不为每个 tenant 启动 agent/通道，才能区分服务查询成本与测试代码开销；需要合法 challenge 签名和分项时延。不能凭 RPC 成功证明索引实际使用，也不直接规定必须支持一万租户。
 - 长期状态：复用原支付/恢复逻辑，但逐笔核对并以同一通道/同一存储累积；固定轮次数、样本和资源预算，不无限加负载。单通道状态与 `snapshot.bin` 整库大小分别命名；没有导出能力就注明，不能把整库尺寸伪称 StoredSigningState。
 - 修剪/缓存：只验证真实产品行为，不手删历史或伪造裁剪。最新 revocation 可覆盖哪些旧承诺、pending 记录和 nonce 必须保留多久，均以实际协议/修复审查为前提。评论者 mock-chain 成功不替代本地真实链证明；CKB/UDT 和不同合约字节分开确认。
 

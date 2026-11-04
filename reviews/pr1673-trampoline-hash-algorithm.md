@@ -51,7 +51,7 @@ Testing: required
       - PR1673-01 [ref] -> SPEC-02：同一失败沿上游 TLC 收尾，C 发票和两跳余额无副作用
     - 内层 B→C `Forward` 为 `CkbHash`
       - PR1673-02 [primary] -> SPEC-03：B 不误拒绝，A→B→C 端到端兑现并按记录的两跳 TLC 金额转移余额
-  - [unanalysed] 上游 `Sha256`、内层 `CkbHash` 或 `Sha256` — PR 未给出这组集成期望；下一切片从 `SendPaymentData.hash_algorithm`、攻击夹具的 `ckb_hash` override 和现有 sha256 trampoline xfail 进入
+  - [unanalysed] 上游 `Sha256`、内层 `CkbHash` 或 `Sha256` — PR 未给出这组集成期望；下一切片从 `SendPaymentData.hash_algorithm`、攻击测试代码的 `ckb_hash` override 和现有 sha256 trampoline xfail 进入
   - [unanalysed] 多 trampoline 与 MPP — 尚未检查每个 trampoline 边界及多 part 是否都能形成独立、可观察的拒绝；下一切片从 `TrampolineContext.previous_tlcs`、`max_parts` 和 trampoline MPP 测试进入
   - [unanalysed] UDT 付款 — guard 本身不按资产分支，但端到端 payment/TLC/余额 oracle 仍走 UDT 路径；下一切片从 `udt_type_script` 传递和现有 trampoline UDT 用例进入
   - [unanalysed] 同时存在 payment_hash、费用、onion 或过期错误时的错误优先级 — 属既有校验顺序；下一切片从 `forward_trampoline_packet` 相邻返回分支与对应 Rust 用例进入

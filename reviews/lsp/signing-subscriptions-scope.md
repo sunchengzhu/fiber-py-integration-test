@@ -212,7 +212,7 @@ GPT 6.1 sol 已只读复核固定源码、现有覆盖与本节范围，未触�
 
 **更正此前建议：不能在固定 04 上准备“同一 Hosted 租户两条私有待签通道”。** [SDK session](https://github.com/nervosnetwork/fiber/blob/04c206465b48da85b99aa58e80afe9801a2cb2db/crates/fiber-lsp-sdk/src/session.rs#L279) 在已有 binding 时只允许原开通请求重入；[registry](https://github.com/nervosnetwork/fiber/blob/04c206465b48da85b99aa58e80afe9801a2cb2db/crates/fiber-lib/src/lsp/registry.rs#L245) 也限制租户绑定唯一私有通道。不能通过复制 SDK 存储、换身份、改产品或重复尝试绕过。A/B 各一条可证明隔离，不能证明同一授权集合内排除另一条通道。
 
-已有 Python 订阅用例覆盖默认订阅、A/B 隔离、host 范围、重连和独立取消，没有显式过滤参数行。上游固定 04 的 `rpc/subscription/service/tests.rs` 已有内存源的过滤/去重测试，`rpc/subscription/tests.rs` 已有部分非法选项/未知 ID 测试；这些是既有源码证据，本轮未执行，也不替代 Python 真实 SDK/节点集成。现有 operator 用例仅以普通 host 通道的 `NoSignatureRequired` 验证正向事件，不能声称已有两个 SDK 待签通道的初始与实时过滤夹具。
+已有 Python 订阅用例覆盖默认订阅、A/B 隔离、host 范围、重连和独立取消，没有显式过滤参数行。上游固定 04 的 `rpc/subscription/service/tests.rs` 已有内存源的过滤/去重测试，`rpc/subscription/tests.rs` 已有部分非法选项/未知 ID 测试；这些是既有源码证据，本轮未执行，也不替代 Python 真实 SDK/节点集成。现有 operator 用例仅以普通 host 通道的 `NoSignatureRequired` 验证正向事件，不能声称已有两个 SDK 待签通道的初始与实时过滤测试代码。
 
 ### Spec：本批依据
 
@@ -265,10 +265,10 @@ Testing: required
 
 本轮不改正式五列表；Gate2 在范围获确认后为上述独立行为分配 `LSP-SUBSCRIPTION-20` 起的新 ID（不复用 08/09），展开完整输入、优先级、共同断言、逐阶段及绝对总预算。仅增加未映射行，不把源码观察写成执行通过。
 
-- **真实业务对照**：复用已确认夹具，冻结真实 SDK 的 R1/S1，建立观察订阅，再应用真实 S1 产生不同 request ID 的 R2；收到事件后才查询交叉核对，最后恢复原 SDK 完成原通道。需 A/B 的分支各自核对其原通道完成及注资；不为负向输入制造假事件。
+- **真实业务对照**：复用已确认测试代码，冻结真实 SDK 的 R1/S1，建立观察订阅，再应用真实 S1 产生不同 request ID 的 R2；收到事件后才查询交叉核对，最后恢复原 SDK 完成原通道。需 A/B 的分支各自核对其原通道完成及注资；不为负向输入制造假事件。
 - **有限负向证据**：无快照结束标记，以冻结的已知待签集合和有界观察判定；按每个订阅 ID 保存全量通知，不能只检查 socket 活着。空订阅不可能收到正向事件，因此用同连接对照订阅的 R2 加空订阅自身取消 true，证明业务源推进和注册存活；仍只证明观察窗口内为空。
 - **拒绝必须来自服务端**：客户端送出原始 JSON 后检查实际 RPC 错误；本地参数异常、握手失败、过期凭证均不能算本批参数拒绝通过。非法请求前后保留整条连接的响应与通知，检查没有失败请求残留的孤立事件；不以“没有拿到订阅 ID”代替泄露检查。
-- **最小适配**：现有 `_subscription_observer.py` 已支持 options 和原始 `request`；显式 `null` 用原始请求避免被 helper 变为省略。优先新增普通 LSP 测试文件，复用现有单租户及 A/B 夹具、签名 gate 和通道终态断言。Gate2 再核对局部 helper，暂不承诺修改 SDK driver 或公共框架；不绕过单通道限制。
+- **最小适配**：现有 `_subscription_observer.py` 已支持 options 和原始 `request`；显式 `null` 用原始请求避免被 helper 变为省略。优先新增普通 LSP 测试文件，复用现有单租户及 A/B 测试代码、签名 gate 和通道终态断言。Gate2 再核对局部 helper，暂不承诺修改 SDK driver 或公共框架；不绕过单通道限制。
 - **普通任务边界**：本批不发起付款、TLC 或强关，不需要 VM、时间跳变或等待链上成熟。256/257 用重复真实 A 测请求长度，不准备 256 条通道，也不称吞吐或容量压测；不加入夜间专项。实际测试时长和固定复跑数留 Gate2 依据既有开通窗口确定，不能由本次源码阅读宣称快速通过。
 - **失败与证据**：以后执行时，前提未成立、环境失败、服务端拒绝与断言失败分别记录；固定批次遇产品失败即停，沿用已知归因，不更换版本或反复取样。现有运行记录和 TEST-MAP 保持事实含义，本轮没有新映射或测试结果。
 

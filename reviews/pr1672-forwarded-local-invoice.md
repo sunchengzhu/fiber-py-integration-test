@@ -1,6 +1,6 @@
 # PR #1672：转发 TLC 与本地同哈希发票隔离用例评审
 
-评审范围：链下已建立转发关系时，路由节点持有同 `payment_hash` 的本地 `Open` 发票及原像，转发 TLC 的等待、成功、失败不会被当作该发票的本地收款；单笔直达本地发票作为兼容性对照。转发任务刚创建但尚无下游 TLC ID 的瞬态窗口、下游即时兑现、直达与转发并发、链上重整、MPP 另列未分析或待补夹具，不计入本切片的完成范围。
+评审范围：链下已建立转发关系时，路由节点持有同 `payment_hash` 的本地 `Open` 发票及原像，转发 TLC 的等待、成功、失败不会被当作该发票的本地收款；单笔直达本地发票作为兼容性对照。转发任务刚创建但尚无下游 TLC ID 的瞬态窗口、下游即时兑现、直达与转发并发、链上重整、MPP 另列未分析或待补测试代码，不计入本切片的完成范围。
 
 源码版本：[PR #1672](https://github.com/nervosnetwork/fiber/pull/1672)；base tip / merge-base `355bd63582e5034044de3c50a5fd9ad38968aec6`，head `5b14dee72efcacf8834731e241897c98305e04c8`（2026-09-29 GitHub API 快照）。测试仓库 HEAD `a69ea9a1877f2bbaa76854fb405629a961cc8d31`，工作区有既存改动；初次评审阶段未修改测试，确认后新增本切片测试。
 
@@ -61,7 +61,7 @@ Testing: required
       - PR1672-03 [primary] -> SPEC-03：C 取消持单后对应 Fail 沿两跳返回，A 失败且无原像、B 发票仍 Open
   - B 是末跳，没有转发任务
     - PR1672-04 [primary] -> SPEC-04：直达 B 的发票照常 Paid，A 付款成功
-  - [pending] 已收到入站但仍在 `waiting_forward_tlc_tasks`、尚未记录下游 TLC ID — 需要可控阻塞下游 AddTlc 响应的夹具；下一步检查 `basic_p2p`/`p2p-tap` 是否可确定性停在此窗口
+  - [pending] 已收到入站但仍在 `waiting_forward_tlc_tasks`、尚未记录下游 TLC ID — 需要可控阻塞下游 AddTlc 响应的测试代码；下一步检查 `basic_p2p`/`p2p-tap` 是否可确定性停在此窗口
   - [pending] TLC 维护执行完成的测试屏障 — 当前仅能观察两侧 Committed，固定 sleep 不证明维护事件已执行；自动化前检查事件日志或可控测试接口能否给出有界完成信号
   - [unanalysed] C 持有原像并即时兑现转发 TLC — 与 hold 后结算共享 Fulfill 传播路径，但时序不同；下一切片从 `handle_remove_tlc` 与即时发票测试进入
   - [unanalysed] B 的直达同哈希本地收款与另一笔转发同时在途 — 单笔直达对照不能证明全局发票状态变化时仍逐 TLC 隔离；下一切片从 `SettleTlcSetCommand` 与同哈希并发测试进入

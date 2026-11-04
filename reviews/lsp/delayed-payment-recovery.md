@@ -161,15 +161,15 @@ Testing: required
 4. 满足 B 完成证据和 A 等待至少 35 秒后，在 +125 秒前取得完整混合样本，再核对安全余量、恢复 A；禁止先放行 A 再把两笔最终成功解释为互不阻塞。
 5. A 在恢复后 120 秒内完成；核对六端最终余额、每笔实际费用与 T 净收入，TLC/锁定额/待签全部清空，再稳定至少 5 秒。
 
-## Gate3 所需最小夹具与结果边界
+## Gate3 所需最小测试代码与结果边界
 
 Gate3 在 LSP Python 范围复用/扩展：现有 RetrySignatureGate 的全 HTTP 请求与 active 审计、测试 A client 经同一 gate、WS 真实关闭状态、指定请求/日志联合检查点、绝对截止传递及多付款独立上下文。未新增 Rust 测试、扩展 Rust 驱动、直接读写 RocksDB、修改公共框架或产品。
 
-运行记录将区分：检查点/期限/审计证据未成立的准备或证据失败；前提成立后提前关闭、付款失败、资金不符、跨租户阻塞等功能失败；以及依据明确原因定位的环境/夹具故障。不能把所有超时默认归给夹具；节点崩溃、付款未恢复等保留产品候选及原始证据。不能 skip、改成任一终态通过、静默换检查点或无限重跑；需实质改变检查点或预期时返回评审。
+运行记录将区分：检查点/期限/审计证据未成立的准备或证据失败；前提成立后提前关闭、付款失败、资金不符、跨租户阻塞等功能失败；以及依据明确原因定位的环境/测试代码故障。不能把所有超时默认归给测试代码；节点崩溃、付款未恢复等保留产品候选及原始证据。不能 skip、改成任一终态通过、静默换检查点或无限重跑；需实质改变检查点或预期时返回评审。
 
 本批仅证明固定版本、正常授权有效期内、这三个受控签名等待场景。长时间离线、全部 ACK/重连竞态、业务超期强关、浏览器认证、watchtower、链上资金取回仍未覆盖。用户已明确确认三行、共同检查点、预算与资金断言，Gate3 按实际执行另记结果。
 
-2026-10-23 设计复核：GPT 6.1 sol 独立只读检查固定源码、已有夹具和完整设计，最终无阻断项；未触发 Daybreak，未替代人工 Gate2 确认。`python3 scripts/check_test_map.py`：93 个评审 ID、86 个已映射，本批三行未映射，退出 1 仍为原有孤儿映射/历史 report 快照重复 ID。`python3 /Users/sunchengzhu/project/ai-test-agent/scripts/check_test_design.py --root /Users/sunchengzhu/project/fiber-py-integration-test --review reviews/lsp/delayed-payment-recovery.md`：识别 3 行，退出 1 仅报告历史重复 ID，无本批 Spec/树/用例结构错误；组合付款推断仍交人工确认。36 个相对文档路径存在，`git diff --check` 退出 0。未改自动化、产品或运行原始证据，未执行新增场景。
+2026-10-23 设计复核：GPT 6.1 sol 独立只读检查固定源码、已有测试代码和完整设计，最终无阻断项；未触发 Daybreak，未替代人工 Gate2 确认。`python3 scripts/check_test_map.py`：93 个评审 ID、86 个已映射，本批三行未映射，退出 1 仍为原有孤儿映射/历史 report 快照重复 ID。`python3 /Users/sunchengzhu/project/ai-test-agent/scripts/check_test_design.py --root /Users/sunchengzhu/project/fiber-py-integration-test --review reviews/lsp/delayed-payment-recovery.md`：识别 3 行，退出 1 仅报告历史重复 ID，无本批 Spec/树/用例结构错误；组合付款推断仍交人工确认。36 个相对文档路径存在，`git diff --check` 退出 0。未改自动化、产品或运行原始证据，未执行新增场景。
 
 2026-10-24 Gate3：三行已确认并映射到 `test_delayed_payment_recovery.py`。首轮 3/3 通过后，独立复核补齐全部付款通道的 actor 重建检查；冻结后聚焦 1 轮和固定 3 轮共 12/12 通过。首轮及所有复跑的原始证据均保留，详见[本批运行记录](../../test_cases/fiber/devnet/lsp/README.md#24b5c38真实付款延迟签名恢复2026-10-24)。本段不改变已确认的用例、预算或资金断言。
 
