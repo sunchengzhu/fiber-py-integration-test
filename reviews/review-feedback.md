@@ -24,3 +24,4 @@
 - model: unavailable | cases: PR #1623 核心逻辑覆盖与Gate1范围 | feedback: 你说的是执行进度 我问你的是测试用例实现完整度 有没有包含这个pr核心逻辑的测试 你一直没搞清方向
 - model: unavailable | cases: LSP-DELIVERY-05 | feedback: 经 56c761c 源码与提交 d96dfecb 确认，replay 识别先于 accept_on_channel；同 key 改金额预期改为 existing-key 冲突，金额校验另用不同 TLC/key 覆盖。
 - model: unavailable | cases: LSP-PAYMENT-04 | feedback: SDK 正常记录 revoked commitment；测试改为比较稳定身份字段并允许新增撤销记录，同时在 release 前等待发票 Received，不要求整个 status 文件不变。
+- model: unavailable | cases: LSP-TENANT-QUERY-01 | feedback: 不真实开资金通道的测试没有意义；改为真实 A/B 注册、真实 funding/ChannelReady 通道和真实发票的黑盒场景，不用未注资的 unsigned channel 代替。
