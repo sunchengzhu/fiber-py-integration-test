@@ -45,7 +45,10 @@ class TestChannelSigningRecovery(ChannelSigningTestBase):
         self.tenant["status_file"].unlink()
         started = time.monotonic()
         self.tenant["agent"] = subprocess.Popen(
-            self.tenant["command"], stdout=self.tenant["log"], stderr=subprocess.STDOUT
+            self.tenant["command"],
+            stdout=self.tenant["log"],
+            stderr=subprocess.STDOUT,
+            env={**os.environ, "LSP_NODE_ID": str(self.public_key)},
         )
         self.addCleanup(stop_agent, self.tenant["agent"])
         assert self.tenant["agent"].pid != self.old_sdk_pid

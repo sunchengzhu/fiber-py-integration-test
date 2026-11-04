@@ -1,5 +1,35 @@
 # Hosted LSP 通道签名集成测试
 
+## 56c761c P0-1 定点复验（2026-11-02）
+
+候选 `56c761c45c271c086b05c8d5ea3e033448f5fdf8`（PR #1623 当前 head）的定点复验结果；详细审计、兼容性发现和证据索引见
+[P0-1 AUDIT](../../../../report/lsp-p0-1/AUDIT.md)。本节不改变任何用例行，也不代表 76 场景全量通过。
+
+| 项目 | 结果 | 说明 |
+| --- | --- | --- |
+| 构建 | 成功 | `fnn Fiber v0.10.0-rc1 (56c761c)`；产品源码 clean |
+| 核心 smoke | 6/6 通过 | `SIGN-01/02/03`、`RECOVERY-01/05`、`RETRY-01` |
+| `LSP-WATCHTOWER-02` | 1 passed（361.99s） | 候选含 `3ce369e5`；未批准拒签 + 显式批准后结算；历史 D=S 判据 |
+| `LSP-WATCHTOWER-03/04` | 2/2 通过 | 843 无结果，候选补齐跨租户读取/提交隔离 |
+| `LSP-TIMEOUT-01/02` | 2/2 通过（242.30s） | 外部注资中止 + 晚到钱包签名拒绝；04/05 仍等 #1674 |
+| `LSP-RECOVERY-02/03/04/06/07` | 5/5 通过 | 4 条重启项补 `LSP_NODE_ID` 后 4 passed；04 首轮通过 |
+| `LSP-RETRY-05/06` | 2/2 通过 | HTTP 超时恢复 + 支付幂等结算 |
+| `LSP-INVOICE-CANCEL-02` | 1 passed（99.95s） | 合约对齐 + deployed adapter + `Received` 等待后通过 |
+| `LSP-INVOICE-CANCEL-01` | 1 passed（92.67s） | 本地授权后显式提交被扣住签名；`RemoveAckConfirmed` 按终态记录过滤 |
+| `LSP-SUBSCRIPTION-01～28` | 全部通过 | 01～13 / 14～19 / 20～28 三批共 37 methods 通过 |
+| `LSP-PAYMENT-01～03` | 3/3 通过 | 02 修重启环境变量后 133.17s 通过 |
+| `LSP-WATCHTOWER-05` | 1 passed（179.16s） | 独立收款目的地拒绝运营方付款 |
+| `LSP-TIMEOUT-03/06/11/12` | 4/4 通过（808.87s） | 03/06/11/12 |
+| `LSP-TIMEOUT-07/08/10` | 3/3 通过（927.60s 同批） | 受控强关/恢复窗口 |
+| `LSP-TIMEOUT-04/05` | 失败（#1674） | 当前 head 仍复现已知开通超时问题 |
+| `LSP-PAYMENT-04` | 1 passed（125.00s） | 比较稳定身份字段，允许正常 revoked commitment 记录 |
+| `LSP-RECOVERY-08` | 1 passed（195.95s） | 十笔连续付款 + 第 9 笔恢复 |
+| `LSP-DELIVERY-01/03/04/06` | 4/4 通过（550.82s） | 同批 05 失败；02 已单独失败 |
+| `LSP-DELIVERY-05` | 1 passed（117.13s） | 按现有 replay 优先行为，预期同 key 改金额返回 existing-key 冲突 |
+| `LSP-DELIVERY-02` | 失败（产品一致性） | 原 K 失败但下游成功；最终资金/30秒稳定未执行 |
+
+测试侧为候选版本做了临时适配（`lsp_node_id`、`LSP_RETEST_REVISION`、取消合约对齐/deployed adapter、delivery `HostedDeliveryPort` wrapper）；这些是测试代码调整，不是产品改动。WATCHTOWER-01/06、INVOICE-CANCEL-03、REFUND-01～03 等其余无当前版本结果项未在本轮展开。56c761c 当前 head 已有 70/76 结果（67 通过、3 个已知产品失败），其余 6 个为未自动化、契约未确认或 843 已接受的退款；可执行测试项已收口。 夜间两轮稳定性回归各 67 passed；12 个 error 均为过滤器组触发批次截止（单独运行 12/12 通过），不是产品失败。issue 1616 待用户确认整体收口后回写。
+
 ## 84333ee 收尾结论与新会话入口（2026-10-31）
 
 **本轮专项测试已带已知问题收尾；不建议对产品提交给出无条件合并通过。** 用户已取消多 preimage 本地补跑，不再扩充场景、启动测试或补退款第3/4轮。下方历史章节中的“下一批”“待今晚执行”“需补跑”等计划，以本节最终决定为准。
@@ -209,7 +239,7 @@ venv/bin/python -m pytest -vv -s --tb=short --durations=20 \
 | --- | --- |
 | `LSP-SUBSCRIPTION-10` | 测试沿用的旧 Bruno operator token 缺少 `write("subscriptions")`，认证层直接返回 Unauthorized。已在本地驱动用公开 devnet 测试私钥签发具备 subscriptions 写权限、channels 读权限且无 tenant/node 身份的 host 凭据。首个复跑通过认证后又发现准备金额恰好等于自动接受门槛，辅助方法与节点对相等边界的判断不同，导致重复 accept；已仅将本用例改为严格高于门槛的金额，不触发额外付款。两次修复均保留原断言。 |
 | `LSP-TIMEOUT-04/05` | 已知产品问题 [Fiber #1674](https://github.com/nervosnetwork/fiber/issues/1674)：180/60 秒配置正确，安装钱包签名后未重新安排普通期限；第 60 秒的旧检查被忽略且不重排，240 秒内未中止。05 失败于中止前提，尚未执行晚到签名。源码见 `channel.rs` 的 `post_start`、`install_external_funding_signed_tx`、`CheckFundingTimeout`；不延长等待或修改产品。 |
-| `LSP-TIMEOUT-08/10` | 旧夹具的“A 必然先强关”假设失效：A/T 在同一 TLC 截止都尝试强关，本轮 T 的交易先确认，A 被 `RBFRejected`。对端关闭扫描周期为 300 秒，本例只等 60 秒，不能据此断言 A 永久卡死。即使复跑 A 获胜，也不能将这一不确定性记为修复；需要重新评审归因与夹具，当前不改为“任一方关闭即通过”。 |
+| `LSP-TIMEOUT-08/10` | 旧测试方案的“A 必然先强关”假设失效：A/T 在同一 TLC 截止都尝试强关，本轮 T 的交易先确认，A 被 `RBFRejected`。对端关闭扫描周期为 300 秒，本例只等 60 秒，不能据此断言 A 永久卡死。即使复跑 A 获胜，也不能将这一不确定性记为修复；需要重新评审归因与测试方案，当前不改为“任一方关闭即通过”。 |
 
 上述 deadline 自动化和评审预期本次未改。它们保留在完整回归中，失败与已通过的订阅迁移分开交接。
 
@@ -225,7 +255,7 @@ JUnit（本地证据：`report/lsp-subscription-24b5c38/regression-final.xml`）
 
 最终仅 `LSP-TIMEOUT-04/05` 失败，均为 240 秒内未中止；节点数据保存在 `final-failures/`。
 `LSP-TIMEOUT-08/10` 本轮通过，但自动化未修改，首轮双方强关竞争的风险仍在，不能宣称已修复或稳定通过。
-修复这个归因问题需要重新设计能区分两方保护的夹具，不能通过放宽为任意关闭交易来满足原有预期。
+修复这个归因问题需要重新设计能区分两方保护的测试场景，不能通过放宽为任意关闭交易来满足原有预期。
 
 本轮 FNN 付款重启的故障切断阶段出现一次 WebSocket 库内部 `EOFError: stream ended` 日志；
 随后新订阅、完整待签交付、付款终态及清理均通过。该日志与底层库关流竞态一致，未作为业务失败或通过依据。
@@ -259,7 +289,7 @@ GPT 6.1 sol 已独立复核最终代码、同源构建摘要、TEST-MAP 及实�
 | --- | --- | --- | --- |
 | `LSP-TIMEOUT-04` | 等待中止失败 | 同样失败 | 外部注资完成后的普通开通计时器调度缺口 |
 | `LSP-TIMEOUT-05` | 等待中止失败 | 同样失败 | 与 04 共因；尚未执行晚到通道签名提交 |
-| `LSP-TIMEOUT-08` | A 的强关交易未确认 | 通过 | 两方强关竞争；原夹具不能保证 A 的承诺获胜 |
+| `LSP-TIMEOUT-08` | A 的强关交易未确认 | 通过 | 两方强关竞争；原测试方案不能保证 A 的承诺获胜 |
 | `LSP-TIMEOUT-10` | A 的强关交易未确认 | 通过 | 同上；本轮通过没有消除首轮暴露的风险 |
 
 ### 04/05 的复现入口和具体步骤
@@ -396,7 +426,7 @@ RBF rejected: Tx's current fee is 457, expect it to >= 1142 to replace old txs
 会记录实际确认交易哈希，双方最终可能观察到同一交易。本轮两条实际失败在确认等待阶段，尚未走到此额外断言。
 
 最终轮 08/10 均为 PASS（日志（本地证据：`report/lsp-subscription-24b5c38/regression-final.log`）第 1716～1717、1930 行），
-期间没有修改 deadline 测试或产品。正确结论是原夹具无法稳定排除双方竞争，不能把这次通过记为修复。
+期间没有修改 deadline 测试或产品。正确结论是原测试方案无法稳定排除双方竞争，不能把这次通过记为修复。
 这只解释了失败的直接原因，**尚不能排除 A 交易被拒后无法正确识别对端关闭的产品缺陷**，该恢复路径未在失败窗口内验证完成。
 后续明确区分“A 已启动保护”“哪方承诺实际确认”“对端关闭如何被识别”；
 [08/10 稳定性改造 Gate1](../../../../reviews/lsp/channel-signing-deadline-scope.md#0810-稳定性改造范围)与 [Gate2 完整用例及共同断言](../../../../reviews/lsp/channel-signing-deadline.md)均已获用户确认，本轮 Gate3 已完成。Python 已接入广播隔离；前述旧两轮结果不作为新版通过证据，本轮运行在下一节单独留档。自然竞争后败方的恢复仍是未排除的产品疑点。
@@ -614,7 +644,7 @@ PYTHONUNBUFFERED=1 venv/bin/python -m pytest -o addopts= -vv -s --tb=short --dur
 
 静态编译与单条收集均退出 0；最终 `git diff --check`、冻结代码比较、61 个本批本地链接/锚点及空白检查均退出 0。AST 对比原有 52 个方法，仅 setup 增加 12 专用分支，其他 51 个方法保持不变。已批准 11 行仅修改 12 的映射复选框，业务预期未变。固定产品源码 HEAD 仍为上述 SHA、工作区干净；未改产品、驱动或公共框架，保留原有无关本地改动。最终静态检查原始输出（本地证据：`report/lsp-spec09-24b5c38.Xv5YGO/final-static.log`）及退出码（本地证据：`report/lsp-spec09-24b5c38.Xv5YGO/final-static.exit`）保留。
 
-**GPT 6.1 sol 独立终审完成，无阻断项，未触发 Daybreak。** 已核对代码、4/4 原始恢复证据、08/10 的 2/2 结果及四份最终文档一致性；所有七次 pytest 尝试的退出码与 JUnit 相符，两个早期夹具失败完整保留。本条只验证所取得的受控 B 败方关闭识别；不证明无干预竞态概率、A 受控时序、watchtower 结算或链上资金取回。本轮没有发现新的产品失败；已知 04/05 问题继续沿用 #1674，未在本批重跑或宣称解决。
+**GPT 6.1 sol 独立终审完成，无阻断项，未触发 Daybreak。** 已核对代码、4/4 原始恢复证据、08/10 的 2/2 结果及四份最终文档一致性；所有七次 pytest 尝试的退出码与 JUnit 相符，两个早期测试准备失败完整保留。本条只验证所取得的受控 B 败方关闭识别；不证明无干预竞态概率、A 受控时序、watchtower 结算或链上资金取回。本轮没有发现新的产品失败；已知 04/05 问题继续沿用 #1674，未在本批重跑或宣称解决。
 
 ## 历史签名通知运行记录（4028884）
 
@@ -723,7 +753,7 @@ CKB_CLI_HOME=/tmp/lsp-payment-cli.VIpJiT PYTHONUNBUFFERED=1 venv/bin/python -m p
 `2 passed in 169.87s (0:02:49)`，退出 0，无失败、错误或跳过。
 04 请求未送达后真实重订阅耗时 3.096 秒；05 真正 Applied 后响应未写出，SDK 自然超时 10.003 秒，
 随后 11.126 秒取得新订阅，旧 S1 幂等和新 R2 保留等既有断言继续成立。
-这是受影响共享夹具的相关回归，不代表本轮重新跑过全部 44 条。
+这是受影响共享测试准备的相关回归，不代表本轮重新跑过全部 44 条。
 
 GPT 6.1 sol 独立复核最终代码、冻结摘要、构建版本、四轮 JSONL/HTTP/WS/FNN 原始证据、JUnit 和退出码，
 确认新增 **12/12** 与相关旧回归 **2/2** 的断言和执行结果一致；首轮 actor 检查遗漏已补齐，当前无本范围剩余阻断项。
@@ -797,7 +827,7 @@ JUnit 两条零失败/错误/跳过、token 格式与原始 WS/HTTP 证据，并
 
 | 尝试 | 原始结果 | 归因与处理 |
 | --- | --- | --- |
-| selfcheck-1 | `1 failed in 194.82s`，退出 1 | 测试夹具开启 ack-held-events 后只放行 gate，没有明确提交扣住的首次开通签名；未完成通道准备。已修复，保留原始结果 |
+| selfcheck-1 | `1 failed in 194.82s`，退出 1 | 测试代码开启 ack-held-events 后只放行 gate，没有明确提交扣住的首次开通签名；未完成通道准备。已修复，保留原始结果 |
 | selfcheck-2 | `1 failed in 97.11s`，退出 1 | A/B 真实通道开通后，watchtower-configure 返回 `contract bytes differ: commitment-lock`；环境预检未满足，未进入强关、自检主体或产品四条 |
 
 两次命令主体相同，仅使用各自目录：
@@ -819,9 +849,9 @@ PYTHONUNBUFFERED=1 venv/bin/python -m pytest -o addopts= -vv -s --tb=short \
 - 本地 `source/contract/fiber/commitment-lock` 与固定 04 上游 `tests/deploy/contracts/commitment-lock` **逐字节一致**，均为 80,880 字节；SHA256 `a7762721ef239b15adbdddca8d772db6e1c001d9f81e23ccc74e1392329931d7`。不是选错本地文件，也不能因 Type ID/code_hash 相同就忽略数据差异。
 - 链来自 `framework/basic_fiber.py` 的 `source/fiber/data.2026.0929.tar.gz` 快照。该路径没有在本批自动更新合约；当前证据只能确定部署内容不符，不宣称已识别链上二进制的源码版本或 Fiber 产品 bug。
 
-GPT 6.1 sol 已独立复核两份合约、原始无注入链响应、selfcheck-2 JUnit/退出码及干净产品版本，确认这是环境前置阻断，未触发 Daybreak。代码曾经复核提出的夹具/计时/断言问题已据反馈修正，**仍需在合约环境修正后通过完整适配自检、正式 1+3 批次与最终结果复核，当前不能宣布 Gate3 完成**。
+GPT 6.1 sol 已独立复核两份合约、原始无注入链响应、selfcheck-2 JUnit/退出码及干净产品版本，确认这是环境前置阻断，未触发 Daybreak。代码曾经复核提出的测试代码/计时/断言问题已据反馈修正，**仍需在合约环境修正后通过完整适配自检、正式 1+3 批次与最终结果复核，当前不能宣布 Gate3 完成**。
 
-恢复入口：先由用户决定环境处理。建议仅为本批建立明确隔离的临时 devnet 工作副本，在开通前将同一 CommitmentLock Type ID 更新为已固定并核对摘要的 04 合约，再重新执行全套预检；原始快照、旧历史环境和证据继续保留。这是待确认方案，本轮未实施。已批准 Gate2 明确“字节不符失败，不自动部署或升级”，故不能静默接受链上旧字节、换信任源或跳过校验。环境恢复后还需复核 funds/sponsor 夹具和全部 selfcheck 分支；不要仅重跑正式四条。
+恢复入口：先由用户决定环境处理。建议仅为本批建立明确隔离的临时 devnet 工作副本，在开通前将同一 CommitmentLock Type ID 更新为已固定并核对摘要的 04 合约，再重新执行全套预检；原始快照、旧历史环境和证据继续保留。这是待确认方案，本轮未实施。已批准 Gate2 明确“字节不符失败，不自动部署或升级”，故不能静默接受链上旧字节、换信任源或跳过校验。环境恢复后还需复核 funds/sponsor 测试准备和全部 selfcheck 分支；不要仅重跑正式四条。
 
 本轮最终静态验证：构建 `build-9` 退出 0；清单全部产物与驱动/适配源码摘要匹配。`pytest --collect-only` 为 `5 tests collected in 0.16s`（四条正式方法、一条适配自检），退出 0；Python 编译、文档本地链接和 `git diff --check` 通过。映射检查为 97 个评审 ID / 93 个有映射，退出 1，仅报告既有六个孤儿映射和历史 overlay 的 16 个重复 ID；设计检查识别四行，退出 1，同样既有重复 ID及 SPEC-02 的 inference 人工决策提示（用户本轮已明确接受）。这些静态结果不代表功能通过。检查输出见同目录 `collect-final.log/.exit`、`test-map.log/.exit`、`test-design.log/.exit`。结束时本批固定端口无监听，`tmp` 为 0B。
 
@@ -873,7 +903,7 @@ GPT 6.1 sol 最终独立复核通过，未触发 Daybreak：两份 JUnit 与真�
 
 用户明确通过 [14～19完整行集、共同断言及预算](../../../../reviews/lsp/signing-subscriptions.md#浏览器鉴权-gate2共同断言输入与预算04c2064)后完成本批Gate3。`test_browser_signing_subscriptions.py` 对应6个行为、11个独立方法：五种握手错误与两种缺权限输入独立执行；正常接入、编码兼容、无效Biscuit、双租户隔离各一条。正式聚焦加固定三轮共 **44/44通过**；共用改动相关的既有订阅回归 **14/14通过**。每批零失败、错误或跳过；没有将探索轮计入正式结果，也不表示所有LSP模块已全量回归。
 
-固定FNN/SDK源码为干净的 `04c206465b48da85b99aa58e80afe9801a2cb2db`。共用观察器仅增加可选子协议与握手预算参数；本地测试驱动新增有效padding凭证夹具，先验证原token签名并保留唯一tenant/node，仅用公开devnet测试私钥签发。旧缺权限分支及默认Bearer行为保持。没有修改FNN/SDK产品代码、更新链上合约或扩展Rust压力测试。
+固定FNN/SDK源码为干净的 `04c206465b48da85b99aa58e80afe9801a2cb2db`。共用观察器仅增加可选子协议与握手预算参数；本地测试驱动新增有效padding 凭证测试数据，先验证原token签名并保留唯一tenant/node，仅用公开devnet测试私钥签发。旧缺权限分支及默认Bearer行为保持。没有修改FNN/SDK产品代码、更新链上合约或扩展Rust压力测试。
 
 ### 实际结果和修正
 
@@ -886,7 +916,7 @@ GPT 6.1 sol 最终独立复核通过，未触发 Daybreak：两份 JUnit 与真�
 | stability-3 | `11 passed in 918.65s` | 0 | 固定复跑第3轮 |
 | related-subscriptions | `14 passed in 1127.42s` | 0 | 旧Bearer订阅方法回归，单列不计入新44实例 |
 
-初审修正了三个夹具问题：unittest可能吞掉一次性清理alarm，改为逐回调使用同一剩余30秒截止；核心浏览器证据先落盘，再复制体积较大的节点目录；终态增加host侧精确通道集合断言。追加核对发现原断言只比较双方完整outpoint和原funding hash，仍应独立检查输出索引0；依据固定 `channel.rs::get_funding_transaction_outpoint()` 补上最后4字节为0，因此人工中断探索轮后重新执行正式1+3。没有发生产品断言失败，未把被中断方法或补充前结果当成最终断言通过。
+初审修正了三个测试代码问题：unittest可能吞掉一次性清理alarm，改为逐回调使用同一剩余30秒截止；核心浏览器证据先落盘，再复制体积较大的节点目录；终态增加host侧精确通道集合断言。追加核对发现原断言只比较双方完整outpoint和原funding hash，仍应独立检查输出索引0；依据固定 `channel.rs::get_funding_transaction_outpoint()` 补上最后4字节为0，因此人工中断探索轮后重新执行正式1+3。没有发生产品断言失败，未把被中断方法或补充前结果当成最终断言通过。
 
 每条新用例保存真实101/400、协商协议不回显凭证、RPC错误与无授权通知、完整R1/R2及原SDK完成证据。终态检查双方ChannelReady/NoSignatureRequired、原funding hash及index 0、注资committed、余额相互对应、无pending TLC、host/tenant无额外通道及连续稳定窗口。初始/后续事件阶段、业务完成和整体预算均使用共享截止；不按连接或租户倍增等待，不重试筛掉失败。四个正式新批次使用同一冻结源码，均完整运行11个方法。
 
@@ -921,7 +951,7 @@ GPT 6.1 sol 完成代码和最终运行结果的独立复核，未触发Daybreak
 
 本地证据根（相对仓库根目录，不提交）：`report/lsp-watchtower-isolated-04c2064-20261027/`。每轮 `.log/.xml/.exit`、各方法 SDK/FNN/CKB 与 HTTP/WS/独立链审计均保留；类级 `*-isolated-contract.json` 保存更新前后代码 cell、交易与 canonical header。`selfcheck-*-sources`、`pre-change`、`final-sources` 和 `final-v2-sources` 区分实现版本，不覆盖旧 24/04 结果。
 
-### 夹具修正与全部尝试
+### 测试代码修正与全部尝试
 
 | 批次 | 实际结果 | 归因/计数 |
 | --- | --- | --- |
@@ -934,7 +964,7 @@ GPT 6.1 sol 完成代码和最终运行结果的独立复核，未触发Daybreak
 | stability-1（旧观察循环） | setup 中主动中断，`no tests ran in 82.47s`，退出 2 | 因上述采样偏差停止计划；后两轮未运行 |
 | selfcheck-6（修正后） | `1 passed in 113.57s`，退出 0 | 新冻结源码自检通过，正式完整 1+3 另行重新计数 |
 
-远端承诺修正依据固定 SDK `lifecycle.rs::complete`：只有持有 peer partial 时才保存聚合签名；A 的 `for_remote=true` 记录可以已验证但 `complete_signature=None`。`signer.rs::prepare_onchain` 不要求该字段。取消 Python/Rust 测试夹具的错误过滤，仍要求唯一已验证记录、T 强关方向、规范化消息、原 funding、可信 deps、真实 canonical 确认及 SDK 完整链验证；不伪造记录或签名。费用模板改为读取 T 持久化的 `commitment_contract_features.lock_args_len()`，不按失败交易反推费用或提高批准上限。
+远端承诺修正依据固定 SDK `lifecycle.rs::complete`：只有持有 peer partial 时才保存聚合签名；A 的 `for_remote=true` 记录可以已验证但 `complete_signature=None`。`signer.rs::prepare_onchain` 不要求该字段。取消 Python/Rust 测试代码的错误过滤，仍要求唯一已验证记录、T 强关方向、规范化消息、原 funding、可信 deps、真实 canonical 确认及 SDK 完整链验证；不伪造记录或签名。费用模板改为读取 T 持久化的 `commitment_contract_features.lock_args_len()`，不按失败交易反推费用或提高批准上限。
 
 观察循环改为每秒目标调度，每次检查受 2s 截止约束；实际采样完成间隔显式 `<=2s`，最后一次成功采样须覆盖 130s/65s 后才结束。证据记录 `samples`、`max_sample_gap` 和实际时长。原负向 140s、稳定 75s及业务总预算不变。上述修正均已由 GPT 6.1 sol 只读复核，未触发 Daybreak。
 
@@ -1023,7 +1053,7 @@ GPT 6.1 sol 已独立复核代码、自检、聚焦及复跑失败的原始资�
 4. 批准后约 120 秒，把完整 SDK 存储复制到独立目录，对**全部** pending 逐项执行与既有适配器相同的唯一 recovery ancestor、可信 deps、所有输入、目的地/sponsor、费用及 SDK `prepare_onchain` 检查，然后立即返回。无签名、提交、rounds 更新或故障注入；Fiber RPC URL 故意为不可用的 `127.0.0.1:1`，不初始化 Agent，不运行事件循环。它读取副本身份密钥以打开 signer，但不输出密钥。执行前后副本四个文件摘要完全相同。
 5. 满 240 秒后再采集 RPC、全部 pending、资金账本和产品 checkpoint。读取前后 checkpoint 的实际 DB，与相应直读的 `raw_state` 逐字节一致，排除只复制运行中目录或旧快照导致的假象。
 
-诊断脚本及原始证据根（相对仓库根，不提交）：`report/lsp-watchtower02-diagnosis-04c2064-20261027/`。入口为 `test_watchtower02_diagnosis.py`，只继承已批准夹具并复制 02 的拒签/负向部分；不替换正式映射测试。命令如下（本机端口需要允许本地节点运行的执行环境；复跑使用新 RUN）：
+诊断脚本及原始证据根（相对仓库根，不提交）：`report/lsp-watchtower02-diagnosis-04c2064-20261027/`。入口为 `test_watchtower02_diagnosis.py`，只继承已批准测试方案并复制 02 的拒签/负向部分；不替换正式映射测试。命令如下（本机端口需要允许本地节点运行的执行环境；复跑使用新 RUN）：
 
 ```bash
 CKB_CLI_HOME=/tmp/lsp-watchtower02-diagnosis-cli-20261027 \
@@ -1083,7 +1113,7 @@ PYTHONUNBUFFERED=1 PYTHONPATH="$PWD" venv/bin/python -m pytest -o addopts= -vv -
 | attempt-3 | `1 error in 37.91s`，退出 1 | 启动命令误回到沙箱内，同样在 CKB 准备阶段失败；原日志重命名归档，未丢弃 |
 | attempt-4 | `1 passed in 485.37s`，退出 0 | **仅代表目标陈旧场景和完整诊断观测成功取得，产品恢复结果为失败**；不计正式02通过 |
 
-只读工具的全部构建日志也保留：首次误用默认 Rust 1.91.1（固定源码要求 1.95.0），第二次发现当前 RocksDB iterator 无 `status()` 方法，修正后 reader 编译成功；validator 在执行前对齐内部 Settlement 枚举与 RPC tagged JSON，最终编译成功。它们是诊断工具准备问题，不计产品失败；没有重编/替换 FNN 或正式 SDK driver。`original-sources/` 保留本轮开始时的正式夹具、适配器、驱动与构建清单，正式文件保持一致。
+只读工具的全部构建日志也保留：首次误用默认 Rust 1.91.1（固定源码要求 1.95.0），第二次发现当前 RocksDB iterator 无 `status()` 方法，修正后 reader 编译成功；validator 在执行前对齐内部 Settlement 枚举与 RPC tagged JSON，最终编译成功。它们是诊断工具准备问题，不计产品失败；没有重编/替换 FNN 或正式 SDK driver。`original-sources/` 保留本轮开始时的正式测试代码、适配器、驱动与构建清单，正式文件保持一致。
 
 GPT 6.1 sol 已独立复核只读导出、只检 helper、复制存储摘要、真实 pending/链/SDK 结果、三次处理与完整窗口，未触发 Daybreak。本次新增的结论是**已证实有效后继请求被旧项遮蔽，显式批准后在完整窗口内仍不恢复，属于产品 bug**；四条正式稳定性验收仍未完成。
 
@@ -1093,7 +1123,7 @@ GPT 6.1 sol 已独立复核只读导出、只检 helper、复制存储摘要、�
 
 用户要求根据 [jjy 的修复说明](https://github.com/nervosnetwork/fiber/issues/1706#issuecomment-6461510181)重新编译并复用调整后的本地用例。固定验证提交为 `3ce369e5c4b224638817ab99aec8c3e0fcb85d3a`，父提交是历史失败版本 `04c2064`；查询时 PR head 已为 `84333eea8488a8afc7e4474aa4bbd0e7e973cee9`，本轮不将定点结果转记到该 head。
 
-当前无 TLC 的四条及适配自检位于 `test_watchtower_settlement.py`。本轮未修改用例预期或断言、未改产品代码；仅给构建脚本增加显式版本/缓存目录参数，给普通 LSP 夹具增加单次命令的 `LSP_TEST_REVISION`，默认仍是 04。
+当前无 TLC 的四条及适配自检位于 `test_watchtower_settlement.py`。本轮未修改用例预期或断言、未改产品代码；仅给构建脚本增加显式版本/缓存目录参数，给普通 LSP 测试代码增加单次命令的 `LSP_TEST_REVISION`，默认仍是 04。
 
 修复仅修改 `watchtower/actor.rs` 及其上游测试：扫描到已确认交易的输入后，清理引用已花费输入的 pending 和 signed 项，保留有效并发工作和 last_applied，再发布状态。SDK API、合约、Cargo.lock 未变。使用独立源码 `download/fiber/source-pr-1623-3ce369e/` 和独立产物 `download/fiber/pr-1623-3ce369e/`；原源码仍干净固定 04，原快照、合约及 04 构建清单摘要核对不变。
 
@@ -1281,7 +1311,7 @@ GPT 6.1 sol产物、首轮及最终证据复核均通过，未触发Daybreak。�
 | 合法后继commitment | 49,999,999,543 |
 | 实际交易费 | 785 |
 
-原SDK `prepare_onchain`确实被调用，返回`prepared=false`，最先拒绝层级为`sdk_sponsor`，原始错误：`invalid signing content: commitment validation: fee input is not approved plain CKB`。这不是旧夹具的提前拦截。后续65.546秒、66次采样、最大间隔1.181秒内，零A Settlement签名提交、SDK snapshot不变、批准未改变，沿真实链未发现A份额解锁；没有调用sign/submit或广播该候选。
+原SDK `prepare_onchain`确实被调用，返回`prepared=false`，最先拒绝层级为`sdk_sponsor`，原始错误：`invalid signing content: commitment validation: fee input is not approved plain CKB`。这不是旧测试方案的提前拦截。后续65.546秒、66次采样、最大间隔1.181秒内，零A Settlement签名提交、SDK snapshot不变、批准未改变，沿真实链未发现A份额解锁；没有调用sign/submit或广播该候选。
 
 GPT6.1sol已独立核对本次schema自检、固定版本与复用产物、旧02的拒签/Applied/witness/资金，以及05的真实授权、错误候选、原SDK拒绝、连续观察和清理记录，复核通过。**05通过只说明独立D_A批准下，当前真实候选被sponsor约束拒绝；不证明输出目的地校验已经执行，不证明产品已修复或A已独立到账。** 新01/06仍等待修复版本，未执行，退款夜跑未启动。
 
@@ -1329,11 +1359,11 @@ TEST-MAP仍为六个ID均已映射，场景勾选表示有代码，不表示六�
 
 第二批停下并修正测试薄包装公钥类型后，在新证据根 `report/lsp-delivery-84333ee-20261029T215109/` 启动第三批，固定产品/SDK仍为84333ee。旧两批证据与原快照均保留。预检、独立缓存与薄包装构建通过，`build-wrapper.exit=0`（142.2秒）；进程内回复端口 `transport-selfcheck.exit=0`（约2.0秒），其事件明确标记只测内存传输、不是产品通过。
 
-真实正常付款对照已启动CKB、两台FNN、SDK租户和通道准备；在正式付款前 `_DeliveryBase.setUp()` 请求控制端 `status` 时，Unix socket 已连接但2秒内没有回复，pytest `normal-control.exit=1`，JUnit为1 failed、0 passed，整批 `status=stopped`、`batch.exit=1`。原始 `normal-control.log/.xml`、FNN/CKB/SDK/事件/观察日志在本批证据根。根因有直接证据：薄包装控制端先绑定socket，再以**未携带Biscuit Bearer token** 的 HTTP 客户端循环调用 `node_info`；`fiber-1/node.log` 持续记录 `Biscuit authorization failed ... no authorization header`，`events.jsonl` 为空，控制端未进入socket accept循环，也未发出 `ready`。这属于测试侧控制端鉴权缺陷，不能通过延长Python的2秒socket等待来证明夹具合格，更不是843产品失败。
+真实正常付款对照已启动CKB、两台FNN、SDK租户和通道准备；在正式付款前 `_DeliveryBase.setUp()` 请求控制端 `status` 时，Unix socket 已连接但2秒内没有回复，pytest `normal-control.exit=1`，JUnit为1 failed、0 passed，整批 `status=stopped`、`batch.exit=1`。原始 `normal-control.log/.xml`、FNN/CKB/SDK/事件/观察日志在本批证据根。根因有直接证据：薄包装控制端先绑定socket，再以**未携带Biscuit Bearer token** 的 HTTP 客户端循环调用 `node_info`；`fiber-1/node.log` 持续记录 `Biscuit authorization failed ... no authorization header`，`events.jsonl` 为空，控制端未进入socket accept循环，也未发出 `ready`。这属于测试侧控制端鉴权缺陷，不能通过延长Python的2秒socket等待来证明测试代码合格，更不是843产品失败。
 
 构建资格158.636秒、自检2.182秒、正常对照到失败89.57秒；总单调时钟253.202秒，未触及120分钟上限。按资格失败即停，`LSP-DELIVERY-01～06` **0/6未运行**，没有真实接纳/重投或付款结果。收尾通过：产品和原工作区状态与预检一致，`residual-processes.json` 的本批进程组全部 absent，指定六个IPv4 TCP端口均为 `ECONNREFUSED`；清理范围不扩写为全系统进程清单。
 
-停批**之后**仅修测试侧控制端：Python传入原bundle中已经用于FNN RPC的 `operator-token` **路径**，Rust用该token为本机 `node_info` 设置 `Authorization: Bearer`，保留90秒有界就绪和后续 `NodeInfo` 邮箱屏障。GPT6sol按843源码及既有夹具复核认证API、token来源和自检分支，未发现确定阻断；`rustfmt --edition 2021 --check`、Python AST与`git diff --check`退出0。此修正尚未重编或运行；第三批冻结的源码 `.snapshot` 保留原未认证版本。六行TEST-MAP及评审复选框不变，映射仍不等于验证通过。
+停批**之后**仅修测试侧控制端：Python传入原bundle中已经用于FNN RPC的 `operator-token` **路径**，Rust用该token为本机 `node_info` 设置 `Authorization: Bearer`，保留90秒有界就绪和后续 `NodeInfo` 邮箱屏障。GPT6sol按843源码及既有测试代码复核认证API、token来源和自检分支，未发现确定阻断；`rustfmt --edition 2021 --check`、Python AST与`git diff --check`退出0。此修正尚未重编或运行；第三批冻结的源码 `.snapshot` 保留原未认证版本。六行TEST-MAP及评审复选框不变，映射仍不等于验证通过。
 
 ## 84333ee 接纳一致性 Gate3：第四批通道快照序列化停批（2026-10-29）
 

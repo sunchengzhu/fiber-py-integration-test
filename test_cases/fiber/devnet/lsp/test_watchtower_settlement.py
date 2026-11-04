@@ -20,6 +20,7 @@ from test_cases.fiber.devnet.lsp._lsp_test import (
     ChannelSigningTestBase,
     BUNDLE,
     REVISION,
+    RETEST_REVISION,
 )
 
 
@@ -1096,7 +1097,9 @@ class TestWatchtowerDestinationRejection(_WatchtowerBase):
         3. 连续65秒核对零签名提交及A份额未解锁，保留拒绝层级。
         """
         # 1. 固定A独立退出地址和T赞助地址，持久化原SDK批准。
-        assert REVISION == "84333eea8488a8afc7e4474aa4bbd0e7e973cee9"
+        assert REVISION == "84333eea8488a8afc7e4474aa4bbd0e7e973cee9" or (
+            RETEST_REVISION is not None and REVISION == RETEST_REVISION
+        ), "use a separately reviewed revision for repair regression"
         destination = self.a["shutdown_script"]
         wallet = self.Ckb_cli.util_key_info_by_private_key(self.a["private_key"])
         assert destination["args"] == wallet["lock_arg"]

@@ -929,6 +929,7 @@ class _DelayedPaymentBase(ChannelSigningTestBase):
                 self.tenant["command"],
                 stdout=self.tenant["log"],
                 stderr=subprocess.STDOUT,
+                env={**os.environ, "LSP_NODE_ID": str(self.public_key)},
             )
             self.addCleanup(stop_agent, self.tenant["agent"])
             assert self.tenant["agent"].pid != self.old_pid

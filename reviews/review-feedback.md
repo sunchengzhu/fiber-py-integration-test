@@ -22,3 +22,5 @@
 - model: unavailable | cases: LSP 整体缺口盘点与重复评审（2026-10-30） | feedback: 我的妈你这样太浪费我时间了 你先整体看一遍 看下有哪些遗漏 再跟我说下一步做什么吧 你让我无畏的花了时间和token
 - model: unavailable | cases: LSP 测试运行与磁盘清理 | feedback: 我觉得你应该清理你自己产生的临时的产物 避免把磁盘塞满 影响下次测试 我今天凌晨还腾出了20多G呢 一直被你自己用完了 然后你一直找我要磁盘空间 这样无底洞的
 - model: unavailable | cases: PR #1623 核心逻辑覆盖与Gate1范围 | feedback: 你说的是执行进度 我问你的是测试用例实现完整度 有没有包含这个pr核心逻辑的测试 你一直没搞清方向
+- model: unavailable | cases: LSP-DELIVERY-05 | feedback: 经 56c761c 源码与提交 d96dfecb 确认，replay 识别先于 accept_on_channel；同 key 改金额预期改为 existing-key 冲突，金额校验另用不同 TLC/key 覆盖。
+- model: unavailable | cases: LSP-PAYMENT-04 | feedback: SDK 正常记录 revoked commitment；测试改为比较稳定身份字段并允许新增撤销记录，同时在 release 前等待发票 Received，不要求整个 status 文件不变。

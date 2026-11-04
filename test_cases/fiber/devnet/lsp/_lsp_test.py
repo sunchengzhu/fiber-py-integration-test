@@ -29,6 +29,11 @@ REVISION = os.environ.get(
 assert len(REVISION) == 40 and all(
     c in "0123456789abcdef" for c in REVISION
 ), "LSP_TEST_REVISION must be a full lowercase commit SHA"
+RETEST_REVISION = os.environ.get("LSP_RETEST_REVISION")
+if RETEST_REVISION is not None:
+    assert len(RETEST_REVISION) == 40 and all(
+        c in "0123456789abcdef" for c in RETEST_REVISION
+    ), "LSP_RETEST_REVISION must be a full lowercase commit SHA"
 BUNDLE = Path(
     os.environ.get(
         "LSP_TEST_BUNDLE",
@@ -319,6 +324,7 @@ class LspTestBase(FiberTest):
                 agent_command,
                 stdout=log,
                 stderr=subprocess.STDOUT,
+                env={**os.environ, "LSP_NODE_ID": str(self.public_key)},
             )
             self.addCleanup(stop_agent, agent)
             for _ in range(60):
