@@ -9,7 +9,7 @@
 - “已覆盖-失败”不算完成，不能用产品失败换勾；
 - 产品未实现的行为可以先有设计，但不能标通过。
 
-进度：**34/44 个关键行为完成（约 77%）**。另有 11 个未完成，其中部分是产品/契约阻塞，部分是尚未覆盖的 E2E 层。这个比例是**行为覆盖**，不等于 76 条用例的通过率。Rust 单元/集成测试与 Python 黑盒用例分开注明层级，不把 Rust 通过冒充黑盒 E2E。
+进度：**35/44 个关键行为完成（约 80%）**。另有 11 个未完成，其中部分是产品/契约阻塞，部分是尚未覆盖的 E2E 层。这个比例是**行为覆盖**，不等于 76 条用例的通过率。Rust 单元/集成测试与 Python 黑盒用例分开注明层级，不把 Rust 通过冒充黑盒 E2E。
 
 ## A. 租户生命周期、查询与权限（6）
 
@@ -118,8 +118,8 @@
   同时开通道、签名、订阅、取消的隔离。证据（Rust 集成）：`hosted_signer_requests_are_isolated_across_concurrent_tenants`、`offline_tenant_does_not_block_an_online_tenant`。
 - [ ] **H4 严格 nonce-reuse / fail-closed**  
   nonce 重用和缺失 material 的 fail-closed。状态：文档列为 release gate，产品未完成。
-- [ ] **H5 `lsp` feature 关闭的构建/启动回归**  
-  不带 lsp feature 的 FNN 正常启动；配置报错明确。状态：未覆盖；现有用例全是 LSP 开启。
+- [x] **H5 `lsp` feature 关闭的构建/启动回归**  
+  不带 lsp feature 的 FNN 正常启动；`lsp:`/services 配置被明确拒绝。证据：`LSP-FEATURE-01/02`，无 lsp 构建 56c761c，2 passed / 80.62s。
 - [ ] **H6 当前 head 退款链路**  
   REFUND-01～03 在 843 已接受；56c761c 未重跑。状态：已接受历史结果/可选。
 
