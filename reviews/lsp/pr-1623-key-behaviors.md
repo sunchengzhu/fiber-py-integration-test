@@ -151,7 +151,7 @@
 | G3 TIMEOUT-04/05 | **产品失败** | #1674 未修复；普通开通超时/晚到通道签名仍失败 | 等 #1674 |
 | G4 自然强关竞争 | **受控双分支通过** | T-win `LSP-TIMEOUT-12`；A-win `LSP-TIMEOUT-13` 1 passed / 5:40；自然竞争未判定 | 可选压力/混沌专项，不是普通门禁 |
 | H4 nonce fail-closed | **产品 gate 未完成** | 文档列为 release gate；严格 nonce-reuse/fail-closed 未完成 | 等产品安全门禁 |
-| H6 当前 head 退款 | **已通过（单分支）** | 56c761c 自然时间：`1 passed / 4:12:20`，实际分支 `T-then-A-sweep`；独立 TLC 退款分支未取得；辅助自检 F2 仍 skip | 保留分支边界，不扩写为所有退款路径通过 |
+| H6 当前 head 退款 | **已通过（单分支）** | 56c761c 自然时间：`1 passed / 4:12:20`，实际分支 `T-then-A-sweep`；独立 TLC 退款分支未取得；F2 SDK 快测 01～06 已通过；原真实链/adapter 资格仍 skip | 保留分支边界，不扩写为所有退款路径通过 |
 
 因此关键行为进度为 **38/44（约 86%）**；剩余 6 项：E1、F3、F4、G3、G4 自然竞态、H4。未把“无法测试”折算成通过。
 
@@ -167,7 +167,7 @@
 | F3 Watchtower 独立收款正向 | `LSP-WATCHTOWER-01` 设计入口 + 当前源码前置检查 | 前置不成立 | 产品仍把 unlock 付给 sponsor |
 | F4 WATCHTOWER-06 | `LSP-WATCHTOWER-06` 设计入口 + 当前 builder 检查 | 前置不成立 | 无独立 A payout output 可变异 |
 | H4 nonce fail-closed | 产品 release gate/源码入口 | 未执行 | 严格 nonce fail-closed 未实现 |
-| H6 当前 head 退款 | **正式自然时间用例** `test_tlc_timeout_refund.py` | `1 passed / 4:12:20`，实际分支 `T-then-A-sweep` | 独立 TLC 退款分支未取得；辅助自检 F2 仍 skip |
+| H6 当前 head 退款 | **正式自然时间用例** `test_tlc_timeout_refund.py` | `1 passed / 4:12:20`，实际分支 `T-then-A-sweep` | 独立 TLC 退款分支未取得；F2 SDK 快测 01～06 已通过；原真实链/adapter 资格仍 skip |
 | G4 自然强关竞争 | `LSP-TIMEOUT-12`（T-win）+ `LSP-TIMEOUT-13`（A-win） | 受控双分支均通过；自然竞态未判定 | 非确定性，需专项预算 |
 
 结论：**D2、D5、H6 已有正式通过；G4 受控双分支已通过；F3/F4/H4 仍是产品阻塞，G4 自然竞态仍未判定。不能报 100%**。产品失败不写成通过，也不再把入口冒充测试。

@@ -34,3 +34,11 @@
 - model: external PR reviewer | cases: LSP-PAYMENT-05 | feedback: 出站付款还要在 TLC 被接受后完成 SDK 本地 `authorize_fulfillment`，否则 P Paid、A 仍会因缺少本地 resolution 停在 Inflight；补 fulfill 后 1 passed / 95.22s，xfail 已移除。
 - model: external PR reviewer | cases: LSP-FEATURE-01/02 | feedback: feature-off 用例必须按本次启动的子进程句柄清理；Case 01 单独运行也必须用同一二进制执行 lsp 配置拒绝 probe 来证明构建不含 lsp feature；端口冲突不能按端口 kill 无关进程；probe 运行期间要观察是否曾监听 RPC。修复后 2 passed / 102.65s。
 - model: external PR reviewer | cases: LSP-FEATURE-01/02 | feedback: feature-off probe 不能把 stdout/stderr 接 PIPE 后只在退出时读取；日志超过管道容量会把正确拒绝堵成超时。改为写测试专用临时文件，端口观察与退出等待并行不依赖管道；复跑 2 passed / 102.65s。
+- model: unavailable | cases: LSP-REFUND-F2-01～06 快速测试方案与耗时约束 | feedback: 那就先把 F2 改成快速测试，整组控制在 5 分钟内。先把具体方案给我看，不要再启动四小时长测。 方案我会让另一个模型review 你要输出md文档
+- model: external reviewer | cases: LSP-REFUND-F2-01～06 与原 TestTlcRefundAdapter 的范围边界 | feedback: SDK 快测不能直接替代原 F2。快测通过后先保留旧 `TestTlcRefundAdapter`；由用户确认是否重定义 F2；确认后再决定删除旧 skip。来源：docs/analysis/f2-fast-plan-review-2026-11-07.md。
+- model: external reviewer | cases: LSP-REFUND-F2-01～06 | feedback: F2 SDK 快测已实现并通过；旧 TestTlcRefundAdapter 的真实链/adapter 联合资格继续 skip，不能把 SDK 快测外推为 F2 真实链资格或独立 TLC 退款通过；270/275 秒真实边界仍未实测。
+- model: external reviewer | cases: LSP-REFUND-F2-06 | feedback: 外层入口必须能回收 pytest 自检创建的两个独立 PGID；用 `LSP_REFUND_F2_OWNED_PIDS` 登记并在 outer finally/emergency 清理，新增外层登记组测试。
+- model: external reviewer | cases: LSP-REFUND-F2-05 | feedback: 仅缺失目录和错误 kind 不足以证明版本/源码/锁/二进制摘要检查；补齐 g6 manifest 的版本、source、产品锁、helper 源/锁/manifest、binary 六个变异。
+- model: external reviewer | cases: LSP-REFUND-F2-05 | feedback: 摘要变体必须断言具体拒绝来源，不能接受 TimeoutError/OSError 冒充；实际入口同时验证缺失 bundle 和版本变异 bundle。
+- model: external reviewer | cases: LSP-REFUND-F2-06 | feedback: 自检必须使用真实外层 registry，不能 monkeypatch 到临时文件；外层回收测试应使用真实 registry 并调用实际兜底清理，同时登记写入失败要先清理已启动子进程。
+- model: external reviewer | cases: LSP-REFUND-F2-05 | feedback: 五类摘要样本只能接受 `ValueError` 且精确匹配 `SHA256 mismatch: <完整路径>`；缺目录/缺 source 单独接受 `FileNotFoundError`，否则删文件仍会被当成摘要错误通过。

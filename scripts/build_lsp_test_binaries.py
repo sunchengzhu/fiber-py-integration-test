@@ -2,15 +2,265 @@
 """Build the reviewed LSP node and real SDK agent from one clean checkout."""
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
+import time
 
 REVISION = "04c206465b48da85b99aa58e80afe9801a2cb2db"
 ROOT = Path(__file__).resolve().parents[1]
+F2_REVISION = "56c761c45c271c086b05c8d5ea3e033448f5fdf8"
+
+
+def build_refund_f2(args):
+    """Build only the reviewed offline SDK helper, without touching node bundles."""
+    if args.revision != F2_REVISION:
+        raise ValueError(f"F2 helper requires reviewed revision {F2_REVISION}")
+    source, output, target = (
+        args.source.resolve(), args.output.resolve(), args.target_dir.resolve()
+    )
+    helper = ROOT / "test_cases/fiber/devnet/lsp_nightly/_tlc_refund_adapter_fast.rs"
+    started = time.monotonic()
+    hard_due = started + 600  # Explicit preparation, outside the 300s test runner.
+    work_due = hard_due - 30  # Reserve time to reap every owned process group.
+    initial_free = shutil.disk_usage(ROOT).free
+    if initial_free < 8 * 1024**3:
+        raise RuntimeError("F2 build requires at least 8 GiB free")
+    owned = {}
+
+    def check_budget():
+        if time.monotonic() >= work_due:
+            raise TimeoutError("F2 build work exceeded 570 seconds; 30 seconds reserved for cleanup")
+        free = shutil.disk_usage(ROOT).free
+        if free < 8 * 1024**3 or initial_free - free > 2 * 1024**3:
+            raise RuntimeError("F2 build disk budget exceeded (8 GiB floor / 2 GiB growth)")
+        if time.monotonic() >= work_due:
+            raise TimeoutError("F2 build work deadline exceeded during resource check")
+        return free
+
+    def group_exists(pgid):
+        try:
+            os.killpg(pgid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+
+    def signal_group(pgid, sig):
+        try:
+            os.killpg(pgid, sig)
+        except ProcessLookupError:
+            pass
+
+    def cleanup(process):
+        # The Cargo parent may have exited while rustc/build-script children remain.
+        process.poll()
+        if group_exists(process.pid):
+            signal_group(process.pid, signal.SIGTERM)
+            term_due = min(time.monotonic() + 5, hard_due - 2)
+            while group_exists(process.pid) and time.monotonic() < term_due:
+                process.poll()
+                time.sleep(min(0.05, max(0.001, term_due - time.monotonic())))
+        if group_exists(process.pid):
+            signal_group(process.pid, signal.SIGKILL)
+            kill_due = min(time.monotonic() + 5, hard_due - 1)
+            while group_exists(process.pid) and time.monotonic() < kill_due:
+                process.poll()
+                time.sleep(min(0.05, max(0.001, kill_due - time.monotonic())))
+        process.poll()
+        if group_exists(process.pid) or process.returncode is None:
+            raise RuntimeError(f"F2 build process group {process.pid} did not exit")
+        owned.pop(process.pid, None)
+
+    def emergency_timeout(_signum, _frame):
+        for pgid in tuple(owned):
+            signal_group(pgid, signal.SIGKILL)
+        # Do not let blocked filesystem I/O or process cleanup exceed 600 seconds.
+        os._exit(124)
+
+    def sha(path):
+        check_budget()
+        value = hashlib.sha256()
+        with path.open("rb") as stream:
+            while block := stream.read(1024 * 1024):
+                check_budget()
+                value.update(block)
+        check_budget()
+        return value.hexdigest()
+
+    def copy(source_path, destination):
+        check_budget()
+        with source_path.open("rb") as reader, destination.open("xb") as writer:
+            while block := reader.read(1024 * 1024):
+                check_budget()
+                writer.write(block)
+                writer.flush()
+                check_budget()
+        check_budget()
+        shutil.copystat(source_path, destination)
+        check_budget()
+
+    def write(path, content):
+        check_budget()
+        with path.open("x") as stream:
+            stream.write(content)
+        check_budget()
+
+    def check_source():
+        check_budget()
+        head = run(["git", "rev-parse", "HEAD"], capture=True, seconds=10).strip()
+        dirty = run(["git", "status", "--porcelain"], capture=True, seconds=10)
+        if head != args.revision or dirty:
+            raise RuntimeError("F2 product source must be clean and match the fixed revision")
+        check_budget()
+
+    def run(command, capture=False, seconds=None):
+        check_budget()  # Never start another Cargo command after work has expired.
+        command_due = min(work_due, time.monotonic() + seconds) if seconds else work_due
+        process = subprocess.Popen(
+            command, cwd=source, env=env, start_new_session=True, text=capture,
+            stdout=subprocess.PIPE if capture else None,
+            stderr=subprocess.PIPE if capture else None,
+        )
+        owned[process.pid] = process
+        stdout, stderr = None, None
+        try:
+            while True:
+                check_budget()
+                remaining = command_due - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(f"F2 build command deadline exceeded: {command}")
+                if capture:
+                    try:
+                        stdout, stderr = process.communicate(timeout=min(0.2, remaining))
+                        break
+                    except subprocess.TimeoutExpired:
+                        continue
+                if process.poll() is not None:
+                    break
+                time.sleep(min(0.2, remaining))
+            check_budget()  # Include disk growth in the final polling interval.
+            if process.returncode:
+                raise subprocess.CalledProcessError(process.returncode, command, stdout, stderr)
+        finally:
+            cleanup(process)
+        check_budget()
+        return stdout
+
+    env = dict(
+        os.environ, CARGO_PROFILE_DEV_DEBUG="0", CARGO_INCREMENTAL="0",
+        CARGO_TARGET_DIR=str(target), CARGO_BUILD_JOBS="2", CARGO_NET_OFFLINE="true",
+    )
+
+    def build_locked():
+        check_budget()
+        while True:
+            check_budget()
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                time.sleep(min(0.2, max(0.001, work_due - time.monotonic())))
+        check_budget()
+        output.mkdir(parents=True, exist_ok=False)
+        check_budget()
+        build = output / "helper-build"
+        build.mkdir()
+        check_budget()
+        dependencies = "\n".join(
+            f"{name} = {{ path = {json.dumps(str(source / path))} }}"
+            for name, path in (
+                ("fiber-lsp-sdk", "crates/fiber-lsp-sdk"),
+                ("fiber-types", "crates/fiber-types"),
+            )
+        )
+        write(
+            build / "Cargo.toml",
+            '[package]\nname = "lsp-refund-f2-fast"\nversion = "0.1.0"\nedition = "2021"\n'
+            '[workspace]\n[[bin]]\nname = "lsp-refund-f2-fast"\npath = "main.rs"\n'
+            "[dependencies]\n" + dependencies + "\n"
+            'anyhow = "1"\nasync-trait = "0.1"\nhex = "0.4"\n'
+            'ckb-types = "1"\nckb-jsonrpc-types = "1"\nserde_json = "1"\n'
+            'musig2 = { version = "=0.2.4", features = ["secp256k1", "serde"] }\n'
+            'tokio = { version = "1", features = ["macros", "rt"] }\n'
+        )
+        copy(helper, build / "main.rs")
+        copy(source / "Cargo.lock", build / "Cargo.lock")
+        # Resolve only this new local package against the copied lock, using cache.
+        # Subsequent compilations use the resulting helper lock unchanged.
+        command = ["cargo", "build", "--offline", "--manifest-path", str(build / "Cargo.toml")]
+        print(f"F2-only build: {json.dumps(command)}", flush=True)
+        print(f"free_before={initial_free}; growth_limit=2147483648; cache={target}", flush=True)
+        run(command)
+        helper_lock = sha(build / "Cargo.lock")
+        locked_command = ["cargo", "build", "--locked", "--offline", "--manifest-path", str(build / "Cargo.toml")]
+        run(locked_command)
+        check_source()
+        if sha(source / "Cargo.lock") != product_lock or sha(helper) != helper_digest:
+            raise RuntimeError("F2 source changed while building")
+        if sha(build / "Cargo.lock") != helper_lock:
+            raise RuntimeError("F2 helper lock changed during locked build")
+        binary = output / "lsp-refund-f2-fast"
+        copy(target / "debug/lsp-refund-f2-fast", binary)
+        manifest = {
+            "kind": "lsp-refund-f2-fast", "revision": args.revision,
+            "source": str(source), "cargo_lock_sha256": product_lock,
+            "helper_source_sha256": helper_digest,
+            "helper_lock_sha256": helper_lock,
+            "helper_manifest_sha256": sha(build / "Cargo.toml"),
+            "sha256": {binary.name: sha(binary)},
+            "prepare_command": command, "build_command": locked_command,
+            "profile": "dev", "target_dir": str(target),
+            "duration_seconds": time.monotonic() - started,
+            "free_before_bytes": initial_free,
+            "free_after_bytes": check_budget(),
+        }
+        # Publish a success manifest only after all output and budget checks pass.
+        temporary_manifest = output / "build.json.pending"
+        write(temporary_manifest, json.dumps(manifest, indent=2) + "\n")
+        check_budget()
+        temporary_manifest.rename(output / "build.json")
+        try:
+            check_budget()
+        except BaseException:
+            (output / "build.json").unlink(missing_ok=True)
+            raise
+        print(f"Installed offline F2 SDK helper in {output}", flush=True)
+
+    old_handler = signal.getsignal(signal.SIGALRM)
+    old_timer = signal.getitimer(signal.ITIMER_REAL)
+    signal.signal(signal.SIGALRM, emergency_timeout)
+    signal.setitimer(signal.ITIMER_REAL, max(0.001, hard_due - 1 - time.monotonic()))
+    try:
+        check_source()
+        product_lock = sha(source / "Cargo.lock")
+        helper_digest = sha(helper)
+        check_budget()
+        target.mkdir(parents=True, exist_ok=True)
+        check_budget()
+        with (target / ".lsp-refund-f2-build.lock").open("a") as lock:
+            try:
+                build_locked()
+            finally:
+                # Keep the cache lock until all our descendants have been reaped.
+                for process in tuple(owned.values()):
+                    cleanup(process)
+    finally:
+        try:
+            for process in tuple(owned.values()):
+                cleanup(process)
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, old_handler)
+            if old_timer[0]:
+                signal.setitimer(
+                    signal.ITIMER_REAL,
+                    max(0.001, old_timer[0] - (time.monotonic() - started)), old_timer[1],
+                )
 
 
 def main():
@@ -28,9 +278,20 @@ def main():
         help="Build FNN and the upstream SDK agent without the local integration driver",
     )
     parser.add_argument("--driver-only", action="store_true")
+    parser.add_argument(
+        "--refund-f2-only", action="store_true",
+        help="Build only the fixed-revision offline F2 SDK helper (no FNN)",
+    )
     parser.add_argument("--base-bundle", type=Path)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
+    if args.refund_f2_only:
+        if args.upstream_only or args.driver_only or args.base_bundle or not all((args.output, args.target_dir)):
+            parser.error("--refund-f2-only requires --output and --target-dir and excludes other build modes")
+        if args.output.exists() or args.output.is_symlink():
+            parser.error("--output must not already exist")
+        build_refund_f2(args)
+        return
     if args.driver_only:
         if args.upstream_only or not all(
             (args.base_bundle, args.output, args.target_dir)
