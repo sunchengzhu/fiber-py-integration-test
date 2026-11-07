@@ -25,3 +25,12 @@
 - model: unavailable | cases: LSP-DELIVERY-05 | feedback: 经 56c761c 源码与提交 d96dfecb 确认，replay 识别先于 accept_on_channel；同 key 改金额预期改为 existing-key 冲突，金额校验另用不同 TLC/key 覆盖。
 - model: unavailable | cases: LSP-PAYMENT-04 | feedback: SDK 正常记录 revoked commitment；测试改为比较稳定身份字段并允许新增撤销记录，同时在 release 前等待发票 Received，不要求整个 status 文件不变。
 - model: unavailable | cases: LSP-TENANT-QUERY-01 | feedback: 不真实开资金通道的测试没有意义；改为真实 A/B 注册、真实 funding/ChannelReady 通道和真实发票的黑盒场景，不用未注资的 unsigned channel 代替。
+- model: external reviewer | cases: LSP-INVOICE-CANCEL-03 | feedback: 首次失败是测试漏掉 SDK `authorize_cancellation`，SDK 报 `TLC removed without a locally authorized resolution`；补授权及完整 30 秒稳定观察后当前 head 1 passed / 130.57s，不能把它归为上游 TLC 传播缺陷。
+- model: external reviewer | cases: LSP-REFUND-01～03 | feedback: 退款改为自然时间夜间模式，去掉 Lima/VM/GuestClock；主用例在 56c761c 1 passed / 4:12:20，实际分支 T-then-A-sweep；F2 辅助自检仍 skip，不宣称全部退款分支通过。
+- model: external reviewer | cases: LSP-TIMEOUT-13 | feedback: 补 A-win/T-loser 受控竞态用例；A 的关闭确认后 T 必须进入 Closed/UNCOOPERATIVE_REMOTE，关闭哈希等于 A；自然竞态仍不作为普通门禁。
+- model: external PR reviewer | cases: LSP-PAYMENT-05 | feedback: 出站付款必须补 SDK 本地 `authorize_payment`，并按实际 A–T TLC 金额核对；P 的普通收款发票应提供 preimage，不能把缺授权或 hold invoice 不可结算误归为产品 outbound 失败。授权金额按有效 trampoline 上限修为 1,005,000；修复后 P 发票已 Paid，A 付款仍 Inflight，1 xfailed / 143.97s；xfail 仅包住最终产品终态。
+- model: external PR reviewer | cases: LSP-INVOICE-CANCEL-03 | feedback: 取消后要连续观察旧发票/旧付款至少 30 秒不复活，不能只看新付款成功；补完整稳定窗口后 1 passed / 130.57s。
+- model: external PR reviewer | cases: LSP-TIMEOUT-13 | feedback: A-win 时要排除 T 的 `UNCOOPERATIVE_LOCAL`，并在 T 恢复后复查 A 仍为获胜的 `UNCOOPERATIVE_LOCAL`；补断言后 1 passed / 340.32s。
+- model: external PR reviewer | cases: LSP-PAYMENT-05 | feedback: 出站付款还要在 TLC 被接受后完成 SDK 本地 `authorize_fulfillment`，否则 P Paid、A 仍会因缺少本地 resolution 停在 Inflight；补 fulfill 后 1 passed / 95.22s，xfail 已移除。
+- model: external PR reviewer | cases: LSP-FEATURE-01/02 | feedback: feature-off 用例必须按本次启动的子进程句柄清理；Case 01 单独运行也必须用同一二进制执行 lsp 配置拒绝 probe 来证明构建不含 lsp feature；端口冲突不能按端口 kill 无关进程；probe 运行期间要观察是否曾监听 RPC。修复后 2 passed / 102.65s。
+- model: external PR reviewer | cases: LSP-FEATURE-01/02 | feedback: feature-off probe 不能把 stdout/stderr 接 PIPE 后只在退出时读取；日志超过管道容量会把正确拒绝堵成超时。改为写测试专用临时文件，端口观察与退出等待并行不依赖管道；复跑 2 passed / 102.65s。

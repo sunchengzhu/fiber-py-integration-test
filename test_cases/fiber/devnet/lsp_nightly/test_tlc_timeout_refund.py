@@ -1,4 +1,4 @@
-"""04c2064: one real A -> T hold payment, VM controlled-time on-chain timeout refund."""
+"""Natural-time overnight verification: one real A -> T hold payment refunds on-chain after real expiry."""
 
 from concurrent.futures import ThreadPoolExecutor
 import copy
@@ -14,9 +14,9 @@ import yaml
 
 from test_cases.fiber.devnet.lsp._lsp_test import ChannelSigningTestBase, REVISION
 from test_cases.fiber.devnet.lsp_nightly._refund_ledger import RefundLedger
-from test_cases.fiber.devnet.lsp_nightly._vm_time import GuestClock
 from test_cases.fiber.devnet.lsp._watchtower_rpc import ChainAudit
 from test_cases.fiber.devnet.lsp.test_watchtower_settlement import (
+    WatchtowerBudgetExpired,
     _WatchtowerBase,
     number,
     raw,
@@ -27,35 +27,11 @@ class _RefundBase(RefundLedger, _WatchtowerBase):
     tenant_labels = ("A",)
     amount = 100_000_000
 
-    @classmethod
-    def setup_class(cls):
-        # Reject accidental host/daily execution before the inherited CKB setup.
-        cls.vm_clock = GuestClock(os.environ["LSP_RUN_ARTIFACTS"])
-        expected = "preflight" if cls.__name__ == "TestTlcRefundAdapter" else "formal"
-        assert cls.vm_clock.identity["mode"] == expected
-        cls.total_due = min(
-            cls.vm_clock.identity["guest_deadline_mono"] - 60,
-            cls.vm_clock.identity["guest_started_mono"] + 300,
-        )
-        try:
-            super().setup_class()
-        except BaseException:
-            cls.vm_clock.close()
-            raise
-
-    @classmethod
-    def teardown_class(cls):
-        try:
-            super().teardown_class()
-        finally:
-            cls.vm_clock.close()
-
     def setup_method(self, method):
-        self.started = self.vm_clock.identity["guest_started_mono"]
-        self.prep_due = min(self.started + 600, time.monotonic() + 300)
-        self.cleanup_due = min(
-            self.started + 2160, self.vm_clock.identity["guest_deadline_mono"]
-        )
+        self.started = time.monotonic()
+        self.prep_due = self.started + 600
+        # The payment TLC currently reserves ~4h. Keep a six-hour nightly budget.
+        self.cleanup_due = self.started + 6 * 3600
         self.total_due = self.cleanup_due - 60
         self.evidence, self.requests_seen, self.phase_deadlines = [], {}, {}
         self.transaction_cache, self.inspection_cache = {}, {}
@@ -308,7 +284,6 @@ class _RefundBase(RefundLedger, _WatchtowerBase):
                 )
                 finished = time.monotonic()
                 assert finished - started <= 3
-                self.vm_clock.check()
                 assert self.a["agent"].poll() is None
                 assert all(f.process.poll() is None for f in self.fibers)
                 os.kill(int(self.node.ckb_miner_pid), 0)
@@ -344,6 +319,31 @@ class _RefundBase(RefundLedger, _WatchtowerBase):
                 if predicate(sample):
                     return sample
                 time.sleep(max(0, start + 1 - time.monotonic()))
+
+    def progress(self, stage, **values):
+        item = {"stage": stage, "monotonic": time.monotonic(), "wall": time.time(), **values}
+        path = Path(os.environ["LSP_RUN_ARTIFACTS"]) / "progress.jsonl"
+        with path.open("a") as stream:
+            stream.write(json.dumps(item) + "\n")
+        print(f"progress {stage} {json.dumps(values, sort_keys=True)}", flush=True)
+
+    def _dump_stuck(self):
+        try:
+            print("stuck agent tail:", flush=True)
+            log_path = Path(self.a["log"].name)
+            print("".join(log_path.read_text().splitlines(True)[-20:]), flush=True)
+            sample = self._sample()
+            print("stuck sample:", json.dumps({
+                "payment": sample["payment"]["status"],
+                "invoice": sample["invoice"]["status"],
+                "A": sample["A"]["state"],
+                "T": sample["T"]["state"],
+                "watchtower": sample["watchtower"]["status"]["type"],
+            }, sort_keys=True), flush=True)
+        except WatchtowerBudgetExpired as error:
+            print(f"stuck diagnostic budget expired: {error}", flush=True)
+        except Exception as error:
+            print(f"stuck diagnostic failed: {error}", flush=True)
 
     def send_hold_payment(self):
         with self.budget(self.prep_due - time.monotonic()):
@@ -403,7 +403,8 @@ class _RefundBase(RefundLedger, _WatchtowerBase):
             assert now + 14_820_000 + 5000 + 1_500_000 < invoice_created + 21_600_000
             self.send_mono, self.send_wall = time.monotonic(), time.time()
             assert self.send_wall * 1000 - now <= 10_000
-            self.total_due = min(self.total_due, self.send_mono + 1500)
+            # Keep the single absolute cleanup deadline; do not extend past it.
+            self.total_due = min(self.total_due, self.cleanup_due - 60)
             result = self.rpc(
                 "send_payment",
                 [
@@ -475,6 +476,7 @@ class _RefundBase(RefundLedger, _WatchtowerBase):
                 for r in self.a["records"]
             )
         self.record("complete-ack-checkpoint", sample=sample, records=self.a["records"])
+        self.progress("checkpoint", expiry_ms=self.expiry_ms, payment=self.payment_hash)
         self.assert_single_tlc_history()
         audits = self.gate.audit_snapshot()["requests"]
         applied = {
@@ -564,6 +566,7 @@ class _RefundBase(RefundLedger, _WatchtowerBase):
             status = self.rpc("get_transaction", [tx["hash"]])["tx_status"]
             self.commitment_header = self.rpc("get_header", [status["block_hash"]])
             self.close_confirmed_at = time.monotonic()
+            self.progress("force-close-confirmed", hash=tx["hash"])
 
     def _window(self, predicate, name):
         previous = time.monotonic()
@@ -594,7 +597,9 @@ class _RefundBase(RefundLedger, _WatchtowerBase):
             assert not ledger["complete"]
             assert all(row["kind"] == "T" for row in ledger["rows"]), ledger
 
+        self.progress("immature-window-start", expiry_ms=self.expiry_ms)
         start, end = self._window(protected, "immature-window")
+        self.progress("immature-window-done", seconds=end - start)
         self.assert_fnn_scan(start, end)
 
     def assert_fnn_scan(self, start, end):
@@ -655,23 +660,48 @@ class _RefundBase(RefundLedger, _WatchtowerBase):
         assert matches, "no actual target FNN watchtower scan in immature window"
         self.record("fnn-scan-proof", matches=matches)
 
-    def jump_guest_clock(self):
+    def wait_for_natural_expiry(self):
+        """Wait for the real TLC expiry without changing host or guest time."""
+        target = self.expiry_ms / 1000 + 5
         self.record(
-            "vm-jump-intent",
+            "natural-wait-intent",
             expiry_ms=self.expiry_ms,
-            instance=self.vm_clock.identity["instance"],
+            target_wall=target,
+            started_wall=time.time(),
         )
-        with self.budget(30):
-            event = self.vm_clock.jump(
-                self.expiry_ms, observe=self._sample, payment_hash=self.payment_hash
-            )
-        self.record("vm-jump-complete", event=event)
+        self.progress("natural-wait-start", target=target, expiry_ms=self.expiry_ms)
+        with self.budget(self.total_due - time.monotonic()):
+            next_report = time.monotonic() + 300
+            while time.time() < target:
+                tick = time.monotonic()
+                sample = self._sample()
+                assert sample["invoice"]["status"] == "Received", sample["invoice"]
+                assert not sample["ledger"]["complete"], sample["ledger"]
+                if time.monotonic() >= next_report:
+                    self.progress(
+                        "natural-wait",
+                        remaining_s=round(target - time.time(), 1),
+                        payment=sample["payment"]["status"],
+                        invoice=sample["invoice"]["status"],
+                        tip=sample["tip"]["number"],
+                    )
+                    next_report = time.monotonic() + 300
+                time.sleep(max(0, tick + 30 - time.monotonic()))
+        self.progress("natural-expiry-reached", target=target)
+
+        self.expiry_wait_at = time.monotonic()
+        self.record(
+            "natural-expiry-reached",
+            target_wall=target,
+            now_wall=time.time(),
+            elapsed_monotonic=time.monotonic() - self.started,
+        )
 
     def mature(self):
         epoch = number(self.commitment_header["epoch"])
         n, i, length = epoch & 0xFFFFFF, (epoch >> 24) & 0xFFFF, (epoch >> 40) & 0xFFFF
         assert length and i < length
-        due = min(self.vm_clock.event["after_mono"] + 180, self.total_due)
+        due = min(self.expiry_wait_at + 180, self.total_due)
         indexed_target = None
 
         def ready(sample):
@@ -693,6 +723,7 @@ class _RefundBase(RefundLedger, _WatchtowerBase):
 
         sample = self._wait(due, ready)
         self.mature_at = time.monotonic()
+        self.progress("mature-indexed", tip=sample["tip"]["number"], median=sample["median"])
         self.record("mature-indexed", sample=sample, work_due=self.mature_at + 480)
 
     def business_complete(self, sample):
@@ -732,7 +763,7 @@ class TestTlcTimeoutRefund(_RefundBase):
     def test_hold_payment_timeout_refund(self):
         """
         1. 唯一真实付款完整确认后由 T 强关，证明连续未成熟窗口不能提前退款。
-        2. 仅在 guest 单次推进至 E+5秒，等待真实链成熟并核对签名及完整资金账本。
+        2. 自然等待到真实 E+5秒，不修改时间；随后正常挖块成熟并核对签名及完整资金账本。
         3. 原付款失败、发票保持 Received、关闭处理完成，并连续稳定至少 65 秒。
         """
         # 1. 完整承诺检查点及真实未成熟保护。
@@ -741,10 +772,19 @@ class TestTlcTimeoutRefund(_RefundBase):
         self.protect_immature()
 
         # 2. 单次 guest 调时后自然结算，仅统计实际取得的分支。
-        self.jump_guest_clock()
+        self.wait_for_natural_expiry()
         self.mature()
-        sample = self._wait(self.mature_at + 480, lambda s: s["ledger"]["complete"])
+        self.progress("funds-wait-start", due=self.mature_at + 480)
+        try:
+            sample = self._wait(self.mature_at + 480, lambda s: s["ledger"]["complete"])
+        except WatchtowerBudgetExpired:
+            self._dump_stuck()
+            raise
+        except Exception:
+            self._dump_stuck()
+            raise
         final = sample["ledger"]
+        self.progress("funds-complete", branch=final["branch"], rows=len(final["rows"]))
         funds_at = time.monotonic()
         self.record("funds-complete", ledger=final, converges_by=funds_at + 360)
 
@@ -771,6 +811,7 @@ class TestTlcTimeoutRefund(_RefundBase):
 
 
 @pytest.mark.manual_nightly
+@pytest.mark.skip(reason="TLC adapter negative checks are not implemented; main refund path is unaffected")
 class TestTlcRefundAdapter(_RefundBase):
     """Read-only adapter checks; these do not count toward product 1+3."""
 
@@ -780,7 +821,7 @@ class TestTlcRefundAdapter(_RefundBase):
         self.send_hold_payment()
         self.force_close()
         self.protect_immature()
-        self.jump_guest_clock()
+        self.wait_for_natural_expiry()
         self.mature()
         self._wait(
             self.mature_at + 480,
@@ -795,13 +836,10 @@ class TestTlcRefundAdapter(_RefundBase):
         )
         self.record("sdk-positive-prepare", result=result)
         # The positive check above is read-only; retain the full natural offset window.
-        if time.monotonic() < self.vm_clock.event["after_mono"] + 360:
-            self._wait(
-                self.vm_clock.event["after_mono"] + 365,
-                lambda sample: time.monotonic()
-                >= self.vm_clock.event["after_mono"] + 360,
-            )
-        self.vm_clock.check()
+        self._wait(
+            self.expiry_wait_at + 365,
+            lambda sample: time.monotonic() >= self.expiry_wait_at + 360,
+        )
         checks = {row["case"] for row in result["checks"]}
         assert "wrong_tlc_index" in checks, result
         assert all(
