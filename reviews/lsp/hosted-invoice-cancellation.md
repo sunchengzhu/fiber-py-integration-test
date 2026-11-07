@@ -1,6 +1,6 @@
 # Hosted 租户发票取消：Gate2 用例评审
 
-范围：LusoCryptoLabs 在 [PR #1623 的三项实测反馈](https://github.com/nervosnetwork/fiber/pull/1623#issuecomment-6418454010)中报告的第三项，以及已确认 [Gate1 方向 9～11](field-feedback-scope.md#用例gate1-候选场景)。固定分析版本为 `84333eea8488a8afc7e4474aa4bbd0e7e973cee9`。2026-11-07 当前状态：03 已实施并在 56c761c 通过（1 passed / 100.80s）。实现补齐了 SDK 本地 `authorize_cancellation`；#1723 只处理“文档说仅 Open”的同步，不再阻塞 03 行为。映射存在与执行通过分开记录。
+范围：LusoCryptoLabs 在 [PR #1623 的三项实测反馈](https://github.com/nervosnetwork/fiber/pull/1623#issuecomment-6418454010)中报告的第三项，以及已确认 [Gate1 方向 9～11](field-feedback-scope.md#用例gate1-候选场景)。固定分析版本为 `84333eea8488a8afc7e4474aa4bbd0e7e973cee9`。2026-11-07 当前状态：03 已实施并在 56c761c 通过（1 passed / 125.89s，含取消后 30 秒稳定观察）。实现补齐了 SDK 本地 `authorize_cancellation`；#1723 只处理“文档说仅 Open”的同步，不再阻塞 03 行为。映射存在与执行通过分开记录。
 
 这里的 A、B 是不同 Hosted 租户，P 是付款方，T 是 LSP；A/B 使用各自真实 tenant Biscuit，不能用 operator token 代替。`Open` 为尚未收到款，`Received` 为已收到但未结算的 hold invoice。金额 M 固定 1,000,000 Shannon，费用上限 10,000 Shannon；成功时用实际付款费 f 核账，不把上限当实收费用。
 
@@ -71,4 +71,4 @@ Testing: not_tested — 当前入口先被 allowlist 阻断，且 `Received` 契
 
 2026-10-30 执行结果：01在固定843的真实租户入口收到 `-32999 Unauthorized`，节点明确报告tenant token不能调用cancel_invoice，产品入口缺口已复现；独立构建和收集通过，01非超时失败即停。付款与资金后半步骤、02/03未运行，旧证据完整保留。详见[LSP运行记录](../../test_cases/fiber/devnet/lsp/README.md#84333ee-hosted租户发票取消真实入口拒绝2026-10-30)。01/02复选框仅表示代码已映射，不表示通过；03仍待产品契约明确。
 
-2026-11-07 执行结果：`LSP-INVOICE-CANCEL-03` 在 56c761c 上 **1 passed / 100.80s**。第一次尝试漏掉 SDK 本地 `authorize_cancellation`，SDK 报 `TLC removed without a locally authorized resolution`；补上 `_authorize_cancellation()` 后通过。已验证发票 `Cancelled`、P 付款 `Failed`、A–T 与 P–T TLC/锁定额清理、资金回基线，新发票正常付款。#1723 仍是独立的文档 issue。
+2026-11-07 执行结果：`LSP-INVOICE-CANCEL-03` 在 56c761c 上 **1 passed / 125.89s**。第一次尝试漏掉 SDK 本地 `authorize_cancellation`，SDK 报 `TLC removed without a locally authorized resolution`；补上 `_authorize_cancellation()` 后通过。已验证发票 `Cancelled`、P 付款 `Failed`、A–T 与 P–T TLC/锁定额清理、资金回基线；取消后连续 30 秒确认旧发票/旧付款不回退，新发票正常付款。#1723 仍是独立的文档 issue。

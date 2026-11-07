@@ -1592,8 +1592,19 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
                 break
             time.sleep(min(0.2, self._remaining(until)))
         assert "UNCOOPERATIVE_REMOTE" in t_view["state"]["state_flags"], t_view
+        assert "UNCOOPERATIVE_LOCAL" not in t_view["state"]["state_flags"], t_view
         assert t_view["shutdown_transaction_hash"] == a_hash, t_view
-        self._observe("remote_side_recovered", view=t_view, close_hash=a_hash)
+        self._isolation_health(until)
+        a_after = self._isolated_view(self.client, until)
+        assert a_after["state"]["state_name"] == "Closed", a_after
+        assert "UNCOOPERATIVE_LOCAL" in a_after["state"]["state_flags"], a_after
+        assert a_after["shutdown_transaction_hash"] == a_hash, a_after
+        self._observe(
+            "remote_side_recovered",
+            view=t_view,
+            close_hash=a_hash,
+            winner_view=a_after,
+        )
 
     # TEST-MAP: LSP-TIMEOUT-10
     def test_force_close_uses_commitment_with_target_tlc(self):

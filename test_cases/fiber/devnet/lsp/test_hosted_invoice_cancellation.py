@@ -617,6 +617,15 @@ class TestHostedInvoiceCancellation(_CancellationBase):
         self._assert_settled_funds(failed, None, 0, 0)
         self._no_old_release(payment)
 
+        # The cancelled invoice and failed payment must remain terminal for a
+        # full 30-second window; a later background retry must not revive them.
+        stable_until = min(until - 60, time.monotonic() + 30)
+        assert stable_until > time.monotonic(), "insufficient cancellation stability budget"
+        while time.monotonic() < stable_until:
+            assert self._invoice(self.tenant, payment, until)["status"] == "Cancelled"
+            assert self._payment(payment, until)["status"] == "Failed"
+            self._pause(until, 0.2)
+
         fresh = self._new_hold(self.tenant, "fresh", until)
         self._configure_chain(self.tenant, until)
         self._send_payment(fresh, until)
