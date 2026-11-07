@@ -1,6 +1,6 @@
 # 真实付款的延迟签名恢复
 
-2026-11-07 当前状态：`LSP-PAYMENT-05` 已实现并在 56c761c 执行一次，**1 xfailed / 138.93s**；测试已补 SDK 出站 `authorize_payment` 和 P 发票 preimage，产品仍停在 Inflight。`LSP-PAYMENT-04` 的旧状态保留如下。最新192130批补入既有合约对齐调用，经GPT-6 Sol High复核后仅执行一次；pytest在setup_class的隔离路径断言报错（1 error in7.60s、exit1）即停。runner向预导入类设置路径，但pytest实际加载另一模块中的类，tmp_path_name仍为None；CKB已在默认tmp启动后才被断言拦下。未执行合约对齐、FNN初始化或任何付款/资金断言。属于本批执行准备错误，不能计产品业务失败或通过。详见最新RESULT（本地证据：`../../report/lsp-payment04-84333ee-20261030T192130/RESULT.md`）。旧批证据保留；固定产品仍为干净`84333eea8488a8afc7e4474aa4bbd0e7e973cee9`。
+2026-11-07 当前状态：`LSP-PAYMENT-05` 已实现并在 56c761c 执行一次，**1 xfailed / 143.97s**；测试已补 SDK 出站 `authorize_payment`（金额 1,005,000）和 P 发票 preimage，P 发票已 Paid，但 A payment 仍 Inflight。`LSP-PAYMENT-04` 的旧状态保留如下。最新192130批补入既有合约对齐调用，经GPT-6 Sol High复核后仅执行一次；pytest在setup_class的隔离路径断言报错（1 error in7.60s、exit1）即停。runner向预导入类设置路径，但pytest实际加载另一模块中的类，tmp_path_name仍为None；CKB已在默认tmp启动后才被断言拦下。未执行合约对齐、FNN初始化或任何付款/资金断言。属于本批执行准备错误，不能计产品业务失败或通过。详见最新RESULT（本地证据：`../../report/lsp-payment04-84333ee-20261030T192130/RESULT.md`）。旧批证据保留；固定产品仍为干净`84333eea8488a8afc7e4474aa4bbd0e7e973cee9`。
 
 范围：已通过 [Gate1](hosted-channel-guards-scope.md) 的在线延迟、SDK 完全离线、A 等签时 B 收款三个方向。用户已明确通过 Gate2 的三行、预算和共同断言，2026-10-24 进入 Gate3；Python 自动化与 TEST-MAP 已接入，执行结果另记于[运行记录](../../test_cases/fiber/devnet/lsp/README.md)。已有 RECOVERY、RETRY、SIGN、TIMEOUT 用例不变，不改产品代码；映射存在不表示执行通过。
 
@@ -288,4 +288,4 @@ GPT-6 Sol High复核通过，13项离线编排自检通过，driver-only构建�
 
 最终静态检查：设计4行exit0（SPEC-03/04为已确认的人工契约提示）；项目映射125评审/118映射，exit1为9个既有孤儿，无新增孤儿或重复ID；diff检查exit0。原始输出保存在本批document-checks.json。这些检查不替代04业务执行。
 
-2026-11-07 `LSP-PAYMENT-05` 结果：真实 A→T→P 付款。A 的 SDK 出站授权已成功保存，P 发票带 preimage；A 付款仍未到 `Success`，用例按已知产品问题标记 xfail。该行证明“有正式执行覆盖”，不证明 outbound 产品通过；等待产品修复后复验。
+2026-11-07 `LSP-PAYMENT-05` 结果：真实 A→T→P 付款。A 的 SDK 出站授权已成功保存，P 发票带 preimage；P 发票已 `Paid`，A 付款仍未到 `Success`，仅在最终付款终态断言处标记 xfail。该行证明“有正式执行覆盖”，不证明 outbound 产品通过；等待产品修复后复验。

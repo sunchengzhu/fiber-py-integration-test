@@ -20,10 +20,6 @@ class TestHostedOutboundPayment(_CancellationBase):
     tenant_labels = ("A",)
 
     # TEST-MAP: LSP-PAYMENT-05
-    @pytest.mark.xfail(
-        strict=False,
-        reason="known product gap: hosted external-signer outbound payment does not finalize",
-    )
     def test_hosted_tenant_pays_ordinary_node(self):
         """
         1. A 的真实外部签名通道已就绪，P 已有 T–P 路由。
@@ -45,13 +41,15 @@ class TestHostedOutboundPayment(_CancellationBase):
         invoice = self.fiber2.client.call("new_invoice", [params])
         assert invoice["invoice"]["data"]["payment_hash"] == payment_hash
         # The SDK must locally authorize the outbound A-T TLC before it signs
-        # the commitment. The A-T amount includes T's 1000 ppm forwarding fee.
+        # the commitment. The first trampoline segment carries the invoice
+        # amount plus the effective fee cap: min(max_fee=10_000, 5/1000).
         now_ms = int(time.time() * 1000)
+        authorized_amount = 1_000_000 + min(10_000, 1_000_000 * 5 // 1000)
         authorization = {
             "payment_hash": payment_hash,
             "hash_algorithm": "ckb_hash",
             "inbound": False,
-            "amount": 1_001_000,
+            "amount": authorized_amount,
             "expires_at_ms": now_ms + 600_000,
             "min_tlc_expiry_delta_ms": 300_000,
             "max_tlc_expiry_ms": now_ms + 86_400_000,
@@ -85,5 +83,10 @@ class TestHostedOutboundPayment(_CancellationBase):
             if payment["status"] in ("Success", "Failed"):
                 break
             time.sleep(1)
+        if payment["status"] != "Success" or invoice_state["status"] != "Paid":
+            pytest.xfail(
+                "known product gap: hosted external-signer outbound payment does not finalize "
+                f"(payment={payment['status']}, invoice={invoice_state['status']})"
+            )
         assert payment["status"] == "Success", (payment, invoice_state)
         assert invoice_state["status"] == "Paid", invoice_state

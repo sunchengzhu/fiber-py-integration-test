@@ -388,4 +388,4 @@ Gate3 修正了 CKB RPC 的状态表达：固定 0.202.0 随包官方文档（�
 
 三阶段exit0、整批exit0；正式执行和清理832.283秒，小于1800秒总上限，阶段600/720/480秒未重置。GPT-6 Sol High复核原始链、RPC、节点、JUnit证据和清理；源码与产物固定干净843。剩余运行目录已逐项校验归档并清理，6个自有进程组退出、9端口释放。旧07依旧记为60秒自然竞争等待失败，不能被本批12的独立通过覆盖。详见本批结果（本地证据：`../../report/lsp-closeout-84333ee-20261030/execution-220814/RESULT.md`）。
 
-2026-11-07 补充结果：`LSP-TIMEOUT-13` 在 56c761c 上 **1 passed / 340.17s (0:05:40)**。A 赢下受控强关竞争，T 的竞争广播被真实拦截；T 最终进入 `Closed / UNCOOPERATIVE_REMOTE | WAITING_ONCHAIN_SETTLEMENT`，不包含 `UNCOOPERATIVE_LOCAL`，`shutdown_transaction_hash` 等于 A 的真实关闭；T 恢复后复查 A 仍为 `UNCOOPERATIVE_LOCAL` 且关闭哈希不变。现在受控 T-win/A-loser（12）和 A-win/T-loser（13）双向均已通过；自然竞态仍未判定。
+2026-11-07 补充结果：`LSP-TIMEOUT-13` 在 56c761c 上 **1 passed / 340.32s (0:05:40)**。A 赢下受控强关竞争，T 的竞争广播被真实拦截；T 最终进入 `Closed / UNCOOPERATIVE_REMOTE | WAITING_ONCHAIN_SETTLEMENT`，不包含 `UNCOOPERATIVE_LOCAL`，`shutdown_transaction_hash` 等于 A 的真实关闭；T 恢复后复查 A 仍为 `UNCOOPERATIVE_LOCAL`、不含 `UNCOOPERATIVE_REMOTE`，且关闭哈希不变。现在受控 T-win/A-loser（12）和 A-win/T-loser（13）双向均已通过；自然竞态仍未判定。

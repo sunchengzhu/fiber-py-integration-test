@@ -61,7 +61,7 @@
 - [x] **D1 Open 发票取消与跨租户隔离**
   A 取消自己的 Open 发票；B 不能取消 A。证据：INVOICE-CANCEL-01/02。
 - [x] **D2 Received 状态取消**
-  Received、无节点 preimage 时取消并安全清理。证据：`LSP-INVOICE-CANCEL-03`，补 SDK `authorize_cancellation` 和 30 秒稳定观察后 1 passed / 125.89s。
+  Received、无节点 preimage 时取消并安全清理。证据：`LSP-INVOICE-CANCEL-03`，补 SDK `authorize_cancellation` 和 30 秒稳定观察后 1 passed / 130.57s。
 - [x] **D3 入站付款、延迟签名、SDK 离线**
   P→T→A 正常付款、在线延迟、SDK 完全离线。证据：PAYMENT-01/02。
 - [x] **D4 缺授权后的同进程恢复**
@@ -129,7 +129,7 @@
 | --- | --- | --- |
 | P0 | E1 Delivery-02 最终一致性 | 等产品修复，修复后复验 |
 | P0 | E4b Delivery 完整 FNN 重启恢复 | 需要 delivery + FNN 重启 fixture；Service restart 已有 Rust 覆盖 |
-| P0 | D2 Received 取消 | 已通过（`LSP-INVOICE-CANCEL-03`，125.89s） |
+| P0 | D2 Received 取消 | 已通过（`LSP-INVOICE-CANCEL-03`，130.57s） |
 | P0 | F3 独立收款正向 | 等产品新要求 |
 | P0 | G3 TIMEOUT-04/05 | 等 #1674 |
 | P0 | A2～A5 租户查询/admin 边界 | 已设计 G1，低成本，待实现 |
@@ -144,7 +144,7 @@
 | 项目 | 最终状态 | 依据/原因 | 下一步 |
 | --- | --- | --- | --- |
 | E1 `DELIVERY-02` | **产品失败** | 56c761c 已复验失败：接纳后丢回复，最终一致性不成立 | 等产品修复后复验，不重写预期 |
-| D2 Received 取消 | **已通过** | 补 SDK `authorize_cancellation` 后 `LSP-INVOICE-CANCEL-03` 1 passed / 125.89s；文档 issue #1723 单独处理 | 保留文档同步项 |
+| D2 Received 取消 | **已通过** | 补 SDK `authorize_cancellation` 后 `LSP-INVOICE-CANCEL-03` 1 passed / 130.57s；文档 issue #1723 单独处理 | 保留文档同步项 |
 | D5 external-signer outbound | **产品未完成（干净探针仍失败）** | 文档仍列为剩余；补 outbound authorization、gate 全放行后 P 发票 Received，但 A 付款 90 秒仍 Inflight，T 报 upstream 非终态 | 等完整 outbound E2E，不用内部 runtime 测试冒充 |
 | F3 Watchtower 独立收款正向 | **产品未完成** | 当前结算仍把 unlock 金额付给 sponsor fee-provider；独立 D_A 正向未实现 | 等双地址/独立收款实现 |
 | F4 WATCHTOWER-06 | **产品阻塞** | 当前 `build_settlement_transaction` 的 settlement output 直接 lock 到 fee provider S，没有可替换的 A payout output；无法做单变量 check-only | 等产品产生独立 D_A 候选后再补 |
@@ -162,8 +162,8 @@
 
 | 核心场景 | 覆盖入口 | 当前结果 | 已知问题 |
 | --- | --- | --- | --- |
-| D5 external-signer outbound payment | **正式用例** `LSP-PAYMENT-05`（xfail） | 1 xfailed / 138.93s；A 付款未 Success | 产品 outbound 上游收口未完成 |
-| D2 Received 取消 | **正式用例** `LSP-INVOICE-CANCEL-03` | `1 passed / 125.89s`；补本地取消授权后通过 | 文档 #1723 仍待同步；主路径已验证 |
+| D5 external-signer outbound payment | **正式用例** `LSP-PAYMENT-05`（xfail） | 1 xfailed / 143.97s；P 发票已 Paid，A 付款仍 Inflight | 产品 outbound 上游收口未完成 |
+| D2 Received 取消 | **正式用例** `LSP-INVOICE-CANCEL-03` | `1 passed / 130.57s`；补本地取消授权后通过 | 文档 #1723 仍待同步；主路径已验证 |
 | F3 Watchtower 独立收款正向 | `LSP-WATCHTOWER-01` 设计入口 + 当前源码前置检查 | 前置不成立 | 产品仍把 unlock 付给 sponsor |
 | F4 WATCHTOWER-06 | `LSP-WATCHTOWER-06` 设计入口 + 当前 builder 检查 | 前置不成立 | 无独立 A payout output 可变异 |
 | H4 nonce fail-closed | 产品 release gate/源码入口 | 未执行 | 严格 nonce fail-closed 未实现 |
@@ -175,7 +175,7 @@
 ### D5 正式覆盖
 
 用例：`test_cases/fiber/devnet/lsp/test_hosted_outbound_payment.py::TestHostedOutboundPayment::test_hosted_tenant_pays_ordinary_node`
-结果：`1 xfailed in 138.93s`（`# TEST-MAP: LSP-PAYMENT-05`）。
+结果：`1 xfailed in 143.97s`（`# TEST-MAP: LSP-PAYMENT-05`）。
 
 ## 维护规则
 

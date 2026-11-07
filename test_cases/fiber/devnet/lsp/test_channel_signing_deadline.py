@@ -1598,6 +1598,7 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         a_after = self._isolated_view(self.client, until)
         assert a_after["state"]["state_name"] == "Closed", a_after
         assert "UNCOOPERATIVE_LOCAL" in a_after["state"]["state_flags"], a_after
+        assert "UNCOOPERATIVE_REMOTE" not in a_after["state"]["state_flags"], a_after
         assert a_after["shutdown_transaction_hash"] == a_hash, a_after
         self._observe(
             "remote_side_recovered",
