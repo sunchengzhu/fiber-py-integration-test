@@ -22,7 +22,7 @@ class TestHostedOutboundPayment(_CancellationBase):
         """
         1. A 的真实外部签名通道已就绪，P 已有 T–P 路由。
         2. A 发起真实 invoice payment，经 T 到 P。
-        3. 断言 A 付款成功、P 发票 Paid；当前产品停在 Inflight 则 xfail。
+        3. 断言 A 付款成功、P 发票 Paid；准备或终态失败均正常失败。
         """
         a = self.tenants[0]
         preimage = self.generate_random_preimage()
