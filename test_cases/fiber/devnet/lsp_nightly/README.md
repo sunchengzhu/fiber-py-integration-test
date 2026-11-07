@@ -1,6 +1,6 @@
 # LSP 手动夜间验证
 
-2026-11-07 当前状态：已改为自然时间模式，在 56c761c 上主退款用例 **1 passed / 4:12:20**，实际分支 `T-then-A-sweep`；辅助 TLC 自检 F2 仍明确 skip。历史 843 两轮结果只作为背景，不代表当前 head。
+2026-11-07 当前状态：已改为自然时间模式，在 56c761c 上主退款用例 **1 passed / 4:12:20**，实际分支 `T-then-A-sweep`；F2 SDK 快测 01～06 已通过；原 `TestTlcRefundAdapter` 的真实链/adapter 资格仍明确 skip。历史 843 两轮结果只作为背景，不代表当前 head。
 2026-10-30凌晨已关闭的旧批（历史记录）见完整报告（本地证据：`/Users/sunchengzhu/.codex/worktrees/lsp-reviewed-regressions/fiber-py-integration-test/report/lsp-night-new-84333ee-20261030T030349/RESULT.md`）：退款停在真实epoch成熟资格，正式1+3未运行；接纳03～06通过。该批正式退款为0；成熟预算随后已修正并用于下述新批。下方原入口仍固定04，作为保留历史。
 
 本目录存放自然时间下的 TLC 超时退款长场景及账本辅助代码，与普通 `lsp/` 测试分开。自然版不修改宿主或 guest 时间，不需要 Lima/VM。
@@ -8,6 +8,35 @@
 默认 pytest 收集会排除 `manual_nightly` 用例；显式 `--run-lsp-refund-nightly` 才会运行；自然版需要约 4–6 小时、机器保持唤醒，失败不自动重试。
 
 用例与完整执行边界见 [退款评审](../../../../reviews/lsp/tlc-timeout-refund.md)。普通适配工具继续复用相邻 `lsp/`，不在本目录复制产品或框架代码。
+
+## SDK 快测补充（F2-01～F2-06）
+
+[F2 快测方案与证据](../../../../reviews/lsp/tlc-refund-f2-fast-plan.md)中的六条 SDK/入口快测已实现：两种 witness 格式分别执行正向前置、五项具名负向和恢复后正向，共 14 次真实 SDK `prepare_onchain`；另有入口前置和超时回收检查。
+
+当前整组入口实测 **1.983 秒、4 passed**，使用固定内存链，无节点、VM、调时或自然等待。旧 `TestTlcRefundAdapter` 仍 skip，真实链/adapter 联合资格和独立 TLC 真实退款分支仍未完成；不能把 SDK 快测通过外推为这些路径通过。真实 270/275 秒边界亦未实测。
+
+在指定工作区根目录运行现有首例 bundle；执行不编译、不下载，输出自动创建新目录：
+
+```bash
+venv/bin/python scripts/run_lsp_refund_f2_fast.py \
+  --bundle download/fiber/pr-1623-56c761c-f2-g6 \
+  --output report/lsp-refund-f2-new \
+  --junitxml reports/lsp-refund-f2-new/native-results.xml
+```
+
+如需重新构建，显式准备与五分钟执行分别计时，`--output` 必须为新目录；构建仅使用现有离线缓存，缺依赖直接失败：
+
+```bash
+venv/bin/python scripts/build_lsp_test_binaries.py --refund-f2-only \
+  --source /Users/sunchengzhu/project/fiber-py-integration-test/download/fiber/source-pr-1623-56c761c4 \
+  --revision 56c761c45c271c086b05c8d5ea3e033448f5fdf8 \
+  --target-dir /Users/sunchengzhu/project/fiber/target \
+  --output download/fiber/pr-1623-56c761c-f2-new
+```
+
+快测继续标记 `manual_nightly`，默认排除，不加入日常 CI/Makefile。专用入口选择新快测文件和入口自检文件，并统一控制 300 秒上限；不要用整个 `lsp_nightly/` 目录替代选择器。真实 270/275 秒边界未实测，缩短截止的故障注入只验证收尾分支。
+
+## 自然退款与历史入口
 
 | 文件 | 用途 |
 | --- | --- |
