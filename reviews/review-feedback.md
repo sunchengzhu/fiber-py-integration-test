@@ -31,3 +31,4 @@
 - model: external PR reviewer | cases: LSP-PAYMENT-05 | feedback: 出站付款必须补 SDK 本地 `authorize_payment`，并按实际 A–T TLC 金额核对；P 的普通收款发票应提供 preimage，不能把缺授权或 hold invoice 不可结算误归为产品 outbound 失败。授权金额按有效 trampoline 上限修为 1,005,000；修复后 P 发票已 Paid，A 付款仍 Inflight，1 xfailed / 143.97s；xfail 仅包住最终产品终态。
 - model: external PR reviewer | cases: LSP-INVOICE-CANCEL-03 | feedback: 取消后要连续观察旧发票/旧付款至少 30 秒不复活，不能只看新付款成功；补完整稳定窗口后 1 passed / 130.57s。
 - model: external PR reviewer | cases: LSP-TIMEOUT-13 | feedback: A-win 时要排除 T 的 `UNCOOPERATIVE_LOCAL`，并在 T 恢复后复查 A 仍为获胜的 `UNCOOPERATIVE_LOCAL`；补断言后 1 passed / 340.32s。
+- model: external PR reviewer | cases: LSP-PAYMENT-05 | feedback: 出站付款还要在 TLC 被接受后完成 SDK 本地 `authorize_fulfillment`，否则 P Paid、A 仍会因缺少本地 resolution 停在 Inflight；补 fulfill 后 1 passed / 95.22s，xfail 已移除。

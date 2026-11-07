@@ -3,8 +3,6 @@
 import hashlib
 import time
 
-import pytest
-
 from test_cases.fiber.devnet.lsp.test_hosted_invoice_cancellation import _CancellationBase
 
 
@@ -72,6 +70,25 @@ class TestHostedOutboundPayment(_CancellationBase):
                 }
             ],
         )
+        # A's SDK must also authorize fulfillment once the outbound TLC has
+        # been accepted. P's settlement reveals the preimage, but the local
+        # resolution still has to be persisted before A can sign its removal.
+        fulfill_until = min(self.business_until, time.monotonic() + 30)
+        while True:
+            records = self._control(a, "records", fulfill_until)
+            if any(
+                tlc["payment_hash"] == payment_hash
+                for record in records
+                for tlc in record["tlcs"]
+            ):
+                break
+            self._pause(fulfill_until, 0.1)
+        self._control(
+            a,
+            "fulfill",
+            fulfill_until,
+            {"payment_hash": payment_hash, "preimage": preimage},
+        )
         deadline = time.monotonic() + 45
         while time.monotonic() < deadline:
             payment = a["client"].call(
@@ -83,10 +100,5 @@ class TestHostedOutboundPayment(_CancellationBase):
             if payment["status"] in ("Success", "Failed"):
                 break
             time.sleep(1)
-        if payment["status"] != "Success" or invoice_state["status"] != "Paid":
-            pytest.xfail(
-                "known product gap: hosted external-signer outbound payment does not finalize "
-                f"(payment={payment['status']}, invoice={invoice_state['status']})"
-            )
         assert payment["status"] == "Success", (payment, invoice_state)
         assert invoice_state["status"] == "Paid", invoice_state

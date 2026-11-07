@@ -9,7 +9,7 @@
 - “已覆盖-失败”不算完成，不能用产品失败换勾；
 - 产品未实现的行为可以先有设计，但不能标通过。
 
-进度：**37/44 个关键行为通过（约 84%）**。核心缺口中 D2、H6 已通过；D5 是正式 xfail，产品未通过；F3/F4/H4 仍产品阻塞；G4 受控 A/T 双分支已通过但自然竞态未判定。Rust 单元/集成测试与 Python 黑盒用例分开注明层级。
+进度：**38/44 个关键行为通过（约 86%）**。核心缺口中 D2、D5、H6 已通过；F3/F4/H4 仍产品阻塞；G4 受控 A/T 双分支已通过但自然竞态未判定。Rust 单元/集成测试与 Python 黑盒用例分开注明层级。
 
 ## A. 租户生命周期、查询与权限（6）
 
@@ -66,8 +66,8 @@
   P→T→A 正常付款、在线延迟、SDK 完全离线。证据：PAYMENT-01/02。
 - [x] **D4 缺授权后的同进程恢复**
   真实拒签、补授权、原请求恢复、下一笔付款。证据：PAYMENT-04。
-- [ ] **D5 external-signer outbound payment**
-  hosted 租户主动 `send_payment` 的完整 E2E。状态：Fiber 文档明确仍缺；2026-11-05 干净 passthrough 探针：补 SDK outbound authorization、gate 全放行后，P 发票已 Received，但 A 付款 90 秒仍 Inflight；T 日志 `Failed to settle upstream trampoline payment ... non-final status Inflight`。测试 gate 已排除，D5 仍未闭环。
+- [x] **D5 external-signer outbound payment**
+  hosted 租户主动 `send_payment` 的完整 E2E。2026-11-07 `LSP-PAYMENT-05` 补 SDK 出站授权与本地兑现授权后，`1 passed / 95.22s`；P 发票 `Paid`，A 付款 `Success`。
 
 ## E. Delivery（6）
 
@@ -133,7 +133,7 @@
 | P0 | F3 独立收款正向 | 等产品新要求 |
 | P0 | G3 TIMEOUT-04/05 | 等 #1674 |
 | P0 | A2～A5 租户查询/admin 边界 | 已设计 G1，低成本，待实现 |
-| P1 | D5 external-signer outbound、F4 watchtower06、G4 自然竞争、H4 nonce | 产品/契约或非确定性专项 |
+| P1 | F4 watchtower06、G4 自然竞争、H4 nonce | 产品/契约或非确定性专项 |
 | P1 | H4 nonce、H5 feature-off | 产品/构建级门禁 |
 
 
@@ -145,7 +145,7 @@
 | --- | --- | --- | --- |
 | E1 `DELIVERY-02` | **产品失败** | 56c761c 已复验失败：接纳后丢回复，最终一致性不成立 | 等产品修复后复验，不重写预期 |
 | D2 Received 取消 | **已通过** | 补 SDK `authorize_cancellation` 后 `LSP-INVOICE-CANCEL-03` 1 passed / 130.57s；文档 issue #1723 单独处理 | 保留文档同步项 |
-| D5 external-signer outbound | **产品未完成（干净探针仍失败）** | 文档仍列为剩余；补 outbound authorization、gate 全放行后 P 发票 Received，但 A 付款 90 秒仍 Inflight，T 报 upstream 非终态 | 等完整 outbound E2E，不用内部 runtime 测试冒充 |
+| D5 external-signer outbound | **已通过** | `LSP-PAYMENT-05` 补 SDK 出站授权、P preimage 和本地 `fulfill` 后 `1 passed / 95.22s` | 无 |
 | F3 Watchtower 独立收款正向 | **产品未完成** | 当前结算仍把 unlock 金额付给 sponsor fee-provider；独立 D_A 正向未实现 | 等双地址/独立收款实现 |
 | F4 WATCHTOWER-06 | **产品阻塞** | 当前 `build_settlement_transaction` 的 settlement output 直接 lock 到 fee provider S，没有可替换的 A payout output；无法做单变量 check-only | 等产品产生独立 D_A 候选后再补 |
 | G3 TIMEOUT-04/05 | **产品失败** | #1674 未修复；普通开通超时/晚到通道签名仍失败 | 等 #1674 |
@@ -153,7 +153,7 @@
 | H4 nonce fail-closed | **产品 gate 未完成** | 文档列为 release gate；严格 nonce-reuse/fail-closed 未完成 | 等产品安全门禁 |
 | H6 当前 head 退款 | **已通过（单分支）** | 56c761c 自然时间：`1 passed / 4:12:20`，实际分支 `T-then-A-sweep`；独立 TLC 退款分支未取得；辅助自检 F2 仍 skip | 保留分支边界，不扩写为所有退款路径通过 |
 
-因此关键行为进度为 **37/44（约 84%）**；剩余 7 项：D5、E1、F3、F4、G3、G4 自然竞态、H4。未把“无法测试”折算成通过。
+因此关键行为进度为 **38/44（约 86%）**；剩余 6 项：E1、F3、F4、G3、G4 自然竞态、H4。未把“无法测试”折算成通过。
 
 
 ## 核心缺口场景覆盖计划（2026-11-05）
@@ -162,7 +162,7 @@
 
 | 核心场景 | 覆盖入口 | 当前结果 | 已知问题 |
 | --- | --- | --- | --- |
-| D5 external-signer outbound payment | **正式用例** `LSP-PAYMENT-05`（xfail） | 1 xfailed / 143.97s；P 发票已 Paid，A 付款仍 Inflight | 产品 outbound 上游收口未完成 |
+| D5 external-signer outbound payment | **正式用例** `LSP-PAYMENT-05` | `1 passed / 95.22s`；P 发票 Paid，A 付款 Success | 成功路径资金/TLC 细项仍是后续补强 |
 | D2 Received 取消 | **正式用例** `LSP-INVOICE-CANCEL-03` | `1 passed / 130.57s`；补本地取消授权后通过 | 文档 #1723 仍待同步；主路径已验证 |
 | F3 Watchtower 独立收款正向 | `LSP-WATCHTOWER-01` 设计入口 + 当前源码前置检查 | 前置不成立 | 产品仍把 unlock 付给 sponsor |
 | F4 WATCHTOWER-06 | `LSP-WATCHTOWER-06` 设计入口 + 当前 builder 检查 | 前置不成立 | 无独立 A payout output 可变异 |
@@ -170,12 +170,12 @@
 | H6 当前 head 退款 | **正式自然时间用例** `test_tlc_timeout_refund.py` | `1 passed / 4:12:20`，实际分支 `T-then-A-sweep` | 独立 TLC 退款分支未取得；辅助自检 F2 仍 skip |
 | G4 自然强关竞争 | `LSP-TIMEOUT-12`（T-win）+ `LSP-TIMEOUT-13`（A-win） | 受控双分支均通过；自然竞态未判定 | 非确定性，需专项预算 |
 
-结论：**D2、H6 已有正式通过；D5 已有正式 xfail；G4 受控双分支已通过；F3/F4/H4 仍是产品阻塞，G4 自然竞态仍未判定。不能报 7/7 或 100%**。产品失败不写成通过，也不再把入口冒充测试。
+结论：**D2、D5、H6 已有正式通过；G4 受控双分支已通过；F3/F4/H4 仍是产品阻塞，G4 自然竞态仍未判定。不能报 100%**。产品失败不写成通过，也不再把入口冒充测试。
 
 ### D5 正式覆盖
 
 用例：`test_cases/fiber/devnet/lsp/test_hosted_outbound_payment.py::TestHostedOutboundPayment::test_hosted_tenant_pays_ordinary_node`
-结果：`1 xfailed in 143.97s`（`# TEST-MAP: LSP-PAYMENT-05`）。
+结果：`1 passed in 95.22s`（`# TEST-MAP: LSP-PAYMENT-05`）。
 
 ## 维护规则
 
@@ -190,4 +190,4 @@
 
 结果：**76 passed / 0 failed / 0 ignored**（测试运行 13.47s）。覆盖包括：多通道 reselect、delivery service restart、MPP、per-tenant 限额、buffer deadline、eviction 门禁、多通道开户、并发租户、outbound 付款等。
 
-层级说明：这些是 Rust 单元/集成测试，不等于 Python 黑盒 E2E；关键行为只按“有真实测试证据”勾选，并在行内注明层级。D5 仍不勾：现有 outbound 测试使用 hosted 内部 runtime；Fiber 文档仍把完整 external-signer outbound E2E 列为剩余项。
+层级说明：这些是 Rust 单元/集成测试，不等于 Python 黑盒 E2E；关键行为只按“有真实测试证据”勾选，并在行内注明层级。D5 已按 `LSP-PAYMENT-05` 的真实 Python E2E 通过重新勾选；成功路径的资金/TLC 细项仍是后续补强。
