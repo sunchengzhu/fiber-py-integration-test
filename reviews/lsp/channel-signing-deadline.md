@@ -116,6 +116,7 @@ Testing: required
     - 检查点 B 扣留撤销签名，含目标 TLC 承诺确认：LSP-TIMEOUT-10 [primary] -> SPEC-06
     - 两侧内容唯一绑定、T 真正被拦、A 真正上链、未知即失败：LSP-TIMEOUT-08 LSP-TIMEOUT-10 [ref] -> SPEC-08
   - 双方真实竞争后的败方识别（本批仅 B）
+    - A-win 后 T 识别远端关闭：LSP-TIMEOUT-13 [primary] -> SPEC-09
     - B 的含 TLC 完整承诺就绪，T 胜出且 A 真实 RBF 后自动识别远端关闭：LSP-TIMEOUT-12 [primary] -> SPEC-09
     - 一次固定查询窗口、唯一交易归属及真实确认，缺任一前提均不能记恢复通过：LSP-TIMEOUT-12 [ref] -> SPEC-09
     - 索引可见后完整观察，关闭方向/hash/无待签恢复后不回退，并有 Hosted A 归因证据：LSP-TIMEOUT-12 [ref] -> SPEC-09
@@ -165,6 +166,7 @@ Testing: required
 | `LSP-TIMEOUT-10` | - [x] A–T 就绪后暂停本条矿工，到达检查点 B：A 已完整签署含目标 TLC 的承诺，下一撤销签名始终扣留；在 D 前绑定双方承诺并启用广播隔离，待 A 被真实 CKB 接受且 T 的竞争广播实际被拦后恢复挖块 | A 在 D 后 15 秒内自动保护并广播该承诺；首次真实转发起 60 秒内由真实 CKB 确认并花费原注资，A 记录本地强关；确认交易规范化签名消息匹配 SDK 完整记录，目标 payment_hash 与 expiry 准确且区别于注入前承诺；未交 preimage，发票在有效期内仍为 Open；未知交易或隔离前提不成立均失败 | 用旧的无 TLC 承诺或 T 的交易冒充 A 的含 TLC 强关，或把广播成功当确认、把隔离成功当产品恢复无缺陷 | P0 |
 | `LSP-TIMEOUT-11` | - [x] 建立检查点 C：先让 TLC-A 的承诺签名与撤销签名都应用、ACK 往返完成，等发票 A 变为 `Received`；再注入独立的 TLC-B 并停在它的检查点 B；让保护在 D 触发、关闭交易确认。全程不交出任何 preimage、不批准兑现；发票 A 自身有效期设为 90 秒，确认后等到越过它再查询 | 关闭交易含 TLC-A（其版本已完整签署）；发票 A 全程不是 `Paid`，确认时与越过其自身有效期之后都保持 `Received`，不变成 `Open` 或 `Expired`；收款方没有成功收入，锁定额不被当成已结算，不产生第二次结算 | 把关闭当结算完成、发票被误判已支付、锁定额被记成收入，或用“扣住 ACK 未完成”的检查点冒充 `Received` 场景 | P0 |
 | `LSP-TIMEOUT-12` | - [x] A–T 就绪后到达检查点 B：A 已完整签署含目标 TLC 的承诺，下一撤销签名始终扣留；仅对 A 发送前的真实 unknown 交易查询使用一次固定 250 ms 响应窗口，保留双方真实广播，取得 T 确认及 A 真实 RBFRejected 后持续观察 | T 精确花费原 funding 且索引可查后，A 在 330 秒内自动进入 Closed/UNCOOPERATIVE_REMOTE，关闭 hash 指向 T 且为 NoSignatureRequired；观察满 330 秒并覆盖恢复后至少 10 秒（总上限 340 秒），全部后续样本不回退且有同通道 Hosted A 恢复日志；场景或证据不成立均非零退出 | A 广播失败后不能自动识别赢家、只凭无待签或最后一帧误判恢复，或把场景未取得当恢复通过 | P1 |
+| `LSP-TIMEOUT-13` | - [x] A 赢下受控强关竞争；A 的关闭确认后，检查 T 的远端关闭状态 | T 必须进入 Closed/UNCOOPERATIVE_REMOTE，关闭哈希等于 A 的真实关闭，且不保留本地关闭；A 侧状态保持 | 输家 T 不识别远端关闭或重复结算 | P1 |
 <!-- TEST-CASES-END -->
 
 ## LSP-TIMEOUT-12：检查点 B 独立败方恢复
@@ -385,3 +387,5 @@ Gate3 修正了 CKB RPC 的状态表达：固定 0.202.0 随包官方文档（�
 用户要求优先补PR主要逻辑后，独立新批仅运行上批未执行的08/10/12/11，各一次、4/4通过。原行集/TEST-MAP保持，未重跑07或已知04/05。08/10真实A承诺确认、原funding输入及完整签名消息验证通过；08晚提交拒绝后稳定5.016秒，10确含目标hash/expiry。12真实T确认、A真实RBFRejected，在264.800秒识别远端关闭，完整观察330.957秒，恢复后66.157秒无回退；其固定查询时序不代表全部自然竞争。11目标发票关闭后和自身到期后仍Received、未Paid、收款local余额未增加，不代表链上退款或付款方解锁。
 
 三阶段exit0、整批exit0；正式执行和清理832.283秒，小于1800秒总上限，阶段600/720/480秒未重置。GPT-6 Sol High复核原始链、RPC、节点、JUnit证据和清理；源码与产物固定干净843。剩余运行目录已逐项校验归档并清理，6个自有进程组退出、9端口释放。旧07依旧记为60秒自然竞争等待失败，不能被本批12的独立通过覆盖。详见本批结果（本地证据：`../../report/lsp-closeout-84333ee-20261030/execution-220814/RESULT.md`）。
+
+2026-11-07 补充结果：`LSP-TIMEOUT-13` 在 56c761c 上 **1 passed / 340.28s (0:05:40)**。A 赢下受控强关竞争，T 的竞争广播被真实拦截；T 最终进入 `Closed / UNCOOPERATIVE_REMOTE | WAITING_ONCHAIN_SETTLEMENT`，`shutdown_transaction_hash` 等于 A 的真实关闭。现在受控 T-win/A-loser（12）和 A-win/T-loser（13）双向均已通过；自然竞态仍未判定。

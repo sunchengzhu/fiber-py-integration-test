@@ -25,3 +25,6 @@
 - model: unavailable | cases: LSP-DELIVERY-05 | feedback: 经 56c761c 源码与提交 d96dfecb 确认，replay 识别先于 accept_on_channel；同 key 改金额预期改为 existing-key 冲突，金额校验另用不同 TLC/key 覆盖。
 - model: unavailable | cases: LSP-PAYMENT-04 | feedback: SDK 正常记录 revoked commitment；测试改为比较稳定身份字段并允许新增撤销记录，同时在 release 前等待发票 Received，不要求整个 status 文件不变。
 - model: unavailable | cases: LSP-TENANT-QUERY-01 | feedback: 不真实开资金通道的测试没有意义；改为真实 A/B 注册、真实 funding/ChannelReady 通道和真实发票的黑盒场景，不用未注资的 unsigned channel 代替。
+- model: external reviewer | cases: LSP-INVOICE-CANCEL-03 | feedback: 首次失败是测试漏掉 SDK `authorize_cancellation`，SDK 报 `TLC removed without a locally authorized resolution`；补授权后当前 head 1 passed / 100.80s，不能把它归为上游 TLC 传播缺陷。
+- model: external reviewer | cases: LSP-REFUND-01～03 | feedback: 退款改为自然时间夜间模式，去掉 Lima/VM/GuestClock；主用例在 56c761c 1 passed / 4:12:20，实际分支 T-then-A-sweep；F2 辅助自检仍 skip，不宣称全部退款分支通过。
+- model: external reviewer | cases: LSP-TIMEOUT-13 | feedback: 补 A-win/T-loser 受控竞态用例；A 的关闭确认后 T 必须进入 Closed/UNCOOPERATIVE_REMOTE，关闭哈希等于 A；自然竞态仍不作为普通门禁。

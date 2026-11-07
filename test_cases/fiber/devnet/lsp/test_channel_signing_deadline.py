@@ -37,6 +37,7 @@ WALLET_HOLD_TESTS = {
 ISOLATED_CLOSE_TESTS = {
     "test_node_protects_without_any_submission",
     "test_force_close_uses_commitment_with_target_tlc",
+    "test_remote_side_recovers_after_local_force_close",
 }
 RECOVERY_TEST = "test_checkpoint_b_loser_recovers_remote_close"
 
@@ -1573,6 +1574,26 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
                 break
             time.sleep(max(0, min(0.2, stable_until - time.monotonic())))
         self._observe("late_submission_stable", after=after)
+
+    # TEST-MAP: LSP-TIMEOUT-13
+    def test_remote_side_recovers_after_local_force_close(self):
+        """
+        1. A 赢下受控强关竞争，T 的竞争广播被真实拦截。
+        2. A 的关闭真实确认后，T 必须识别为远端关闭并收敛，不能保留本地关闭。
+        """
+        payment = self._prepare_isolated_close("A")
+        a_view, _, closed_at = self._confirm_isolated_close(payment)
+        a_hash = a_view["shutdown_transaction_hash"]
+        until = closed_at + 330
+        while True:
+            self._isolation_health(until)
+            t_view = self._isolated_view(self.fiber1.client, until)
+            if t_view["state"]["state_name"] == "Closed":
+                break
+            time.sleep(min(0.2, self._remaining(until)))
+        assert "UNCOOPERATIVE_REMOTE" in t_view["state"]["state_flags"], t_view
+        assert t_view["shutdown_transaction_hash"] == a_hash, t_view
+        self._observe("remote_side_recovered", view=t_view, close_hash=a_hash)
 
     # TEST-MAP: LSP-TIMEOUT-10
     def test_force_close_uses_commitment_with_target_tlc(self):
