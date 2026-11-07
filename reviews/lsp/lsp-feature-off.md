@@ -63,6 +63,18 @@ Testing: required
 | B-04：构建/空间/离线未验证 | 明确 warm target 锁、`CARGO_PROFILE_DEV_DEBUG=0`、构建前后空间、先验证 offline；构建失败单独归因 |
 | B-05：二进制注入/版本漂移 | 明确 SimpleNamespace/显式 binary 注入，`--version`/sha256 provenance，不用 LspTestBase 固定 revision |
 
+## ccac337 复审修复
+
+2026-11-07 针对 `ccac337` 复审的 R1/R2/N1 修复：
+
+| Finding | 处理 |
+| --- | --- |
+| R1：按端口清理无法保证本次子进程 | Case 2 的 probe 进程保存为测试自有句柄；成功、失败、超时和 teardown 都按 PID `terminate`/`wait`/`kill` 回收，Case 2 不再调用按端口反查的 `Fiber.stop()`；启动前检查 8248/8249 空闲，端口冲突作为环境错误且不终止无关进程 |
+| R2：Case 01 无法单独证明 feature-off 构建 | Case 01 与 Case 02 共用 `_run_feature_off_probe()`：用同一二进制启动带 `services: lsp` 的配置，必须看到 `built without the \`lsp\` feature` 且不能监听 RPC。默认 LSP 二进制会在 probe 阶段失败，不能只看版本字符串通过 |
+| N1：退出后端口检查不能证明未监听 | probe 在进程运行期间持续探测 RPC 端口；一旦观察到监听即失败，并保留最终端口关闭检查 |
+
+复跑：`2 passed in 102.82s`。Case 01 先执行 feature-off probe，再以普通配置启动；Case 02 独立执行 probe。进程句柄和端口冲突路径已按上述方式收口。
+
 ## 未分析分支
 
 - 无 lsp 构建下，旧的 tenant/alias RPC 是否应返回 no-op 还是 method-not-found：本 Case 只观察 `lsp_get_status` 不存在；其他 tenant alias 方法不在本批。

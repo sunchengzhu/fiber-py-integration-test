@@ -32,3 +32,4 @@
 - model: external PR reviewer | cases: LSP-INVOICE-CANCEL-03 | feedback: 取消后要连续观察旧发票/旧付款至少 30 秒不复活，不能只看新付款成功；补完整稳定窗口后 1 passed / 130.57s。
 - model: external PR reviewer | cases: LSP-TIMEOUT-13 | feedback: A-win 时要排除 T 的 `UNCOOPERATIVE_LOCAL`，并在 T 恢复后复查 A 仍为获胜的 `UNCOOPERATIVE_LOCAL`；补断言后 1 passed / 340.32s。
 - model: external PR reviewer | cases: LSP-PAYMENT-05 | feedback: 出站付款还要在 TLC 被接受后完成 SDK 本地 `authorize_fulfillment`，否则 P Paid、A 仍会因缺少本地 resolution 停在 Inflight；补 fulfill 后 1 passed / 95.22s，xfail 已移除。
+- model: external PR reviewer | cases: LSP-FEATURE-01/02 | feedback: feature-off 用例必须按本次启动的子进程句柄清理；Case 01 单独运行也必须用同一二进制执行 lsp 配置拒绝 probe 来证明构建不含 lsp feature；端口冲突不能按端口 kill 无关进程；probe 运行期间要观察是否曾监听 RPC。修复后 2 passed / 102.82s。

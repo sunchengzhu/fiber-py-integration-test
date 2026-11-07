@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import requests
 
 from framework.basic_fiber import FiberTest
-from framework.test_fiber import Fiber, FiberConfigPath, wait_for_port
+from framework.test_fiber import Fiber, FiberConfigPath
 from framework.util import get_project_root
 
 
@@ -38,11 +38,81 @@ class TestLspFeatureOff(FiberTest):
             self.fiber_p2p_port,
         )
         self.fiber.prepare(update_config={"ckb_rpc_url": self.node.rpcUrl})
+        self.fiber_started = False
+        self.config_process = None
 
     def teardown_method(self, method):
-        # Case 2 exits before listening; stop() handles both started and already gone.
-        self.fiber.stop()
-        self.fiber.clean()
+        try:
+            if self.fiber_started:
+                self.fiber.stop()
+        finally:
+            self._stop_config_process()
+            self.fiber.clean()
+
+    def _stop_config_process(self):
+        process = self.config_process
+        self.config_process = None
+        if process is None or process.poll() is not None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+
+    def _assert_ports_free(self):
+        for port in (self.fiber_rpc_port, self.fiber_p2p_port):
+            with socket.socket() as sock:
+                assert sock.connect_ex(("127.0.0.1", int(port))) != 0, (
+                    f"port {port} is already in use; refusing to disturb an unrelated process"
+                )
+
+    def _run_feature_off_probe(self):
+        """Prove the binary rejects an lsp service before any RPC listener starts."""
+        self._assert_ports_free()
+        config_path = Path(self.fiber.fiber_config_path)
+        source = config_path.read_text()
+        assert source.count("services:\n") == 1
+        config = source.replace("services:\n", "services:\n  - lsp\n", 1)
+        config += "\nlsp:\n  max_active_tenants: 2\n"
+        config_path.write_text(config)
+        process = subprocess.Popen(
+            [str(self.binary), "-c", str(config_path), "-d", self.fiber.tmp_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env={
+                **os.environ,
+                "FIBER_SECRET_KEY_PASSWORD": "password0",
+                "RUST_LOG": "info,fnn=debug",
+            },
+        )
+        self.config_process = process
+        listened = False
+        deadline = time.monotonic() + 60
+        try:
+            while process.poll() is None:
+                with socket.socket() as sock:
+                    if sock.connect_ex(("127.0.0.1", int(self.fiber_rpc_port))) == 0:
+                        listened = True
+                        break
+                assert time.monotonic() < deadline, "feature-off probe did not exit"
+                time.sleep(0.05)
+            if process.poll() is None:
+                self._stop_config_process()
+            out, err = process.communicate(timeout=10)
+            combined = out + err
+            assert not listened, f"binary listened on RPC before rejecting lsp: {combined}"
+            assert process.returncode != 0, (process.returncode, combined)
+            assert "built without the `lsp` feature" in combined, combined
+            assert "biscuit" not in combined.lower(), combined
+            with socket.socket() as sock:
+                assert sock.connect_ex(("127.0.0.1", int(self.fiber_rpc_port))) != 0
+            return combined
+        finally:
+            self._stop_config_process()
+            config_path.write_text(source)
 
     def _assert_binary_provenance(self):
         version = subprocess.check_output(
@@ -71,6 +141,9 @@ class TestLspFeatureOff(FiberTest):
         2. 普通 RPC 可用，hosted LSP RPC 不存在，日志没有 LSP service 启动。
         """
         self._assert_binary_provenance()
+        self._run_feature_off_probe()
+        self._assert_ports_free()
+        self.fiber_started = True
         self.fiber.start()
         node = self.fiber.client.call("node_info", [])
         assert node["pubkey"], node
@@ -89,34 +162,4 @@ class TestLspFeatureOff(FiberTest):
         2. 进程在 RPC 监听前退出，错误明确说明构建时没有 lsp feature。
         """
         self._assert_binary_provenance()
-        config_path = Path(self.fiber.fiber_config_path)
-        config = config_path.read_text()
-        assert config.count("services:\n") == 1
-        config = config.replace("services:\n", "services:\n  - lsp\n", 1)
-        config += "\nlsp:\n  max_active_tenants: 2\n"
-        config_path.write_text(config)
-
-        process = subprocess.Popen(
-            [
-                str(self.binary),
-                "-c",
-                str(config_path),
-                "-d",
-                self.fiber.tmp_path,
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env={
-                **os.environ,
-                "FIBER_SECRET_KEY_PASSWORD": "password0",
-                "RUST_LOG": "info,fnn=debug",
-            },
-        )
-        out, err = process.communicate(timeout=60)
-        assert process.returncode != 0, (process.returncode, out, err)
-        combined = out + err
-        assert "built without the `lsp` feature" in combined, combined
-        assert "biscuit" not in combined.lower(), combined
-        with socket.socket() as sock:
-            assert sock.connect_ex(("127.0.0.1", int(self.fiber.rpc_port))) != 0
+        self._run_feature_off_probe()

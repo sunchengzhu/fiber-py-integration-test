@@ -119,7 +119,7 @@
 - [ ] **H4 严格 nonce-reuse / fail-closed**
   nonce 重用和缺失 material 的 fail-closed。状态：文档列为 release gate，产品未完成。
 - [x] **H5 `lsp` feature 关闭的构建/启动回归**
-  不带 lsp feature 的 FNN 正常启动；`lsp:`/services 配置被明确拒绝。证据：`LSP-FEATURE-01/02`，无 lsp 构建 56c761c，2 passed / 80.62s。
+  不带 lsp feature 的 FNN 正常启动；`lsp:`/services 配置被明确拒绝。证据：`LSP-FEATURE-01/02`，无 lsp 构建 56c761c，2 passed / 102.82s；Case 01 先做 feature-off 配置 probe，Case 02 按自有进程句柄清理。
 - [x] **H6 当前 head 退款链路**
   REFUND-01～03 在 56c761c 自然时间重跑：`1 passed / 4:12:20`，实际分支 `T-then-A-sweep`。独立 TLC 退款分支未观察到；辅助 TLC 自检 F2 仍明确 skip。
 
@@ -134,7 +134,7 @@
 | P0 | G3 TIMEOUT-04/05 | 等 #1674 |
 | P0 | A2～A5 租户查询/admin 边界 | 已设计 G1，低成本，待实现 |
 | P1 | F4 watchtower06、G4 自然竞争、H4 nonce | 产品/契约或非确定性专项 |
-| P1 | H4 nonce、H5 feature-off | 产品/构建级门禁 |
+| P1 | H4 nonce | 产品安全门禁 |
 
 
 ## 剩余九项最终归类（2026-11-05）
