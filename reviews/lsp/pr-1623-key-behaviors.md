@@ -119,7 +119,7 @@
 - [ ] **H4 严格 nonce-reuse / fail-closed**
   nonce 重用和缺失 material 的 fail-closed。状态：文档列为 release gate，产品未完成。
 - [x] **H5 `lsp` feature 关闭的构建/启动回归**
-  不带 lsp feature 的 FNN 正常启动；`lsp:`/services 配置被明确拒绝。证据：`LSP-FEATURE-01/02`，无 lsp 构建 56c761c，2 passed / 102.82s；Case 01 先做 feature-off 配置 probe，Case 02 按自有进程句柄清理。
+  不带 lsp feature 的 FNN 正常启动；`lsp:`/services 配置被明确拒绝。证据：`LSP-FEATURE-01/02`，无 lsp 构建 56c761c，2 passed / 102.65s；Case 01 先做 feature-off 配置 probe，Case 02 按自有进程句柄清理。
 - [x] **H6 当前 head 退款链路**
   REFUND-01～03 在 56c761c 自然时间重跑：`1 passed / 4:12:20`，实际分支 `T-then-A-sweep`。独立 TLC 退款分支未观察到；辅助 TLC 自检 F2 仍明确 skip。
 

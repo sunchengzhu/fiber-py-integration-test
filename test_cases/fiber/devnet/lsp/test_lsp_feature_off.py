@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import socket
 import subprocess
+import tempfile
 import time
 from types import SimpleNamespace
 
@@ -77,32 +78,52 @@ class TestLspFeatureOff(FiberTest):
         config = source.replace("services:\n", "services:\n  - lsp\n", 1)
         config += "\nlsp:\n  max_active_tenants: 2\n"
         config_path.write_text(config)
-        process = subprocess.Popen(
-            [str(self.binary), "-c", str(config_path), "-d", self.fiber.tmp_path],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env={
-                **os.environ,
-                "FIBER_SECRET_KEY_PASSWORD": "password0",
-                "RUST_LOG": "info,fnn=debug",
-            },
-        )
-        self.config_process = process
-        listened = False
-        deadline = time.monotonic() + 60
         try:
-            while process.poll() is None:
-                with socket.socket() as sock:
-                    if sock.connect_ex(("127.0.0.1", int(self.fiber_rpc_port))) == 0:
-                        listened = True
-                        break
-                assert time.monotonic() < deadline, "feature-off probe did not exit"
-                time.sleep(0.05)
-            if process.poll() is None:
-                self._stop_config_process()
-            out, err = process.communicate(timeout=10)
-            combined = out + err
+            with tempfile.TemporaryDirectory(prefix="lsp-feature-off-logs-") as logs:
+                stdout_path = Path(logs) / "stdout.log"
+                stderr_path = Path(logs) / "stderr.log"
+                with stdout_path.open("w") as stdout, stderr_path.open("w") as stderr:
+                    process = subprocess.Popen(
+                        [
+                            str(self.binary),
+                            "-c",
+                            str(config_path),
+                            "-d",
+                            self.fiber.tmp_path,
+                        ],
+                        stdout=stdout,
+                        stderr=stderr,
+                        text=True,
+                        env={
+                            **os.environ,
+                            "FIBER_SECRET_KEY_PASSWORD": "password0",
+                            "RUST_LOG": "info,fnn=debug",
+                        },
+                    )
+                    self.config_process = process
+                    listened = False
+                    deadline = time.monotonic() + 60
+                    try:
+                        while process.poll() is None:
+                            with socket.socket() as sock:
+                                if (
+                                    sock.connect_ex(
+                                        ("127.0.0.1", int(self.fiber_rpc_port))
+                                    )
+                                    == 0
+                                ):
+                                    listened = True
+                                    break
+                            assert (
+                                time.monotonic() < deadline
+                            ), "feature-off probe did not exit"
+                            time.sleep(0.05)
+                        if process.poll() is None:
+                            self._stop_config_process()
+                        process.wait(timeout=10)
+                    finally:
+                        self._stop_config_process()
+                combined = stdout_path.read_text() + stderr_path.read_text()
             assert not listened, f"binary listened on RPC before rejecting lsp: {combined}"
             assert process.returncode != 0, (process.returncode, combined)
             assert "built without the `lsp` feature" in combined, combined

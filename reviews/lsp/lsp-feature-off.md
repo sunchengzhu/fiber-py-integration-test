@@ -72,8 +72,9 @@ Testing: required
 | R1：按端口清理无法保证本次子进程 | Case 2 的 probe 进程保存为测试自有句柄；成功、失败、超时和 teardown 都按 PID `terminate`/`wait`/`kill` 回收，Case 2 不再调用按端口反查的 `Fiber.stop()`；启动前检查 8248/8249 空闲，端口冲突作为环境错误且不终止无关进程 |
 | R2：Case 01 无法单独证明 feature-off 构建 | Case 01 与 Case 02 共用 `_run_feature_off_probe()`：用同一二进制启动带 `services: lsp` 的配置，必须看到 `built without the \`lsp\` feature` 且不能监听 RPC。默认 LSP 二进制会在 probe 阶段失败，不能只看版本字符串通过 |
 | N1：退出后端口检查不能证明未监听 | probe 在进程运行期间持续探测 RPC 端口；一旦观察到监听即失败，并保留最终端口关闭检查 |
+| R3：PIPE 未持续读取导致日志背压误超时 | probe 的 stdout/stderr 改为写入测试专用临时文件；端口观察和退出等待不再依赖 PIPE 读取，退出后完整读取日志，避免 1 MiB 日志把正确拒绝堵成超时 |
 
-复跑：`2 passed in 102.82s`。Case 01 先执行 feature-off probe，再以普通配置启动；Case 02 独立执行 probe。进程句柄和端口冲突路径已按上述方式收口。
+复跑：`2 passed in 102.65s`。Case 01 先执行 feature-off probe，再以普通配置启动；Case 02 独立执行 probe。进程句柄、端口冲突和日志背压路径已按上述方式收口。
 
 ## 未分析分支
 
