@@ -1,6 +1,6 @@
 # Hosted 租户发票取消：Gate2 用例评审
 
-范围：LusoCryptoLabs 在 [PR #1623 的三项实测反馈](https://github.com/nervosnetwork/fiber/pull/1623#issuecomment-6418454010)中报告的第三项，以及已确认 [Gate1 方向 9～11](field-feedback-scope.md#用例gate1-候选场景)。固定分析版本为 `84333eea8488a8afc7e4474aa4bbd0e7e973cee9`。2026-10-30 用户授权按顺序持续推进，无需再逐项等待 Gate1/Gate2；01/02已实施并建立TEST-MAP，固定843只执行01单次诊断。03的Received取消契约仍待产品明确，保留未映射、未运行。映射不代表通过。
+范围：LusoCryptoLabs 在 [PR #1623 的三项实测反馈](https://github.com/nervosnetwork/fiber/pull/1623#issuecomment-6418454010)中报告的第三项，以及已确认 [Gate1 方向 9～11](field-feedback-scope.md#用例gate1-候选场景)。固定分析版本为 `84333eea8488a8afc7e4474aa4bbd0e7e973cee9`。2026-11-07 当前状态：03 已实施并在 56c761c 通过（1 passed / 130.57s，含取消后完整 30 秒稳定观察）。实现补齐了 SDK 本地 `authorize_cancellation`；#1723 只处理“文档说仅 Open”的同步，不再阻塞 03 行为。映射存在与执行通过分开记录。
 
 这里的 A、B 是不同 Hosted 租户，P 是付款方，T 是 LSP；A/B 使用各自真实 tenant Biscuit，不能用 operator token 代替。`Open` 为尚未收到款，`Received` 为已收到但未结算的 hold invoice。金额 M 固定 1,000,000 Shannon，费用上限 10,000 Shannon；成功时用实际付款费 f 核账，不把上限当实收费用。
 
@@ -51,7 +51,7 @@ Testing: not_tested — 当前入口先被 allowlist 阻断，且 `Received` 契
 | --- | --- | --- | --- | --- |
 | `LSP-INVOICE-CANCEL-01` | - [x] A 用真实 tenant token 创建未过期的 Open hold invoice，客户端保留 preimage、SDK 仅保存付款授权；A 调用 `cancel_invoice`，再由 P 尝试付款旧发票并完成一笔新发票付款 | A 的取消返回 `Cancelled` 且查询保持；旧付款终态时 P/T/A 余额回基线、费用与 TLC 锁定额为零，旧 preimage 无提交记录；新付款按实际费用 f 正常结算 | 租户入口被 allowlist 挡住，或取消只改状态却仍能收款 | P0 |
 | `LSP-INVOICE-CANCEL-02` | - [x] A/B 各有真实身份和 Open 发票；B 先用自己的 tenant token 取消 B 发票，再用同一 token 取消 A 发票，随后 P 支付 A 原发票 | B 自己的取消成功，跨租户请求被拒且 A 发票/余额/锁定额不变；A 原付款成功一次、A 收 M、P 支出 M+实际 f、T 净收入 f，最终无 TLC 锁定 | 统一入口拒绝伪装成隔离，或跨租户取消污染 A | P0 |
-| `LSP-INVOICE-CANCEL-03` | - [ ] A 的 payment-hash-only hold invoice 已在真实 P→T→A 付款中进入 `Received`，客户端保留 preimage、未向 FNN 提交；A 用 tenant token 取消并让后台自然恢复，之后发送新付款 | 待确认：无节点 preimage 的 `Received` 应允许取消；若确认，返回 `Cancelled`、原付款失败且无有效下游支出，原付款终态时各方余额回基线、费用和 TLC 锁定额为零，30 秒内不复活，新付款可正常结算 | 待处理付款继续支付已取消发票，或取消后通道被永久占用 | P0 |
+| `LSP-INVOICE-CANCEL-03` | - [x] A 的 payment-hash-only hold invoice 已在真实 P→T→A 付款中进入 `Received`，客户端保留 preimage、未向 FNN 提交；A 先调用 SDK `authorize_cancellation`，再用 tenant token 取消并让后台自然恢复，之后发送新付款 | 无节点 preimage 的 `Received` 允许取消；返回 `Cancelled`、原付款失败且无有效下游支出，原付款终态时各方余额回基线、费用和 TLC 锁定额为零，30 秒内不复活，新付款可正常结算 | 待处理付款继续支付已取消发票，或取消后通道被永久占用 | P0 |
 <!-- TEST-CASES-END -->
 
 ## 触发、资金断言与时间预算
@@ -70,3 +70,5 @@ Testing: not_tested — 当前入口先被 allowlist 阻断，且 `Received` 契
 
 
 2026-10-30 执行结果：01在固定843的真实租户入口收到 `-32999 Unauthorized`，节点明确报告tenant token不能调用cancel_invoice，产品入口缺口已复现；独立构建和收集通过，01非超时失败即停。付款与资金后半步骤、02/03未运行，旧证据完整保留。详见[LSP运行记录](../../test_cases/fiber/devnet/lsp/README.md#84333ee-hosted租户发票取消真实入口拒绝2026-10-30)。01/02复选框仅表示代码已映射，不表示通过；03仍待产品契约明确。
+
+2026-11-07 执行结果：`LSP-INVOICE-CANCEL-03` 在 56c761c 上 **1 passed / 130.57s**。第一次尝试漏掉 SDK 本地 `authorize_cancellation`，SDK 报 `TLC removed without a locally authorized resolution`；补上 `_authorize_cancellation()` 后通过。已验证发票 `Cancelled`、P 付款 `Failed`、A–T 与 P–T TLC/锁定额清理、资金回基线；取消后连续 30 秒确认旧发票/旧付款不回退，新发票正常付款。#1723 仍是独立的文档 issue。

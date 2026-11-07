@@ -1,11 +1,11 @@
 # LSP 手动夜间验证
 
-当前：2026-10-30午后固定843补救批，资格/正常对照及两轮正式退款完整通过；用户明确采纳两轮独立通过收尾，本次验收已完成。原1+3历史仅执行2/4，第3/4轮未跑且无需补；已安全停止，可以重启。结果和证据见新批状态（本地证据：`/Users/sunchengzhu/.codex/worktrees/lsp-reviewed-regressions/fiber-py-integration-test/report/lsp-refund-84333ee-20261030T1300/RESULT.md`）。本次已按用户修订的重复次数完成。
+2026-11-07 当前状态：已改为自然时间模式，在 56c761c 上主退款用例 **1 passed / 4:12:20**，实际分支 `T-then-A-sweep`；辅助 TLC 自检 F2 仍明确 skip。历史 843 两轮结果只作为背景，不代表当前 head。
 2026-10-30凌晨已关闭的旧批（历史记录）见完整报告（本地证据：`/Users/sunchengzhu/.codex/worktrees/lsp-reviewed-regressions/fiber-py-integration-test/report/lsp-night-new-84333ee-20261030T030349/RESULT.md`）：退款停在真实epoch成熟资格，正式1+3未运行；接纳03～06通过。该批正式退款为0；成熟预算随后已修正并用于下述新批。下方原入口仍固定04，作为保留历史。
 
-本目录存放专用 VM 受控时间下的 TLC 超时退款长场景及其局部时钟/账本辅助代码，与普通 `lsp/` 测试分开。
+本目录存放自然时间下的 TLC 超时退款长场景及账本辅助代码，与普通 `lsp/` 测试分开。自然版不修改宿主或 guest 时间，不需要 Lima/VM。
 
-默认 pytest 收集会排除 `manual_nightly` 用例；显式 `--run-lsp-refund-nightly` 仍须满足专用 guest 身份、资格与预算门禁，不能在宿主运行。
+默认 pytest 收集会排除 `manual_nightly` 用例；显式 `--run-lsp-refund-nightly` 才会运行；自然版需要约 4–6 小时、机器保持唤醒，失败不自动重试。
 
 用例与完整执行边界见 [退款评审](../../../../reviews/lsp/tlc-timeout-refund.md)。普通适配工具继续复用相邻 `lsp/`，不在本目录复制产品或框架代码。
 

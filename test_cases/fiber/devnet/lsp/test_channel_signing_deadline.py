@@ -37,6 +37,7 @@ WALLET_HOLD_TESTS = {
 ISOLATED_CLOSE_TESTS = {
     "test_node_protects_without_any_submission",
     "test_force_close_uses_commitment_with_target_tlc",
+    "test_remote_side_recovers_after_local_force_close",
 }
 RECOVERY_TEST = "test_checkpoint_b_loser_recovers_remote_close"
 
@@ -1573,6 +1574,38 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
                 break
             time.sleep(max(0, min(0.2, stable_until - time.monotonic())))
         self._observe("late_submission_stable", after=after)
+
+    # TEST-MAP: LSP-TIMEOUT-13
+    def test_remote_side_recovers_after_local_force_close(self):
+        """
+        1. A 赢下受控强关竞争，T 的竞争广播被真实拦截。
+        2. A 的关闭真实确认后，T 必须识别为远端关闭并收敛，不能保留本地关闭。
+        """
+        payment = self._prepare_isolated_close("A")
+        a_view, _, closed_at = self._confirm_isolated_close(payment)
+        a_hash = a_view["shutdown_transaction_hash"]
+        until = closed_at + 330
+        while True:
+            self._isolation_health(until)
+            t_view = self._isolated_view(self.fiber1.client, until)
+            if t_view["state"]["state_name"] == "Closed":
+                break
+            time.sleep(min(0.2, self._remaining(until)))
+        assert "UNCOOPERATIVE_REMOTE" in t_view["state"]["state_flags"], t_view
+        assert "UNCOOPERATIVE_LOCAL" not in t_view["state"]["state_flags"], t_view
+        assert t_view["shutdown_transaction_hash"] == a_hash, t_view
+        self._isolation_health(until)
+        a_after = self._isolated_view(self.client, until)
+        assert a_after["state"]["state_name"] == "Closed", a_after
+        assert "UNCOOPERATIVE_LOCAL" in a_after["state"]["state_flags"], a_after
+        assert "UNCOOPERATIVE_REMOTE" not in a_after["state"]["state_flags"], a_after
+        assert a_after["shutdown_transaction_hash"] == a_hash, a_after
+        self._observe(
+            "remote_side_recovered",
+            view=t_view,
+            close_hash=a_hash,
+            winner_view=a_after,
+        )
 
     # TEST-MAP: LSP-TIMEOUT-10
     def test_force_close_uses_commitment_with_target_tlc(self):

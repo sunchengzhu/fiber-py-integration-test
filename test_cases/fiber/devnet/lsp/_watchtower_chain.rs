@@ -318,8 +318,12 @@ pub async fn process(
         return Ok(json!({"idle":true}));
     };
     ensure!(
-        content.key_purpose == fiber_json_types::OnchainKeyPurpose::Settlement,
-        "non-settlement work"
+        matches!(
+            content.key_purpose,
+            fiber_json_types::OnchainKeyPurpose::Settlement
+                | fiber_json_types::OnchainKeyPurpose::Tlc { .. }
+        ),
+        "unsupported watchtower key purpose"
     );
     let tx: Transaction = content.transaction.clone().into();
     let first = tx
@@ -336,9 +340,8 @@ pub async fn process(
         // A remote commitment's aggregate signature belongs to the peer. The
         // SDK-verified record plus canonical, contract-valid chain lineage is
         // the settlement source; local aggregate storage is not a prerequisite.
-        if !record.settlement.data.tlcs.is_empty() {
-            continue;
-        }
+        // Refund settlements legitimately contain a target TLC; do not discard
+        // those records here. Other empty-TLC candidates are filtered by lineage.
         let mut scoped = chain.clone();
         scoped.funding = Some(
             record
@@ -681,9 +684,8 @@ pub async fn diagnose(
         // A remote commitment's aggregate signature belongs to the peer. The
         // SDK-verified record plus canonical, contract-valid chain lineage is
         // the settlement source; local aggregate storage is not a prerequisite.
-        if !record.settlement.data.tlcs.is_empty() {
-            continue;
-        }
+        // Refund settlements legitimately contain a target TLC; do not discard
+        // those records here. Other empty-TLC candidates are filtered by lineage.
         let mut scoped = chain.clone();
         scoped.funding = Some(
             record

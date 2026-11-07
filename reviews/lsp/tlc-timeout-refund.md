@@ -1,10 +1,11 @@
 # Hosted 付款方的 TLC 超时退款与资金守恒
 
-2026-10-28：用户确认VM Gate1后，已对下列完整Gate2方案要求继续并希望当晚启动、次晨查看结果，进入Gate3。用户新增持久约束：本专项只手动夜跑，不纳入日常测试；`AGENTS.md`与pytest默认deselect/显式nightly开关同步维护。以下保留已评审的行集、预检、资金断言、预算及最小适配依据；只有专用guest可单次推进墙钟，宿主时间与产品代码不变。实际实现、准备、失败与未运行项另见LSP运行记录，不因获得执行授权而记为通过。
+历史（VM 方案，已被自然时间模式取代）：2026-10-28 用户确认 VM Gate1 后，已对下列完整Gate2方案要求继续并希望当晚启动、次晨查看结果，进入Gate3。用户新增持久约束：本专项只手动夜跑，不纳入日常测试；`AGENTS.md`与pytest默认deselect/显式nightly开关同步维护。以下保留已评审的行集、预检、资金断言、预算及最小适配依据；只有专用guest可单次推进墙钟，宿主时间与产品代码不变。实际实现、准备、失败与未运行项另见LSP运行记录，不因获得执行授权而记为通过。
 
 保留 [原 Gate1](tlc-timeout-refund-scope.md) 的 **A→T 单笔真实 CKB hold 付款、无 preimage、T 主动强关**。允许自然独立 TLC 退款或最终 Settlement sweep；只报告实际分支，不隔离 T、不重复取景。TLC 是通道内尚未完成的条件付款；sweep 指最后一方领取剩余 commitment 容量。受控时间结果不代表四小时自然等待或 macOS 产物通过。
 
 固定源码 `04c206465b48da85b99aa58e80afe9801a2cb2db`；本轮只读 GitHub head、本地干净产品源码和实际 FNN 版本均相符。测试分支 `codex/lsp-core-regressions`，保留全部已有改动。2026-10-28 同04的Linux FNN/SDK/driver已构建并冻结，VM适配已实现；首个clock实例启动后的准备命令超时，已由独立诊断定位为隔离初始化误丢已有SSH回包；固定批次退出1，预检主体与全部产品样本未运行。三条 TEST-MAP 已存在但不表示行为通过，详见运行记录02:08交接；旧自检的路由 reserve 参数失败及未运行的后续批次见文末与 [运行记录](../../test_cases/fiber/devnet/lsp/README.md)。文末长等待方案仅保留历史，不是当前执行计划。原快照、24 产物与全部证据不动；#1674、#1706、08/10/12 沿用 [交接](../../docs/analysis/pr-1623-handoff-2026-10-27.md)。
+2026-11-07 当前状态：退款测试已改为**自然时间**模式，不再依赖 Lima/VM/GuestClock；在 56c761c 上主用例 **1 passed / 4:12:20**，实际分支 `T-then-A-sweep`。F2 辅助 TLC 自检仍明确 skip，独立 TLC 退款分支未取得。下文保留的 VM 调时方案为历史评审，不是当前执行路径。
 
 ## 共同输入与观察方式
 
@@ -338,3 +339,5 @@ GPT 6.1 sol 分别复核隔离/时钟/授权与资金/预算，另只读核对�
 用户明确要求“本次退款以两轮独立通过收尾，不补第3/4轮”。本次仅调整重复次数，不改LSP-REFUND-01～03的行为/费用/资金/终态/连续稳定断言，三条TEST-MAP及复选框不变。固定843两轮完整通过（host1982.62s、1983.24s），均取得自然独立TLC退款→T份额→A最终份额，付款Failed/发票Received/双端关闭、真实SDK Applied、逐笔since与总账守恒及65s稳定均完成；本次按用户接受的2/2完成，原1+3历史仅执行2/4，不写4/4，3/4不再是待补任务。其他未自然取得的分支仍按原范围边界说明。
 
 为重启设置的host新clone门禁在第二轮导出/停止后拒绝后续VM创建（原拒绝78被控制器/监督器包装退出1）；无第3/4样本执行，无产品断言失败。所有自有进程和VM已停止，指定端口释放，原04/旧夜证据不改写；15份本次及旧843停止态VM磁盘、固定工具和完整证据已在宿主持久目录保存。原13:00→21:00预算未重置，重启后不自动续跑。准确结论、hash和重启交接见完整报告（本地证据：`/Users/sunchengzhu/.codex/worktrees/lsp-reviewed-regressions/fiber-py-integration-test/report/lsp-refund-84333ee-20261030T1300/RESULT.md`）与环境收尾（本地证据：`/Users/sunchengzhu/.codex/worktrees/lsp-reviewed-regressions/fiber-py-integration-test/report/lsp-refund-84333ee-20261030T1300/final-environment.json`）。
+
+2026-11-07 自然时间执行：`test_tlc_timeout_refund.py::TestTlcTimeoutRefund::test_hold_payment_timeout_refund` 在 56c761c **1 passed / 4:12:20**，实际分支 `T-then-A-sweep`；`LSP-REFUND-01～03` 走同一生命周期。F2 的 `TestTlcRefundAdapter` 仍 skip，不能宣称辅助自检通过。

@@ -372,6 +372,12 @@ async fn control(
     let signer = agent
         .open_channel(agent.binding(channel).context("unbound channel")?)
         .await?;
+    if operation == "outgoing-payment" {
+        let terms: fiber_lsp_sdk::PaymentAuthorization =
+            serde_json::from_value(value["authorization"].clone())?;
+        signer.authorize_payment(terms).await?;
+        return Ok(json!({"saved": true}));
+    }
     match operation {
         "cancel" => {
             let hash: Hash256 = value["payment_hash"].as_str().context("hash")?.parse()?;
@@ -406,6 +412,51 @@ async fn control(
                     remote_fee_share: fee,
                 })
                 .await?;
+        }
+        "watchtower-tlc-records" => {
+            let mut result = vec![];
+            for r in signer.recovery_records().await? {
+                let features = fiber_types::CommitmentContractFeatures::from_lock_args(
+                    &r.transaction.raw().outputs().get(0).context("output")?.lock().args().raw_data()
+                ).map_err(anyhow::Error::msg)?;
+                let hlen = features.payment_hash_len();
+                let witness = fiber_types::settlement_data_to_witness(
+                    &r.settlement.data, r.reference.for_remote, features,
+                    r.settlement.local_settlement_key, r.settlement.remote_settlement_key);
+                let tlc_len = 65 + hlen;
+                let mut tlcs = vec![];
+                for (index, t) in r.settlement.data.tlcs.iter().enumerate() {
+                    let begin = 1 + index * tlc_len;
+                    let entry = witness.get(begin..begin + tlc_len).context("tlc entry")?;
+                    let local_key = match &t.local_key_pubkey {
+                        Some(key) => format!("0x{}", hex::encode(key.serialize())),
+                        None => format!("0x{}", hex::encode(t.local_key.as_ref().context("tlc local key")?.0.secret_bytes())),
+                    };
+                    tlcs.push(json!({
+                        "payment_hash": format!("{:#x}", t.payment_hash),
+                        "hash_algorithm": json!(t.hash_algorithm),
+                        "payment_amount": t.payment_amount.to_string(),
+                        "expiry": t.expiry,
+                        "inbound": t.tlc_id.is_received() == r.reference.for_remote,
+                        "local_key_commitment_number": t.local_key_commitment_number,
+                        "local_key": local_key,
+                        "remote_key": format!("0x{}", hex::encode(t.remote_key.serialize())),
+                        "entry": format!("0x{}", hex::encode(entry)),
+                    }));
+                }
+                result.push(json!({
+                    "reference":r.reference,
+                    "complete":r.complete_signature.is_some(),
+                    "payment_hash_len":hlen,
+                    "local_amount":r.settlement.data.local_amount.to_string(),
+                    "remote_amount":r.settlement.data.remote_amount.to_string(),
+                    "local_key":format!("0x{}",hex::encode(r.settlement.local_settlement_key.serialize())),
+                    "remote_key":format!("0x{}",hex::encode(r.settlement.remote_settlement_key.serialize())),
+                    "witness":format!("0x{}",hex::encode(witness)),
+                    "tlcs":tlcs,
+                }));
+            }
+            return Ok(json!(result));
         }
         "watchtower-records" => {
             let mut result = vec![];

@@ -579,6 +579,66 @@ class TestHostedInvoiceCancellation(_CancellationBase):
         self.result = "passed"
 
 
+    # TEST-MAP: LSP-INVOICE-CANCEL-03
+    def test_received_invoice_without_preimage_can_be_cancelled(self):
+        """
+        1. A 的 hold invoice 经真实 P→T→A 付款进入 Received，节点无 preimage。
+        2. A 用 tenant token 取消，原付款失败、TLC/锁定额清理、旧发票不复活。
+        3. 新建发票并完成一笔付款，确认通道仍可正常使用。
+        """
+        until = self.business_until
+        payment = self._new_hold(self.tenant, "received", until)
+        self._send_payment(payment, until)
+        while True:
+            invoice = self._invoice(self.tenant, payment, until)
+            payer = self._payment(payment, until)
+            views = self._views(until)
+            pending = [
+                tlc
+                for view in views.values()
+                for tlc in view["pending_tlcs"]
+                if tlc["payment_hash"] == payment["hash"]
+            ]
+            if (
+                invoice["status"] == "Received"
+                and payer["status"] == "Inflight"
+                and pending
+            ):
+                break
+            assert payer["status"] not in ("Success", "Failed"), (invoice, payer)
+            self._pause(until, 0.1)
+        # The SDK must locally authorize the refund before it can sign the
+        # commitment that removes the hold TLC. RPC cancellation alone is not
+        # sufficient.
+        self._authorize_cancellation(self.tenant, payment, until)
+        self._cancel(self.tenant, payment, until)
+        failed = self._wait_terminal(payment, "Failed", "Cancelled", until)
+        assert _number(failed["payer"]["fee"]) == 0
+        self._assert_settled_funds(failed, None, 0, 0)
+        self._no_old_release(payment)
+
+        # The cancelled invoice and failed payment must remain terminal for a
+        # full 30-second window; a later background retry must not revive them.
+        stable_until = time.monotonic() + 30
+        assert stable_until <= until - 60, (
+            "insufficient budget for the full 30-second cancellation stability window",
+            until - time.monotonic(),
+        )
+        while time.monotonic() < stable_until:
+            assert self._invoice(self.tenant, payment, until)["status"] == "Cancelled"
+            assert self._payment(payment, until)["status"] == "Failed"
+            self._pause(until, 0.2)
+
+        fresh = self._new_hold(self.tenant, "fresh", until)
+        self._configure_chain(self.tenant, until)
+        self._send_payment(fresh, until)
+        self._safe_release(self.tenant, fresh, until)
+        settled = self._wait_terminal(fresh, "Success", "Paid", until)
+        self._assert_settled_funds(
+            settled, "A", AMOUNT, _number(settled["payer"]["fee"])
+        )
+        self.result = "passed"
+
 class TestHostedInvoiceCancellationIsolation(_CancellationBase):
     tenant_labels = ("A", "B")
 
