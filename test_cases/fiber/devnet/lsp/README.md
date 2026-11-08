@@ -1,5 +1,118 @@
 # Hosted LSP 通道签名集成测试
 
+## 当前运行入口（工程整理 2026-11-08）
+
+本次工程整理的测试基线是 `4052079f374376eb31b951788ecc4e8f4e9c9c35`（分支 `codex/lsp-test-engineering`），产品仍固定 `56c761c45c271c086b05c8d5ea3e033448f5fdf8`。本节只描述当前可复现入口；下方各节保留历史版本记录和原始结果，历史命令不作为默认入口。
+
+### 选择同源产物
+
+- 普通 LSP 用例会同时核对 `build.json` revision、`fnn --version`、`_sdk_driver.rs` 和 `_watchtower_chain.rs` 摘要；仅凭目录名或旧日志判断同源会静默混用。
+- 当前工作树中 `download/fiber/pr-1623-56c761c-refund-natural5`（`build.json` sha256 `8aaefa9665f5…1255`）满足上述摘要。其余 `pr-1623-56c761c*` 旧 bundle 的 driver/chain 源摘要已过期，会在启动 CKB/FNN 前被拒绝。
+- `download/0.202.0` 与 `source/ckb-cli` 是本机未跟踪的二进制/链接；dev 配置模板、链快照和合约受版本控制。完整分类见下节；缺失时 `_lsp_test.require_runtime_inputs()` 在启动节点前失败。
+- 构建/复用产物见 `scripts/build_lsp_test_binaries.py`；不要在旧目录上覆盖仍被证据引用的 bundle。
+
+### 必需环境变量（按套件）
+
+变量只对对应套件必需；未列出的预算变量是可选调节项。所有变量必须在 pytest 启动前设置，运行中修改不会生效。
+
+| 变量 | 适用套件 | 用途与设置时机 |
+| --- | --- | --- |
+| `LSP_TEST_REVISION` | 所有 LSP / nightly | 产品完整 SHA；与 bundle 清单、`fnn --version` 一致 |
+| `LSP_TEST_BUNDLE` | 所有 LSP / nightly | bundle 绝对路径；必须在测试 checkout 内且清单/摘要通过 |
+| `LSP_RETEST_REVISION` | 有复验门禁的套件：PAYMENT-05、取消 01/02、DELIVERY、PAYMENT-04 | 明确放行的复验版本；必须与本批 `LSP_TEST_REVISION` 相同，否则启动前拒绝 |
+| `LSP_RUN_ARTIFACTS` | watchtower、PAYMENT-04、退款长场景必需；普通签名/订阅/期限可选 | 节点、WS、合约证据根；每批新目录，pytest 启动前设置。普通签名/订阅/期限未设置时失败归档退回 `report/<method>`；F2 快测不使用该变量，见下 |
+| `LSP_PAYMENT_REPORT_DIR` | `HostedTenantFixture` 族（PAYMENT-05、取消、租户边界）、PAYMENT-01～03、PAYMENT-04 | 业务证据根；每批新目录；PAYMENT-04 必需，其他 Hosted 套件省略时落 `report/` 临时目录 |
+| `LSP_PAYMENT04_ROW_START` | 仅 PAYMENT-04 | 绝对 `time.monotonic()` 行起点；启动 pytest 前立即取值，驱动 180s 准备与 600s 行预算；不能复用旧批数值 |
+| `LSP_DELIVERY_NODE` | 仅 DELIVERY | reviewed wrapper 路径；启动前核对同目录 `build.json`、revision、wrapper/source/lock 摘要 |
+| `LSP_DELIVERY_REPORT_DIR` | 仅 DELIVERY | 业务证据根；每批新目录，省略时落 `report/` 临时目录 |
+| `LSP_NOLSP_FNN` | 仅 `test_lsp_feature_off.py` | 无 lsp feature 的 FNN 二进制；不是普通 LSP 输入 |
+| `LSP_NOLSP_FNN_SHA256` | 可选，仅 feature-off | 额外固定该二进制摘要 |
+| `CKB_CLI_HOME` | 所有调用 ckb-cli 的批次 | 每批独立临时目录，避免钱包状态串批 |
+
+`LSP_WATCHTOWER_ROUND_UNTIL` 是 watchtower 批次的可选绝对截止，不是普通 LSP 必需项。F2 快测的 `LSP_REFUND_F2_BUNDLE` / `LSP_REFUND_F2_REPORT_DIR` / `LSP_REFUND_F2_DEADLINE` / `LSP_REFUND_F2_OWNED_PIDS` 由 `scripts/run_lsp_refund_f2_fast.py` 设置，不手工拼接。
+
+### 外部输入分类（`git ls-files` 核实）
+
+受版本控制、随测试仓库检出的输入：
+
+- `source/fiber/dev_config_3.yml.j2`、`source/fiber/dev.toml`、`source/fiber/data.2026.0929.tar.gz`
+- `source/template/ckb/v118/*`、`source/template/ckb/default.db-options`
+- `source/contract/fiber/*`（commitment-lock、funding-lock、xudt 等）
+
+本机未跟踪、必须在交接中声明的输入：
+
+- `download/0.202.0/{ckb,ckb-cli}` 和 `download/fiber/**`（源码 checkout、bundle、`build.json`）
+- `source/ckb-cli`（准备步骤复制/链接产生）
+- `venv/`、`tmp/`、`report/`、`reports/`
+- `scripts/overnight_lsp_stability.sh`（诊断脚本，不是正式 runner）
+- `docs/analysis/f2-fast-implementation-review-2026-11-08.md`（本机分析记录）
+
+`git ls-files download source/ckb-cli tmp report reports` 为空；这些路径不能靠 Git 恢复，新批次必须先声明来源、版本和摘要。
+
+### 精确命令形状
+
+```bash
+export PYTHONUNBUFFERED=1
+export CKB_CLI_HOME="$(mktemp -d)"
+export LSP_TEST_REVISION=56c761c45c271c086b05c8d5ea3e033448f5fdf8
+export LSP_RETEST_REVISION=56c761c45c271c086b05c8d5ea3e033448f5fdf8
+export LSP_TEST_BUNDLE="$PWD/download/fiber/pr-1623-56c761c-refund-natural5"
+export LSP_PAYMENT_REPORT_DIR="$PWD/report/<new-batch>/business"
+export LSP_RUN_ARTIFACTS="$PWD/report/<new-batch>/nodes"
+mkdir -p "$LSP_PAYMENT_REPORT_DIR" "$LSP_RUN_ARTIFACTS"
+venv/bin/python -m pytest -o addopts= -vv -s --tb=short \
+  --junitxml=report/<new-batch>/junit.xml \
+  <exact nodeid>
+```
+
+`-o addopts=` 去掉默认 `report/report.html` 覆盖；JUnit/stdout/退出码由调用方保存在同一新批根目录。`make fiber_test` 和现有 CI 均不包含本目录，不能以其成功证明 LSP 执行过。
+
+### Delivery 构建与运行入口
+
+`scripts/build_lsp_delivery_node.py` 是 builder，`--revision` 默认值是历史批次 `84333ee`，但支持显式传入其他固定版本。用本批 56c 同源产物时必须显式写 revision，且 source/base bundle 必须匹配：
+
+```bash
+venv/bin/python scripts/build_lsp_delivery_node.py \
+  --source /path/to/clean/fiber-56c761c \
+  --base-bundle download/fiber/pr-1623-56c761c-refund-natural5 \
+  --output download/fiber/pr-1623-56c761c-delivery-<new> \
+  --target-dir <reusable-cargo-target> \
+  --revision 56c761c45c271c086b05c8d5ea3e033448f5fdf8
+```
+
+- 默认 843 只用于解释旧批；`scripts/run_lsp_delivery_batch.py` 固定 843，是冻结历史 runner，不能当 56c runner。
+- 本批 56c 只读复用 `download/fiber/pr-1623-56c761c-delivery`（manifest revision 56c，wrapper/source/lock 校验通过）；本次未执行构建。
+- 直接 pytest 时设置 `LSP_DELIVERY_NODE=<bundle>/lsp-delivery-node`，并按已评审范围设置 `LSP_RETEST_REVISION`（Delivery 门禁允许固定 843 或与本批 revision 相同的复验版本）。
+
+### 证据归档职责（逐类实际调用链）
+
+| 套件族 | 实际 teardown | 业务证据 |
+| --- | --- | --- |
+| `_DelayedPaymentBase`（PAYMENT-01～03） | 自身 teardown：停止自有 SDK/FNN 后删除本方法节点目录 | `LSP_PAYMENT_REPORT_DIR/<method>/`：observations、HTTP/WS、节点目录与 CKB 日志 |
+| `HostedTenantFixture` / `_CancellationBase`（PAYMENT-05、取消、租户边界） | 同上，附加 cleanup 绝对截止 | 同上；`<class>-isolated-contract.json` 写在证据根 |
+| `_DeliveryBase`（DELIVERY-01～07） | 同上，另把控制 socket 目录文件并入 | `LSP_DELIVERY_REPORT_DIR/<method>/` |
+| `ChannelSigningTestBase` 族（签名、订阅、期限、watchtower） | `LspTestBase.teardown_method`：先归档再强停自有进程 | `LSP_RUN_ARTIFACTS/<method>/`；未设置时退回通用 `report/<method>` 失败归档 |
+| `lsp_nightly` 退款 | watchtower/自身预算链 | `LSP_RUN_ARTIFACTS`；自然版另用 `LSP_PAYMENT_REPORT_DIR` |
+
+JUnit 和 pytest stdout 不由测试代码生成，调用方必须与业务证据放在同一新批根下。历史 `report/`、`reports/`、`tmp/` 不提交、不整体删除。
+
+准备失败时，清理前先归档最小材料：方法级节点失败写入 `<evidence_dir>/setup-failure/`（按源节点 `node-<hash>/node.log`、`config.yml`、`dev.toml`、`ckb/` 日志和配置、`failure.json`，记录源路径和每个文件摘要）；类级失败写入 `<LSP_PAYMENT_REPORT_DIR 或 report>/<class>-class-setup-failure-<时间>-<pid>/`。复用归档必须按源节点路径、必要文件集合逐项确认，并校验归档文件与 manifest 中记录的 SHA256 一致且无 `archive_errors`；不会重新计算当前源文件内容摘要，源内容变化本身不触发重新归档。`failure.json` 存在本身不算完整；不完整时建立 `setup-failure-2` 等新批内目录，旧证据不覆盖。进程未确认退出或归档失败时保留原始运行目录，并在异常 note/日志中报告位置；不复制 store、密钥或整份历史数据。
+
+### 2026-11-08 工程调整
+
+- `LspFiber` 现在只启动/停止自己持有的 `Popen`：不再用 `lsof` 按端口杀任意 PID，也不共享 `pid.txt`；分别检查进程退出、RPC 端口关闭和 RocksDB store 锁释放。
+- 新增 `_hosted_tenant_fixture.py`：PAYMENT-05 不再继承取消测试类；取消业务 helper 仍留在 `test_hosted_invoice_cancellation.py`。
+- 新增 `_isolated_contract.py`：取消、watchtower 和 PAYMENT-04 共用同一合约对齐/链上校验，PAYMENT-04 不再跨类借用。
+- PAYMENT-05 与 5 条租户边界方法在原有断言通过后写入 `result=passed`；证据开始记录 bundle 路径和 `build.json` 摘要。
+- 准备失败回收：`start_owned_lsp_nodes` 在第二个节点启动或等待失败时先停止已启动的自有节点，归档必要日志/配置/版本后再删除运行目录；归档失败或进程退出未确认时保留原始目录并报告。`HostedTenantFixture` 类级失败按 cwd/command 核验 CKB 身份、分别等待进程退出和端口释放、恢复 `TMP_PATH`，归档成功后才清理；框架字符串 `ckb_pid` 和慢退出路径均已处理。
+- PAYMENT-05 恢复原有版本门禁（固定 843 或与 `LSP_RETEST_REVISION` 相同的复验版本），放在自己的 `setup_class`，不进入共用 fixture。
+- PAYMENT-04 的 `LSP_PAYMENT_REPORT_DIR` 与 `LSP_PAYMENT04_ROW_START` 在类级副作用前检查；缺少参数时不会启动 CKB/FNN 或提交合约升级。
+- 本批首轮验证：`report/lsp-engineering-20261108/`；收尾整改验证：`report/lsp-engineering-20261108-r2/`；生命周期/失败证据修复：`report/lsp-engineering-20261108-r3/`；归档复用完整性修复：`report/lsp-engineering-20261108-r4/`（本地证据，不提交）。
+
+### 完成状态（2026-11-08 收尾整改后）
+
+四项收尾整改、生命周期/失败证据修复与归档复用校验已实现并验证（离线工程回归 22 项 + 真实 PAYMENT-05 短用例）；工程阶段仍有明确保留项：`_DelayedPaymentBase` 仍位于测试文件并形成 test→test import，`test_lsp_feature_off.py` 仍使用通用 `Fiber`，`scripts/build_lsp_test_binaries.py` 整包构建可覆盖同版本目录，默认 `pytest.ini` 的 HTML 路径共享，退款自然入口与专用 VM 门禁冲突未解决。以上保留项不代表整改失败，也不能把工程阶段表述为全量或无条件完成。
+
 ## 56c761c P0-1 定点复验（2026-11-02）
 
 候选 `56c761c45c271c086b05c8d5ea3e033448f5fdf8`（PR #1623 当前 head）的定点复验结果；详细审计、兼容性发现和证据索引见

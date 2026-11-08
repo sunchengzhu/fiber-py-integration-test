@@ -12,7 +12,11 @@ import pytest
 import requests
 import yaml
 
-from test_cases.fiber.devnet.lsp._lsp_test import ChannelSigningTestBase, REVISION
+from test_cases.fiber.devnet.lsp._lsp_test import (
+    ChannelSigningTestBase,
+    REVISION,
+    require_env_path,
+)
 from test_cases.fiber.devnet.lsp_nightly._refund_ledger import RefundLedger
 from test_cases.fiber.devnet.lsp._watchtower_rpc import ChainAudit
 from test_cases.fiber.devnet.lsp.test_watchtower_settlement import (
@@ -39,7 +43,9 @@ class _RefundBase(RefundLedger, _WatchtowerBase):
         self.observing = False
         self.payment_hash = "0x" + hashlib.sha256(os.urandom(32)).hexdigest()
         # This endpoint only receives FNN traffic. Python and the SDK use other URLs.
-        audit_path = Path(os.environ["LSP_RUN_ARTIFACTS"]) / (
+        audit_path = require_env_path(
+            "LSP_RUN_ARTIFACTS", "to archive this refund batch's chain audit"
+        ) / (
             method.__name__ + "-fnn-ckb.jsonl"
         )
         assert not audit_path.exists(), audit_path

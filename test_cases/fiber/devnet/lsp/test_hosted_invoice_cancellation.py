@@ -9,22 +9,16 @@ cancellation (03) remains an open product-contract decision.
 import copy
 import hashlib
 import json
-import os
 from pathlib import Path
 import socket
-import tempfile
 import time
 
 import yaml
 
 from framework.util import get_project_root
-from test_cases.fiber.devnet.lsp._lsp_test import (
-    ChannelSigningTestBase,
-    REVISION,
-    RETEST_REVISION,
-)
+from test_cases.fiber.devnet.lsp._hosted_tenant_fixture import HostedTenantFixture
+from test_cases.fiber.devnet.lsp._lsp_test import REVISION, RETEST_REVISION
 from test_cases.fiber.devnet.lsp.test_delayed_payment_recovery import (
-    _DelayedPaymentBase,
     _number,
     _outpoint,
 )
@@ -45,165 +39,15 @@ def _ckb_hash(preimage):
     )
 
 
-class _CancellationBase(_DelayedPaymentBase):
+class _CancellationBase(HostedTenantFixture):
     tenant_labels = ("A",)
 
     @classmethod
     def setup_class(cls):
-        root = Path(__file__).resolve().parents[4]
-        (root / "tmp").mkdir(exist_ok=True)
-        cls.tmp_path_name = str(
-            Path(tempfile.mkdtemp(prefix="lsp-cancel-", dir=root / "tmp")).relative_to(
-                root
-            )
-        )
-        super().setup_class()
-        cls.prepare_isolated_contract(root)
-
-    @classmethod
-    def prepare_isolated_contract(cls, root):
-        """Align this class's devnet before FNN starts, as the watchtower suite does."""
-        path = root / "source/contract/fiber/commitment-lock"
-        expected = path.read_bytes()
-        assert hashlib.sha256(expected).hexdigest() == (
-            "a7762721ef239b15adbdddca8d772db6e1c001d9f81e23ccc74e1392329931d7"
-        ), "not the reviewed 04c2064 commitment-lock"
-        script = {
-            "code_hash": "0x" + "00" * 25 + "545950455f4944",
-            "hash_type": "type",
-            "args": "0x082d30abbb75c3db217a78eee4f3e0d5a46c90b56c11dec77f3060319f323808",
-        }
-        client = cls.node.getClient()
-        search = {
-            "script": script,
-            "script_type": "type",
-            "script_search_mode": "exact",
-            "with_data": True,
-        }
-        cells = client.get_cells(search, "asc", "0x10", None)["objects"]
-        assert len(cells) == 1, cells
-        old = cells[0]
-        report_root = Path(os.environ.get("LSP_PAYMENT_REPORT_DIR", root / "report"))
-        report_root.mkdir(parents=True, exist_ok=True)
-        evidence_path = report_root / f"{cls.__name__}-isolated-contract.json"
-        assert not evidence_path.exists(), evidence_path
-        evidence = {
-            "revision": REVISION,
-            "chain_dir": cls.node.ckb_dir,
-            "before": old,
-            "expected_sha256": hashlib.sha256(expected).hexdigest(),
-        }
-        evidence_path.write_text(json.dumps(evidence, indent=2) + "\n")
-        tx_hash = cls.Contract.upgrade_ckb_type_contract(
-            cls.Config.MINER_PRIVATE_1,
-            str(path),
-            old["out_point"]["tx_hash"],
-            int(old["out_point"]["index"], 16),
-            fee=200000,
-            api_url=cls.node.rpcUrl,
-        )
-        evidence["submitted"] = tx_hash
-        evidence_path.write_text(json.dumps(evidence, indent=2) + "\n")
-        confirmed = cls.Miner.miner_until_tx_committed(cls.node, tx_hash)
-        tx = confirmed["transaction"]
-        assert tx["outputs"][0]["type"] == script
-        assert tx["outputs"][0]["lock"] == old["output"]["lock"]
-        assert any(i["previous_output"] == old["out_point"] for i in tx["inputs"])
-        assert bytes.fromhex(tx["outputs_data"][0].removeprefix("0x")) == expected
-        header = client.call("get_header", [confirmed["tx_status"]["block_hash"]])
-        assert client.get_block_hash(header["number"]) == header["hash"]
-        live = client.get_live_cell("0x0", tx_hash, True)
-        assert live["status"] == "live"
-        assert bytes.fromhex(
-            live["cell"]["data"]["content"].removeprefix("0x")
-        ) == expected
-        cells = client.get_cells(search, "asc", "0x10", None)["objects"]
-        assert len(cells) == 1 and cells[0]["out_point"] == {
-            "tx_hash": tx_hash,
-            "index": "0x0",
-        }
-        evidence.update(confirmed=confirmed, canonical_header=header, after=cells[0])
-        evidence_path.write_text(json.dumps(evidence, indent=2) + "\n")
-
-    def setup_method(self, method):
         assert REVISION == FIXED_REVISION or (
             RETEST_REVISION is not None and REVISION == RETEST_REVISION
         ), "use a separately reviewed revision for repair regression"
-        self.preparation_started = time.monotonic()
-        self.preparation_until = self.preparation_started + 240
-        self.business_until = self.preparation_started + 420
-        self.row_until = self.preparation_started + 480
-        root = os.environ.get("LSP_PAYMENT_REPORT_DIR")
-        if root is None:
-            Path("report").mkdir(exist_ok=True)
-            root = tempfile.mkdtemp(prefix="lsp-cancel-84333ee-", dir="report")
-        self.evidence_dir = Path(root).resolve() / method.__name__
-        self.evidence_dir.mkdir(parents=True, exist_ok=False)
-        self.result = "incomplete"
-        self.offline = False
-        self.payments = {}
-        self._record(
-            "environment_start",
-            revision=REVISION,
-            preparation_until=self.preparation_until,
-            business_until=self.business_until,
-            row_until=self.row_until,
-        )
-        self.addCleanup(self._archive)
-        try:
-            with self._budget(self.preparation_until, 240):
-                ChannelSigningTestBase.setup_method(self, method)
-        except BaseException:
-            self.doCleanups()
-            raise
-
-    def _prepare_invoice(self, tenant, amount):
-        # Parent setUp invokes this for its old preimage-bearing fixture. A fresh
-        # hash-only invoice is created explicitly in each scenario instead.
-        pass
-
-    def setUp(self):
-        super().setUp()
-        for tenant in self.tenants:
-            tenant["gate"].release()
-        self._record(
-            "cancel_fixture_ready",
-            tenant_ids={
-                t["label"]: json.loads(t["status_file"].read_text())["tenant_id"]
-                for t in self.tenants
-            },
-        )
-
-    def doCleanups(self):
-        self.business_until = float("inf")
-        self.cleanup_until = min(self.row_until, time.monotonic() + 60)
-        first_error = None
-        while self._cleanups:
-            if time.monotonic() >= self.cleanup_until:
-                self._record(
-                    "cleanup_deadline",
-                    remaining=[item[0].__name__ for item in self._cleanups],
-                )
-                raise AssertionError("cancellation cleanup deadline exhausted")
-            function, args, kwargs = self._cleanups.pop()
-            try:
-                # Re-arm the same absolute deadline for every callback.
-                with self._budget(self.cleanup_until, 60):
-                    self._callCleanup(function, *args, **kwargs)
-            except Exception as error:
-                if first_error is None:
-                    first_error = error
-        if first_error is not None:
-            raise first_error
-        return True
-
-    def teardown_method(self, method):
-        self.cleanup_until = min(
-            self.row_until,
-            getattr(self, "cleanup_until", self.row_until),
-            time.monotonic() + 60,
-        )
-        return super().teardown_method(method)
+        super().setup_class()
 
     def _new_hold(self, tenant, label, until):
         preimage = self.generate_random_preimage()

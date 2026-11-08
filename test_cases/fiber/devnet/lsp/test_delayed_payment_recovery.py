@@ -16,6 +16,7 @@ import requests
 from websockets.protocol import State
 
 from test_cases.fiber.devnet.lsp._lsp_test import (
+    BUNDLE,
     ChannelSigningTestBase,
     REVISION,
     stop_agent,
@@ -98,7 +99,12 @@ class _DelayedPaymentBase(ChannelSigningTestBase):
         self.business_until = float("inf")
         self.offline = False
         self.payments = {}
-        self._record("environment_start", revision=REVISION)
+        self._record(
+            "environment_start",
+            revision=REVISION,
+            bundle=str(BUNDLE),
+            bundle_manifest_sha256=getattr(type(self), "bundle_manifest_sha256", None),
+        )
         # Run last, after the SDK and FNN cleanups, before pytest removes data.
         self.addCleanup(self._archive)
         try:
@@ -270,7 +276,11 @@ class _DelayedPaymentBase(ChannelSigningTestBase):
         until = getattr(self, "cleanup_until", time.monotonic() + 60)
         with self._budget(until, 60):
             for fiber in getattr(self, "fibers", []):
-                stop_agent(fiber.process)
+                process = getattr(fiber, "process", None)
+                if process is None and fiber._port_is_open():
+                    # Never delete data under a listener this test did not start.
+                    continue
+                stop_agent(process)
                 fiber.clean()
 
     def _rpc(self, client, method, params, until):

@@ -65,6 +65,7 @@ class TestTenantQueryIsolation(_CancellationBase):
         assert own_a["status"] == "Open", own_a
         assert own_a["invoice_address"] == a_payment["invoice"], own_a
         assert own_b["invoice_address"] == b_payment["invoice"], own_b
+        self.result = "passed"
 
     @staticmethod
     def _tenant_id(tenant):
@@ -123,6 +124,7 @@ class TestTenantQueryIsolation(_CancellationBase):
         assert operator_view["invoice_address"] == a_payment["invoice"], operator_view
         assert own_a["status"] == "Open", own_a
         assert own_a["invoice_address"] == a_payment["invoice"], own_a
+        self.result = "passed"
 
     # TEST-MAP: LSP-ADMIN-AUTH-01
     def test_tenant_token_cannot_list_tenants(self):
@@ -153,6 +155,7 @@ class TestTenantQueryIsolation(_CancellationBase):
         )
         ids = {tenant["tenant_id"] for tenant in listed["tenants"]}
         assert {self._tenant_id(a), self._tenant_id(b)} <= ids, listed
+        self.result = "passed"
 
     # TEST-MAP: LSP-ADMIN-AUTH-02
     def test_tenant_token_cannot_evict_tenants(self):
@@ -225,6 +228,7 @@ class TestTenantQueryIsolation(_CancellationBase):
         for key in (self._tenant_id(a), self._tenant_id(b)):
             assert after_by_id[key]["runtime_status"] == "active", after_by_id[key]
             assert after_channels[key] == before_channels[key], key
+        self.result = "passed"
 
     # TEST-MAP: LSP-ADMIN-AUTH-03
     def test_tenant_token_cannot_parse_invoice(self):
@@ -258,3 +262,4 @@ class TestTenantQueryIsolation(_CancellationBase):
         )
         assert after["status"] == "Open", after
         assert after["invoice_address"] == own["invoice_address"], after
+        self.result = "passed"

@@ -3,11 +3,37 @@
 2026-11-07 当前状态：已改为自然时间模式，在 56c761c 上主退款用例 **1 passed / 4:12:20**，实际分支 `T-then-A-sweep`；F2 SDK 快测 01～06 已通过；原 `TestTlcRefundAdapter` 的真实链/adapter 资格仍明确 skip。历史 843 两轮结果只作为背景，不代表当前 head。
 2026-10-30凌晨已关闭的旧批（历史记录）见完整报告（本地证据：`/Users/sunchengzhu/.codex/worktrees/lsp-reviewed-regressions/fiber-py-integration-test/report/lsp-night-new-84333ee-20261030T030349/RESULT.md`）：退款停在真实epoch成熟资格，正式1+3未运行；接纳03～06通过。该批正式退款为0；成熟预算随后已修正并用于下述新批。下方原入口仍固定04，作为保留历史。
 
-本目录存放自然时间下的 TLC 超时退款长场景及账本辅助代码，与普通 `lsp/` 测试分开。自然版不修改宿主或 guest 时间，不需要 Lima/VM。
+本目录存放自然时间下的 TLC 超时退款长场景及账本辅助代码，与普通 `lsp/` 测试分开。自然版在实现上不修改宿主或 guest 时间，也不需要 Lima/VM；但这不等于可以绕过用户要求的专用 VM 控制入口、身份/资格和时间隔离。该规则冲突仍未解决，见下节。
 
 默认 pytest 收集会排除 `manual_nightly` 用例；显式 `--run-lsp-refund-nightly` 才会运行；自然版需要约 4–6 小时、机器保持唤醒，失败不自动重试。
 
+## 工程整理后的入口边界（2026-11-08）
+
+- 当前自然退款入口：`scripts/lsp_refund_natural_nightly.sh [新输出根]`，固定产品 `56c761c`、bundle `download/fiber/pr-1623-56c761c-refund-natural5` 和自然时间；需显式 `--run-lsp-refund-nightly`，默认 deselect 不变。
+- 当前 F2 快测入口：`scripts/run_lsp_refund_f2_fast.py --bundle <bundle> --output <新目录>`，固定 56c，入口统一 300 秒上限；bundle 必须是 `kind=lsp-refund-f2-fast` 且 manifest/helper 源摘要匹配。
+- 本目录测试需要 `LSP_RUN_ARTIFACTS`；缺失时在启动节点/SDK 前明确失败。业务证据、JUnit、stdout 和退出码放在同一新批根，禁止覆盖旧批。
+- 下方 04 VM 命令、`scripts/lsp_refund_vm*.{py,sh,yaml}` 和 `_vm_time.py` 是**冻结历史入口**：固定 04，只用于解释既有证据，不代表当前自然版可执行；不得只改版本常量后当通用入口，也不得按旧命令自动重启。
+- 不接入 Makefile/CI；标记和开关不替代 VM 身份、资格或时间隔离检查。
+
+### 退款入口与 VM 门禁冲突（未解决）
+
+- 用户规则要求退款长测经专用 VM 控制入口执行，并核验身份、资格和时间隔离；本仓库现有 `scripts/lsp_refund_natural_nightly.sh` 是在宿主直接运行自然时间版本的脚本，不满足该门禁。
+- 本轮**不执行退款长测**，不修改脚本、`manual_nightly` 标记、默认 deselect 或时间/资格规则；不得用“自然时间已实现”或历史自然批结果绕过该限制。
+- 单独阅读本 README 的新会话也应看到：入口存在 ≠ 已获得执行授权；恢复长测前需要用户明确本批方案。
+
+### 夜跑必需输入
+
+| 变量/输入 | 适用入口 | 说明 |
+| --- | --- | --- |
+| `LSP_RUN_ARTIFACTS` | 退款夜跑必需 | 新批证据根；缺失时在启动节点/SDK 前失败 |
+| `LSP_PAYMENT_REPORT_DIR` | 自然退款脚本会设置 | 业务证据根；与 `LSP_RUN_ARTIFACTS` 分开 |
+| `LSP_TEST_REVISION` / `LSP_TEST_BUNDLE` / `LSP_RETEST_REVISION` | 所有夜跑 | 当前自然入口固定 56c 与 `refund-natural5` bundle；bundle 需通过 manifest/driver/chain 摘要校验 |
+| `LSP_REFUND_F2_BUNDLE` 等 `LSP_REFUND_F2_*` | F2 快测 | 由 `scripts/run_lsp_refund_f2_fast.py` 设置，不手工拼接 |
+| 同源 bundle、非 Git 输入 | 所有夜跑 | bundle/venv/`report/`/`tmp/` 等未跟踪；链快照、模板、合约受版本控制，分类见相邻 [lsp README](../lsp/README.md) |
+
 用例与完整执行边界见 [退款评审](../../../../reviews/lsp/tlc-timeout-refund.md)。普通适配工具继续复用相邻 `lsp/`，不在本目录复制产品或框架代码。
+
+**完成状态：** 本轮只完成入口/文档收尾整改，没有执行退款长测、VM 或自然竞态；F2/退款入口是否可获得执行资格仍受上述 VM 冲突约束。
 
 ## SDK 快测补充（F2-01～F2-06）
 
