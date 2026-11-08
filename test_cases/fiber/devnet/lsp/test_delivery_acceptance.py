@@ -14,6 +14,9 @@ from test_cases.fiber.devnet.lsp._lsp_test import (
     ChannelSigningTestBase,
     REVISION,
     RETEST_REVISION,
+    require_env_path,
+    sha256_file,
+    validate_delivery_wrapper,
 )
 from test_cases.fiber.devnet.lsp.test_delayed_payment_recovery import (
     _DelayedPaymentBase,
@@ -26,10 +29,20 @@ class _DeliveryBase(_DelayedPaymentBase):
     tenant_labels = ("A",)
     lsp_config_extra = {"max_buffer_duration_ms": 600000}
 
-    def setup_method(self, method):
+    @classmethod
+    def setup_class(cls):
         assert REVISION == "84333eea8488a8afc7e4474aa4bbd0e7e973cee9" or (
             RETEST_REVISION is not None and REVISION == RETEST_REVISION
         ), "use a separately reviewed revision for repair regression"
+        wrapper = require_env_path(
+            "LSP_DELIVERY_NODE", "to start the reviewed delivery wrapper"
+        )
+        validate_delivery_wrapper(wrapper)
+        cls.delivery_wrapper = str(wrapper)
+        cls.delivery_wrapper_sha256 = sha256_file(wrapper)
+        super().setup_class()
+
+    def setup_method(self, method):
         self.preparation_started = time.monotonic()
         self.row_until = self.preparation_started + 480
         self.preparation_until = self.preparation_started + 240
@@ -44,7 +57,7 @@ class _DeliveryBase(_DelayedPaymentBase):
         self.control_dir = Path(tempfile.mkdtemp(prefix="lsp-delivery-", dir="/tmp"))
         self.control_path = self.control_dir / "control.sock"
         self.events_path = self.control_dir / "events.jsonl"
-        self.host_binary = str(Path(os.environ["LSP_DELIVERY_NODE"]).resolve())
+        self.host_binary = type(self).delivery_wrapper
         self.host_process_env = {
             "LSP_DELIVERY_CONTROL": str(self.control_path),
             "LSP_DELIVERY_EVENTS": str(self.events_path),
@@ -61,7 +74,10 @@ class _DeliveryBase(_DelayedPaymentBase):
         self._record(
             "environment_start",
             revision=REVISION,
+            bundle=str(BUNDLE),
+            bundle_manifest_sha256=getattr(type(self), "bundle_manifest_sha256", None),
             host=self.host_binary,
+            host_sha256=type(self).delivery_wrapper_sha256,
             preparation_until=self.preparation_until,
             row_until=self.row_until,
         )

@@ -3,7 +3,18 @@
 import hashlib
 import time
 
-from test_cases.fiber.devnet.lsp.test_hosted_invoice_cancellation import _CancellationBase
+from test_cases.fiber.devnet.lsp._hosted_tenant_fixture import HostedTenantFixture
+from test_cases.fiber.devnet.lsp._lsp_test import REVISION, RETEST_REVISION
+
+# The reviewed Hosted outbound payment gate: the fixed 843 revision or an
+# explicitly declared repair-revision regression.
+FIXED_REVISION = "84333eea8488a8afc7e4474aa4bbd0e7e973cee9"
+
+
+def revision_allowed(revision, retest_revision):
+    return revision == FIXED_REVISION or (
+        retest_revision is not None and revision == retest_revision
+    )
 
 
 def _payment_hash(preimage):
@@ -14,8 +25,15 @@ def _payment_hash(preimage):
     ).hexdigest()
 
 
-class TestHostedOutboundPayment(_CancellationBase):
+class TestHostedOutboundPayment(HostedTenantFixture):
     tenant_labels = ("A",)
+
+    @classmethod
+    def setup_class(cls):
+        assert revision_allowed(
+            REVISION, RETEST_REVISION
+        ), "use a separately reviewed revision for repair regression"
+        super().setup_class()
 
     # TEST-MAP: LSP-PAYMENT-05
     def test_hosted_tenant_pays_ordinary_node(self):
@@ -102,3 +120,4 @@ class TestHostedOutboundPayment(_CancellationBase):
             time.sleep(1)
         assert payment["status"] == "Success", (payment, invoice_state)
         assert invoice_state["status"] == "Paid", invoice_state
+        self.result = "passed"

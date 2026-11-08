@@ -15,12 +15,16 @@ import time
 import requests
 import yaml
 
+from test_cases.fiber.devnet.lsp._isolated_contract import (
+    align_devnet_commitment_lock,
+)
 from test_cases.fiber.devnet.lsp._watchtower_rpc import ChainAudit
 from test_cases.fiber.devnet.lsp._lsp_test import (
     ChannelSigningTestBase,
     BUNDLE,
     REVISION,
     RETEST_REVISION,
+    require_env_path,
 )
 
 
@@ -76,6 +80,9 @@ class _WatchtowerBase(ChannelSigningTestBase):
 
     @classmethod
     def setup_class(cls):
+        cls.run_artifacts = require_env_path(
+            "LSP_RUN_ARTIFACTS", "to archive watchtower chain and contract evidence"
+        )
         cls.chain_started = time.monotonic()
         root = Path(__file__).resolve().parents[4]
         (root / "tmp").mkdir(exist_ok=True)
@@ -91,78 +98,15 @@ class _WatchtowerBase(ChannelSigningTestBase):
         try:
             with timer.budget(300):
                 super().setup_class()
-                cls.prepare_isolated_contract(root)
+                align_devnet_commitment_lock(
+                    cls,
+                    cls.run_artifacts / f"{cls.__name__}-isolated-contract.json",
+                )
         except BaseException:
             if hasattr(cls, "node"):
                 cls.teardown_class()
             raise
         cls.chain_unaccounted = True
-
-    @classmethod
-    def prepare_isolated_contract(cls, root):
-        """Update only this class's extracted devnet, before any FNN starts."""
-        path = root / "source/contract/fiber/commitment-lock"
-        expected = path.read_bytes()
-        assert hashlib.sha256(expected).hexdigest() == (
-            "a7762721ef239b15adbdddca8d772db6e1c001d9f81e23ccc74e1392329931d7"
-        ), "not the reviewed 04c2064 commitment-lock"
-        script = {
-            "code_hash": "0x" + "00" * 25 + "545950455f4944",
-            "hash_type": "type",
-            "args": "0x082d30abbb75c3db217a78eee4f3e0d5a46c90b56c11dec77f3060319f323808",
-        }
-        client = cls.node.getClient()
-        search = {
-            "script": script,
-            "script_type": "type",
-            "script_search_mode": "exact",
-            "with_data": True,
-        }
-        cells = client.get_cells(search, "asc", "0x10", None)["objects"]
-        assert len(cells) == 1, cells
-        old = cells[0]
-        evidence = {
-            "revision": REVISION,
-            "chain_dir": cls.node.ckb_dir,
-            "before": old,
-            "expected_sha256": hashlib.sha256(expected).hexdigest(),
-        }
-        evidence_path = Path(os.environ["LSP_RUN_ARTIFACTS"]) / (
-            cls.__name__ + "-isolated-contract.json"
-        )
-        evidence_path.parent.mkdir(parents=True, exist_ok=True)
-        assert not evidence_path.exists(), evidence_path
-        evidence_path.write_text(json.dumps(evidence, indent=2) + "\n")
-        tx_hash = cls.Contract.upgrade_ckb_type_contract(
-            cls.Config.MINER_PRIVATE_1,
-            str(path),
-            old["out_point"]["tx_hash"],
-            number(old["out_point"]["index"]),
-            fee=200000,
-            api_url=cls.node.rpcUrl,
-        )
-        evidence["submitted"] = tx_hash
-        evidence_path.write_text(json.dumps(evidence, indent=2) + "\n")
-        confirmed = cls.Miner.miner_until_tx_committed(cls.node, tx_hash)
-        tx = confirmed["transaction"]
-        assert tx["outputs"][0]["type"] == script
-        assert tx["outputs"][0]["lock"] == old["output"]["lock"]
-        assert any(i["previous_output"] == old["out_point"] for i in tx["inputs"])
-        assert raw(tx["outputs_data"][0]) == expected
-        header = client.call("get_header", [confirmed["tx_status"]["block_hash"]])
-        assert client.get_block_hash(header["number"]) == header["hash"]
-        live = client.get_live_cell("0x0", tx_hash, True)
-        assert (
-            live["status"] == "live"
-            and raw(live["cell"]["data"]["content"]) == expected
-        )
-        cells = client.get_cells(search, "asc", "0x10", None)["objects"]
-        assert len(cells) == 1 and cells[0]["out_point"] == {
-            "tx_hash": tx_hash,
-            "index": "0x0",
-        }
-        evidence.update(confirmed=confirmed, canonical_header=header, after=cells[0])
-        evidence_path.write_text(json.dumps(evidence, indent=2) + "\n")
 
     @classmethod
     def teardown_class(cls):

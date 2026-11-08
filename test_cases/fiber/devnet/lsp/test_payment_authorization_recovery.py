@@ -12,9 +12,15 @@ import time
 import yaml
 
 from framework.util import get_project_root
+from test_cases.fiber.devnet.lsp._isolated_contract import align_devnet_commitment_lock
 from test_cases.fiber.devnet.lsp._watchtower_rpc import ChainAudit
-from test_cases.fiber.devnet.lsp.test_watchtower_settlement import _WatchtowerBase
-from test_cases.fiber.devnet.lsp._lsp_test import ChannelSigningTestBase, REVISION, RETEST_REVISION
+from test_cases.fiber.devnet.lsp._lsp_test import (
+    BUNDLE,
+    ChannelSigningTestBase,
+    REVISION,
+    RETEST_REVISION,
+    require_env_path,
+)
 from test_cases.fiber.devnet.lsp.test_delayed_payment_recovery import (
     _DelayedPaymentBase,
     _number,
@@ -30,11 +36,25 @@ class TestPaymentAuthorizationRecovery(_DelayedPaymentBase):
 
     @classmethod
     def setup_class(cls):
-        # The runner's pytest start includes CKBlifecycle and contract alignment.
-        row_started = float(os.environ["LSP_PAYMENT04_ROW_START"])
+        # 1. Parameter checks: no directory, CKB/FNN process or chain
+        # transaction happens until every required input is present.
+        assert REVISION == FIXED_REVISION or (
+            RETEST_REVISION is not None and REVISION == RETEST_REVISION
+        ), "use a separately reviewed revision for repair regression"
+        row_start_raw = os.environ.get("LSP_PAYMENT04_ROW_START")
+        assert row_start_raw, (
+            "LSP_PAYMENT04_ROW_START is required for the PAYMENT-04 row budget"
+        )
+        row_started = float(row_start_raw)
+        artifacts = require_env_path(
+            "LSP_RUN_ARTIFACTS", "to archive PAYMENT-04 preparation evidence"
+        )
+        report_root = require_env_path(
+            "LSP_PAYMENT_REPORT_DIR", "for the PAYMENT-04 evidence root"
+        )
+        # 2. Directory preparation (side effects begin here).
         timer = object.__new__(cls)
         timer.business_until = float("inf")
-        artifacts = Path(os.environ["LSP_RUN_ARTIFACTS"])
         root = Path(get_project_root()).resolve()
         (root / "tmp").mkdir(exist_ok=True)
         cls.tmp_path_name = str(
@@ -42,6 +62,9 @@ class TestPaymentAuthorizationRecovery(_DelayedPaymentBase):
                 tempfile.mkdtemp(prefix="lsp-payment04-", dir=root / "tmp")
             ).relative_to(root)
         )
+        cls.payment04_row_start = row_started
+        cls.payment04_report_root = report_root
+        # 3. CKB lifecycle and 4. chain-level contract alignment.
         try:
             with timer._budget(row_started + 180, 180):
                 super().setup_class()
@@ -50,8 +73,9 @@ class TestPaymentAuthorizationRecovery(_DelayedPaymentBase):
                 isolated = (root / cls.tmp_path_name).resolve()
                 assert isolated.is_relative_to(root) and isolated != root
                 assert Path(cls.node.ckb_dir).resolve().is_relative_to(isolated)
-                # Reuse only the reviewed alignment operation, not Watchtower's lifecycle.
-                _WatchtowerBase.prepare_isolated_contract.__func__(cls, root)
+                align_devnet_commitment_lock(
+                    cls, artifacts / f"{cls.__name__}-isolated-contract.json"
+                )
                 (artifacts / "preparation-class.json").write_text(
                     json.dumps(
                         {
@@ -98,21 +122,21 @@ class TestPaymentAuthorizationRecovery(_DelayedPaymentBase):
             raise
 
     def setup_method(self, method):
-        assert REVISION == FIXED_REVISION or (
-            RETEST_REVISION is not None and REVISION == RETEST_REVISION
-        ), "use a separately reviewed revision for repair regression"
-        self.row_started = float(os.environ["LSP_PAYMENT04_ROW_START"])
+        # Class setup already validated and recorded both required paths.
+        self.row_started = type(self).payment04_row_start
         self.row_until = self.row_started + 600
         self.preparation_started = self.row_started
         self.preparation_until = self.row_started + 180
         self.business_until = float("inf")
-        root = Path(os.environ["LSP_PAYMENT_REPORT_DIR"])
+        root = type(self).payment04_report_root
         self.evidence_dir = root / method.__name__
         self.evidence_dir.mkdir(parents=True, exist_ok=False)
         self.result, self.offline, self.payments = "incomplete", False, {}
         self._record(
             "environment_start",
             revision=REVISION,
+            bundle=str(BUNDLE),
+            bundle_manifest_sha256=getattr(type(self), "bundle_manifest_sha256", None),
             row_started=self.row_started,
             row_deadline=self.row_until,
             preparation_deadline=self.preparation_until,
