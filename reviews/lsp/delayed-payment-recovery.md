@@ -1,10 +1,12 @@
 # 真实付款的延迟签名恢复
 
-2026-11-07 当前状态：`LSP-PAYMENT-05` 已实现并在 56c761c 执行一次，**1 passed / 95.22s**；测试补齐 SDK 出站 `authorize_payment`（金额 1,005,000）、P 发票 preimage 和本地 `fulfill`，P 发票 Paid，A payment Success。`LSP-PAYMENT-04` 的旧状态保留如下。最新192130批补入既有合约对齐调用，经GPT-6 Sol High复核后仅执行一次；pytest在setup_class的隔离路径断言报错（1 error in7.60s、exit1）即停。runner向预导入类设置路径，但pytest实际加载另一模块中的类，tmp_path_name仍为None；CKB已在默认tmp启动后才被断言拦下。未执行合约对齐、FNN初始化或任何付款/资金断言。属于本批执行准备错误，不能计产品业务失败或通过。详见最新RESULT（本地证据：`../../report/lsp-payment04-84333ee-20261030T192130/RESULT.md`）。旧批证据保留；固定产品仍为干净`84333eea8488a8afc7e4474aa4bbd0e7e973cee9`。
+2026-11-07 历史状态（56c）：`LSP-PAYMENT-05` 已实现并在 56c761c 执行一次，**1 passed / 95.22s**；测试补齐 SDK 出站 `authorize_payment`（金额 1,005,000）、P 发票 preimage 和本地 `fulfill`，P 发票 Paid，A payment Success。`LSP-PAYMENT-04` 的旧状态保留如下。最新192130批补入既有合约对齐调用，经GPT-6 Sol High复核后仅执行一次；pytest在setup_class的隔离路径断言报错（1 error in7.60s、exit1）即停。runner向预导入类设置路径，但pytest实际加载另一模块中的类，tmp_path_name仍为None；CKB已在默认tmp启动后才被断言拦下。未执行合约对齐、FNN初始化或任何付款/资金断言。属于本批执行准备错误，不能计产品业务失败或通过。详见最新RESULT（本地证据：`../../report/lsp-payment04-84333ee-20261030T192130/RESULT.md`）。旧批证据保留；固定产品仍为干净`84333eea8488a8afc7e4474aa4bbd0e7e973cee9`。
 
-范围：已通过 [Gate1](hosted-channel-guards-scope.md) 的在线延迟、SDK 完全离线、A 等签时 B 收款三个方向。用户已明确通过 Gate2 的三行、预算和共同断言，2026-10-24 进入 Gate3；Python 自动化与 TEST-MAP 已接入，执行结果另记于[运行记录](../../test_cases/fiber/devnet/lsp/README.md)。已有 RECOVERY、RETRY、SIGN、TIMEOUT 用例不变，不改产品代码；映射存在不表示执行通过。
+范围：已通过 [Gate1](hosted-channel-guards-scope.md) 的在线延迟、SDK 完全离线、A 等签时 B 收款三个方向；`LSP-PAYMENT-05` 的 763 正常单笔设计见 2026-11-08 段，不继承本节 `24b5c38`/843 的结论。用户已明确通过 Gate2 的三行、预算和共同断言，2026-10-24 进入 Gate3；Python 自动化与 TEST-MAP 已接入，执行结果另记于[运行记录](../../test_cases/fiber/devnet/lsp/README.md)。已有 RECOVERY、RETRY、SIGN、TIMEOUT 用例不变，不改产品代码；映射存在不表示执行通过。
 
-固定 FNN/SDK：`24b5c38bc098aeb29de5f6af7ac28dc667f218e3`；测试仓库基线 `cf937275618d8e51b35a7537788702cf4b67bc31`。新 PR HEAD 的观察保留在 Gate1，不把本批结果归给未运行的版本。
+历史 FNN/SDK：01～03 沿用 `24b5c38bc098aeb29de5f6af7ac28dc667f218e3`，04 按其下方 843 记录；当时测试仓库基线为 `cf937275618d8e51b35a7537788702cf4b67bc31`。`LSP-PAYMENT-05` 本批固定 763、测试起点为工程合并提交 `e79d540cda6d03ea8f591101c916f70329ab30b9`；设计和当前结果分别见 2026-11-08、2026-11-09 段。不把历史结果归给未运行版本。
+
+2026-11-08 G1 设计记录（当时未执行；2026-11-09 已获用户确认，实现与执行见文末）：本批评审固定候选 `76307312e8de518c9a32074e6d16867c04de4f86`，只细化 `LSP-PAYMENT-05` 的正常单笔 A→T→P 出站付款、费用/资金守恒和一次经济结算判据。历史 56c 的 `1 passed / 95.22s` 只证明当时 A payment Success、P invoice Paid 以及 SDK 出站授权/本地 fulfill 的已有断言，不证明 763、新增费用/资金/重复执行断言或完整 external-signer outbound E2E。763 文档仍把“complete external-signer outbound payment E2E”列为 prototype 剩余项；本轮只评审正常单笔路径，不把 prototype 状态写成发布完成。
 
 ## 接口和共同前提
 
@@ -49,11 +51,16 @@ Basis: 固定843 [缺授权拒绝](https://github.com/nervosnetwork/fiber/blob/8
 Source: inference
 Testing: required
 
-### SPEC-05：hosted external-signer outbound payment 完整 E2E
-Condition: A 的真实 external-signer 通道和 T–P 公共路由已就绪；A 创建真实 invoice，P 为普通收款节点；A 以 tenant token 发起 `send_payment`。
-Expected: 付款经 A–T–P 到达 P，A payment 到 Success、P invoice 到 Paid；路由、费用与资金守恒，不出现重复 TLC 或停在 Inflight。
-Observable: A/T/P payment、invoice、channel、TLC、资金与 SDK 签名/记录；路由节点和实际费用。
-Basis: 当前 Fiber 文档仍把 complete external-signer outbound E2E 列为剩余项；本行已用真实 Python E2E 覆盖并通过。
+### SPEC-05：hosted external-signer outbound payment 正常单笔路径
+
+Condition: T 为 public LSP，A 是 T 的 hosted tenant，A–T 是真实 external-signer 私有通道；P 是普通 Fiber 节点，P–T 为 ChannelReady 公共通道。P（不是 A）用它持有的 preimage `p` 创建普通 CKB 发票：`a=1,000,000` Shannon、`expiry=600s`、`allow_trampoline_routing=true`、`allow_mpp=false`，`H=ckb_hash(p)`。A 的 SDK 对 `H` 做 `inbound=false` 的 `authorize_payment`，金额取本实现的首跳 TLC 金额 `u=1,005,000`（`a + 5,000`），未过期；A 经 tenant token 只调用一次 `send_payment`（invoice、`trampoline_hops=[T]`、`max_fee_amount=10,000`、`tlc_expiry_limit=86,400,000`、`timeout=120s`）。A–T 接纳该 TLC 且 SDK records 确实包含 `H` 后，A 通过自己的 `get_payment(H).payment_preimage` 观察到 `p`、与 P 的 `p` 核对一致，再用该观察值做本地 fulfillment 授权；P 侧持有 preimage，不依赖 A 生成，也不把测试变量直接喂给 fulfill。
+
+Expected: 付款经 A–T 和 T–P 到 P；A `get_payment` 到 `Success`，P `get_invoice` 到 `Paid`；A–T 的 TLC 实测金额为 `u`，T–P 为 `a`；763 直连 trampoline 路由源码期望 `u=a+effective_fee_budget`（本输入为 `1,005,000`），实际费用由 `f=u-a` 从 TLC/四端余额推导，并要求 `f=get_payment.fee`，5,000 是有效预算上限；本输入 exact-amount 路由下实际 f 也应为 5,000，仍以实测 u/四端余额和 `get_payment.fee` 交叉验证，不把授权值单独当 fee；四端结算满足 A 扣 `u`、P 收 `a`、T 在两个通道净收 `f`；终态后两段目标 hash 均无未终止 TLC、无待签、`offered/received` 归零、支持一次经济结算的派生判据（固定单笔输入、两段目标 TLC、四端精确净额、终态清理和稳定窗口共同支持，不按轮询直接计数），P 净增加 `a` 且稳定窗口无第二次变化（测试只创建一张发票，不以 `get_invoice` 证明唯一）；成功终态、余额、费用和支付历史在至少 5 秒稳定窗口内不变。内部合法 attempt/retry 不作为失败，也不把“恰好一个内部记录”作为唯一判据。
+
+Observable: A 的 `get_payment`（含 `payment_preimage`）/SDK `records`、P 的 `get_invoice`、A/T/P 的 `list_channels`；A–T 与 T–P 的 TLC hash/amount/status/ID、四端 `local`/`remote`/`offered`/`received`、通道 outpoint、`send_payment` 调用次数与返回；`routers` 仅作辅助诊断。
+
+Basis: 763 [tenant send_payment](https://github.com/nervosnetwork/fiber/blob/76307312e8de518c9a32074e6d16867c04de4f86/docs/notes/hosted-lsp-remote-signer.md#L245-L270)、[PaymentAuthorization exact amount](https://github.com/nervosnetwork/fiber/blob/76307312e8de518c9a32074e6d16867c04de4f86/crates/fiber-lsp-sdk/src/commitment.rs#L83-L98)、[fee cap](https://github.com/nervosnetwork/fiber/blob/76307312e8de518c9a32074e6d16867c04de4f86/crates/fiber-lib/src/fiber/payment.rs#L450-L456)、[fee_paid](https://github.com/nervosnetwork/fiber/blob/76307312e8de518c9a32074e6d16867c04de4f86/crates/fiber-types/src/payment.rs#L994-L1004)、[trampoline balance tests](https://github.com/nervosnetwork/fiber/blob/76307312e8de518c9a32074e6d16867c04de4f86/crates/fiber-lib/src/fiber/tests/trampoline.rs#L684-L768)、[hosted outbound/preimage test](https://github.com/nervosnetwork/fiber/blob/76307312e8de518c9a32074e6d16867c04de4f86/crates/fiber-lib/src/lsp/tests/signer_isolation/payment_preimage.rs#L20-L110)、[trampoline first-hop amount](https://github.com/nervosnetwork/fiber/blob/76307312e8de518c9a32074e6d16867c04de4f86/crates/fiber-lib/src/fiber/graph.rs#L1604-L1651)；[763 phase 5](https://github.com/nervosnetwork/fiber/blob/76307312e8de518c9a32074e6d16867c04de4f86/docs/notes/hosted-lsp-remote-signer.md#L617) 仍把 complete external-signer outbound E2E 列为 prototype 剩余项，本 Spec 只覆盖正常单笔路径，不声称完整 E2E/生产 Auto policy。
+依据分类：角色/入口与 tenant `send_payment`、费用路径与首跳金额来自 763 explicit 源码/文档；费用/四端资金公式由 763 通用 trampoline 实现/上游测试与本次设计推导；无重复/稳定终态判据是本设计 inference，需 G1 人工确认。
 Source: inference
 Testing: required
 
@@ -66,14 +73,15 @@ Testing: required
   - A 等待期间 B 完成，再放行 A：LSP-PAYMENT-03 [primary] -> SPEC-01、SPEC-03
 - 缺授权后的显式批准恢复（固定843）
   - 无授权真实拒签、同PID自然恢复原付款及同通道下一笔资金：LSP-PAYMENT-04 [primary] -> SPEC-04
-  - A 经 T 向普通 P 发起真实 outbound payment，成功/Paid：LSP-PAYMENT-05 [primary] -> SPEC-05
+- Hosted external-signer 出站付款（763 正常路径）
+  - P 用自身 preimage 签发普通发票，A 经真实 external signer 单笔出站到 P，并核对费用/资金/一次经济结算：LSP-PAYMENT-05 [primary] -> SPEC-05
 - 后续独立评审
   - 反向开通、watchtower 与链上资金取回 [unanalysed] — 本批不覆盖，完成此组后再选择下一范围。
 <!-- TEST-TREE-END -->
 
 ## 完整用例
 
-01～03共享下文原检查点、时间预算及断言；04只采用SPEC-04及文末独立Gate2约束。复选框仅表示TEST-MAP是否存在。
+01～03共享下文原检查点、时间预算及断言；04只采用SPEC-04及文末独立Gate2约束；05使用下文独立的出站资金/一次结算设计，不套用01～04的P→T→A反向公式。复选框仅表示TEST-MAP是否存在。
 
 <!-- TEST-CASES-BEGIN -->
 | 用例 | 场景 | 预期结果 | 防止的问题 | 优先级 |
@@ -82,8 +90,10 @@ Testing: required
 | `LSP-PAYMENT-02` | - [x] P 真实支付 A 一次并到达同一检查点；结束 SDK，确认原 WS 两侧及在途请求均结束后，至少 35 秒完全不请求 A，再用原存储启动并核对原请求和签名后恢复 | 无租户查询的完整窗口内公共侧通道和原付款仍保留；新 PID 的订阅实际补发同一完整请求、首个签名体与原件一致且身份/授权未重建；原付款按共同资金断言完成并稳定 | 保护依赖持续查询或残留订阅保活，或重启靠重新授权、重发付款掩盖恢复丢失 | P1 |
 | `LSP-PAYMENT-03` | - [x] A、B 通道先就绪；P 向 A 付款并扣住同一检查点，在 A 持续等签至少 35 秒期间向 B 支付另一张发票，确认 B 已完成且 A 仍未放行，再恢复 A | B 必须先 Success/Paid 且自身 TLC 清理，A 同时仍为原待签/未付款；共享 P–T 只结算 B 并保留 A 锁定额；A 随后成功，六端余额、两笔费用及 T 净收入分别准确且稳定 | 单租户签名等待阻塞其他租户付款，或共享余额/付款上下文串单、漏扣或重复扣款 | P1 |
 | `LSP-PAYMENT-04` | - [x] P向A的hash-only发票发送一次付款，A的SDK缺本地授权而真实拒签；在同一SDK进程补入同hash正确授权，经自然重连恢复原请求并安全释放preimage，原付款完成后在原两条通道再付一笔新hash | 补授权前无目标签名提交或preimage释放；同PID、新WS实际交付原R，补授权后SDK首次实际提交Applied；两笔均Success/Paid，逐笔及累计四端资金/实际费用守恒，原通道和funding保持、TLC/锁定/待签清空并各稳定至少5秒，原付款历史终态及费用不变 | 无授权状态被误签或提前泄露preimage，拒签后无法恢复、需要重启/重发掩盖问题，或后续付款串单及重复结算 | P0 |
-| `LSP-PAYMENT-05` | - [x] A 的真实 external-signer 通道就绪，P 已有 T–P 路由；A 创建真实 invoice payment，经 T 转到普通节点 P；A 使用 tenant token 发起 `send_payment`，等待 A payment 终态和 P invoice 终态 | A payment Success、P invoice Paid；路由经过 A–T 与 T–P，费用和资金守恒，不出现重复 TLC | hosted external-signer outbound 无法完成最终结算，或把 Inflight 当成功 | P1 |
+| `LSP-PAYMENT-05` | - [x] P（普通节点）用自身 preimage 签发金额 `a=1,000,000` 的普通发票；A 的真实 external-signer 通道和 P–T 路由就绪；A 经 tenant token 只发起一次 `send_payment`，TLC 接纳后取得并核对 preimage 再完成本地 fulfillment 授权 | A payment `Success`、P invoice `Paid`；A 扣款、P 收款、T 净收入与实际费用一致，只发生一次经济结算；终态无未终止目标 TLC、无待签、锁定额归零，P 只结算一次、只增加发票额一次，状态/余额/费用稳定后不再变化 | 把 Inflight 当成功、把授权/首跳金额当实际费用、重复结算或重复 TLC、A 创建发票/方向写反，或只看 Success/Paid 不看资金 | P1 |
 <!-- TEST-CASES-END -->
+
+当前 `LSP-PAYMENT-05` 的 `[x]` 只表示已有 TEST-MAP；2026-11-09 已按用户确认的设计补齐费用、四端资金、一次经济结算派生判据、TLC trace 采集和稳定窗口，并改为 A 从自身 `get_payment.payment_preimage` 观察核对后再 fulfill。固定 763 的本次执行结果见文末；复选框本身仍不表示通过，也不代表其他版本或分支已验证。
 
 ## 共同检查点：证明 T 真正在等这笔付款的 ACK
 
@@ -170,6 +180,75 @@ Testing: required
 3. A 持续等待期间采样两笔；B 必须在 `t_checkpoint+120s` 前完成 Success/Paid、B TLC 清理、上述混合资金断言及至少 5 秒稳定观察。混合观察中 A 仍未成功、原 R 不变、S 未上送；共享 P–T 可更新承诺，但只能结算 B，保留 A 的原上游 TLC/锁定额。
 4. 满足 B 完成证据和 A 等待至少 35 秒后，在 +125 秒前取得完整混合样本，再核对安全余量、恢复 A；禁止先放行 A 再把两笔最终成功解释为互不阻塞。
 5. A 在恢复后 120 秒内完成；核对六端最终余额、每笔实际费用与 T 净收入，TLC/锁定额/待签全部清空，再稳定至少 5 秒。
+
+## LSP-PAYMENT-05 评审设计：A→T→P 出站付款、费用与一次经济结算（2026-11-08）
+
+本节只适用于 `LSP-PAYMENT-05`，不得套用 01～04 的 P→T→A 反向资金公式；01～04 的“等待签名”共同检查点也不要求本行复制。05 的输入与 01～04 不同：使用 600s 发票和 600s 授权窗口，而不是上文的 3600s；也不套用 01～03 的 900s 等待签名安全余量/180s 检查。本节保留已确认设计；2026-11-09 的自动化实现与执行结果见文末。
+
+### 角色、输入和前置资格
+
+- T 为 public LSP；A 是 T 的 hosted tenant，A–T 为真实 external-signer 私有通道；P 是普通 Fiber 节点，P–T 为真实的公共通道。**P 签发普通发票，A 发起付款**；不是 A 创建发票。
+- P 用自己持有的 preimage `p` 创建普通 CKB 发票：`a=1,000,000` Shannon、`expiry=600s`、`allow_trampoline_routing=true`、`allow_mpp=false`，`H=ckb_hash(p)`；P 的 preimage 不依赖 A 或 T。
+- A 的 SDK 在发送前完成 `inbound=false` 的 `authorize_payment`：`H`、`amount=a+effective_fee_budget`（本输入 `1,005,000`）、`hash_algorithm="ckb_hash"`、`expires_at_ms=now+600_000`、`min_tlc_expiry_delta_ms=300_000`、`max_tlc_expiry_ms=now+86_400_000`，且均满足；A 不调用 `authorize_invoice`。`effective_fee_budget=min(10,000, ceil(a*5/1000))=5,000`（763 `payment.rs` 的默认费率与上限；当前测试用 floor，本输入恰好整除）；这里的金额是 exact 首跳 TLC/授权金额（本输入 1,005,000），不单独等于实际费用；实际 `f=u-a`，本路由期望 5,000。`u` 必须从 A–T 实际 TLC 读取；SDK 授权额度只作 exact-amount 前置，不参与 `f` 计算。若 SDK 授权控制未保存或测试输入金额错误，是准备失败；若授权已正确保存且 exact amount 正确、但产品实际 TLC 金额/费用不同，是产品断言失败（exact-amount 契约）。763 `graph.rs` 的直连 trampoline 构造把 source-side amount 设为 `final_amount + max_fee_amount`，因此本输入期望 `u=1,005,000`；这仍是源码/路由依据，不是把授权值当 fee。
+- A 经 tenant token 只发起一次 `send_payment`：invoice、`trampoline_hops=[T]`、`max_fee_amount=10,000`、`tlc_expiry_limit=86,400,000`、`timeout=120s`。不手工重发、不直接提交签名、不绕过 gate。
+- A–T 接纳目标 TLC 且 SDK `records` 确实包含 `H` 后，A 必须先通过自己的 `get_payment(H).payment_preimage` 观察到 `p`，并与 P 创建发票时使用的 `p` 核对；然后才用这个**观察到的** preimage 做本地 `fulfill` 授权，不能把测试变量直接传给 driver。若 A 侧一直未观察到 preimage，不调用 fulfill、不得判成功。若测试未保存授权、未创建发票、未按设计等待，或本地 fulfill 的调用前置已经取得但测试漏调，按归因规则报准备/编排失败；因产品尚未提供 records/preimage 而按规则不调用 fulfill，不属于漏调。A–T 已接纳且 H 已知、在有效截止内持续等待后仍无 records/preimage，按归因规则归产品断言失败；只有可观察前置实际不可用才归观察/准备限制。前置有效、发送已被接受且观察源合格，但首跳 TLC 到截止仍未创建/接纳，按归因规则保留产品停滞候选，不因“未接纳”归观察失败。
+
+### 四端资金关系
+
+以 `L_A, L_TA, L_P, L_TP` 表示 A 侧、T 的 A 侧、P 侧、T 的 P 侧的 `local_balance`，基线加下标 0：
+
+| 端点/视图 | 中段目标 TLC | 终态 `local_balance` 增量 | 对侧/镜像 |
+| --- | --- | --- | --- |
+| A（A–T） | offered `u`（`amount=u`） | `ΔL_A = -u` | `Δremote_A = +u` |
+| T–A（T 的 A 侧） | received `u` | `ΔL_TA = +u` | `Δremote_TA = -u` |
+| P（P–T） | received `a` | `ΔL_P = +a` | `Δremote_P = -a` |
+| T–P（T 的 P 侧） | offered `a` | `ΔL_TP = -a` | `Δremote_TP = +a` |
+
+- 实际费用 `f = u - a = ΔL_TA + ΔL_TP`，并由 A 的扣款 `-ΔL_A` 与 P 的收款 `ΔL_P` 交叉验证；`get_payment.fee` 必须等于 `f`，但它只是同一产品返回值，不能单独充当预期。
+- 资金守恒：`A_debit = u = a + f`、`P_credit = a`、`T_net = f`；A–T 与 P–T 的 `local+remote` 在基线/终态保持常量，funding outpoint 不变。本输入 `effective_fee_budget=5,000`；763 直连路由源码期望 `u=1,005,000`，所以实际 `f=u-a` 应为 5,000，而不是任意 `0..5,000`。本输入 source/实测期望 `f=5,000`；5,000 由预算/路由推导，不是测试里单独写死的 fee。仍以实测 u、四端余额和 `get_payment.fee` 三者裁决；若实际 f 不是 5,000，先查路由/费用契约，不能靠放宽范围放行。
+- 同通道 A/T-A、P/T-P 的 `local` 与 `remote` 必须镜像；不要只核对 P 或只核对 A。本行只能复用 `_views`/`_budget`；`_sample`/`_funds` 是 P→T→A 反向实现，**不得复用**，需写 05 专用采样和资金断言（A 查 `get_payment`，P 查 `get_invoice`）。
+- 中段记录目标 hash 的未终止 TLC，不要求某个轮询瞬间两段同时可见（T–P 可能因 P 已持有 preimage 很快结算）；历史 `RemoveAckConfirmed` 记录允许保留，不能要求 `pending_tlcs` 字面为空。若同一段看到两个未终止目标 TLC，不自动判失败，但必须保存 attempt/TLC 历史并确认最终只有一次结算；无法解释则按重复执行失败。终态只要求目标 hash 无未终止 TLC 且 `offered/received` 归零。
+
+### 归因规则（全节唯一口径）
+
+- **准备/编排失败**：测试前置无效，或必要操作未执行（未保存授权、未创建发票、未按设计等待、fulfill 调用前置已经取得但测试漏调、未建立所需通道/基线），或测试自己的采样/输入/编排错误。不能把这种情况报成产品失败。
+- **观察/准备限制**：前置有效且操作已执行，但 RPC/日志/字段实际不可用、采集资格不足，或准备消耗导致有效测试预算不足。这是“无法判断”，不是产品通过或失败。
+- **产品停滞候选/待归因**：前置有效、`send_payment` 请求已被接受、观察源已确认可用，但到既定有效截止首跳 TLC 仍未创建/接纳，或业务不推进。保留原始 RPC/日志/请求/时间证据，标为候选、待归因；不得仅因“未接纳”归观察失败，也不得在证据不足时武断认定产品缺陷。正常异步等待或第一次未采到 TLC 不等于产品停滞；必须继续有界等待到有效截止，不延长或重置截止。763 `network.rs:5109–5134` 显示 AddTlc 发送与结果处理是异步的，`payment.rs:1217–1249` 显示非终态付款可能继续等待/停止 actor；因此截止无首跳时只能保留候选。
+- **产品断言失败**：前置有效，A `Failed`/P `Cancelled|Expired`，或 A `Success`/P `Paid` 后费用、四端资金、TLC 清理、一次结算等关键断言不符；或 A–T 已接纳且 H 已知、在有效截止内持续等待后产品仍不提供本设计要求的 records/preimage 可观察前置。
+- **成功**：以上条件全部满足，且 5s 稳定窗口内无变化。
+
+### 采集资格与 TLC 补证边界
+
+- 终态 `list_channels` 只读当前 `all_tlcs`（763 `rpc/channel.rs:518–565`）；成功移除会 `apply_remove_tlc`（763 `channel.rs:8407–8416`），不能保证补回已成功移除的历史 TLC。不能把“终态没有历史”当成“没有发生过”。
+- 发送前必须选定并验证一个能保留 `H`、amount、channel ID、TLC ID、expiry 的观察源（trace 日志或其他），记录其级别、字段、路径和本次起始 offset/位置。当前 `_lsp_test.py:220,243` 默认 `fnn_log_level=debug`、`RUST_LOG=info,fnn=debug`；763 的完整 ChannelActor message 上下文来自 `channel.rs:5212–5218` 的 `trace!`，默认 debug 不能假设 trace 已产生。注意 T 侧发送 `AddTlcCommand` 的 Debug 不一定包含分配后的 `tlc_id`；T–P 补证优先使用接收侧 P 的 `PeerMessage(AddTlc)` trace 或另一个经字段校验的源；若源不能同时给出 H/amount/channel/TLC ID/expiry，按采集资格不足处理。
+- 采集资格不足（级别/字段/起始位置/权限）→ 观察/准备限制；采集资格足够且完整观测后仍无第二段事件 → 产品停滞/路由候选或产品断言，按是否已有 A–T 首跳 TLC 判断。不得把日志/字段没采到直接当成第二段没有发生。
+- 自动化先核对实际 trace 已启用并保存本次起始位置，再强制解析目标付款的完整接收侧 AddTlc；固定源码的格式说明不能替代本次目标事件。实际缺字段或日志不可用仍按上述观察限制处理。
+
+### 观察顺序、路由和重复执行判据
+
+1. **基线**：在 P 创建发票、A 授权之前保存 `self.baseline` 四端视图；两条通道均 `ChannelReady`、目标 hash 无 pending、`offered/received` 为 0、outpoint/funding 固定；A 的 signing status 为 `NoSignatureRequired`；此时 P 发票尚未创建。
+2. **发送前授权**：P 创建发票后只确认 `get_invoice(H)` 状态为 `Open`、发票地址由该 `new_invoice` 返回；763 `get_invoice` 不返回 preimage，`p` 是测试/P 侧输入，不能声称从该 RPC 读取。记录测试只调用一次 `new_invoice`；确认 A SDK 已保存 outbound authorization；记录 `send_payment` 只调用一次及返回的 `payment_hash=H`。A 的付款 `get_payment` 在发送前不应被当作成功；本行不要求未创建时的查询结果。
+3. **路径证据检查点（中段可选）**：优先在 A–T 已接纳、A 尚未本地 fulfill 时保存 A–T 目标 TLC（实测 u、id/expiry）。T–P 的 TLC 可能因 P 已持有 preimage 很快结算，不得因单段未同时观察到而直接判产品失败；补证只能使用发送前已确认采集资格的 trace/日志或其他源（见上节），并保存 H、a、channel/TLC ID、expiry 与起始位置；T–P 优先用接收侧 P 的 `PeerMessage(AddTlc)` trace 等能给出 tlc_id 的源，T 侧发送 `AddTlcCommand` 的 Debug 不保证 tlc_id；字段不足按采集资格不足处理。终态 `list_channels` 不足以补回已移除历史。`get_payment.routers` 仅 debug 构建可用，release 构建不存在，不能作为 release fallback。若 A–T 已有目标 TLC 而 T–P 在完整观测下始终没有，归产品停滞/路由候选；若 A–T 首跳在截止仍未创建/接纳，按归因规则保留产品停滞候选；只有采集资格/字段/预算不足才归观察/准备限制。正常异步等待或第一次未采到 TLC 不立即判产品失败；若事后仍无法建立两段对应，不能把 Inflight 或单段 TLC 当成功；中段看到同段两个未终止目标 TLC，按上节重试/重复规则保存证据。
+4. **本地 fulfill（观察 preimage）**：只在 SDK `records` 已包含该 hash 的 TLC 后，读取 A 的 `get_payment(H).payment_preimage`，断言它等于 P 创建发票的 `p`，再把**观察到的** preimage 传给 `fulfill`；不能在 records 前 fulfill，也不能用测试变量直接代替 A 的观察。若 A 侧未观察到 preimage，不得调用 fulfill 或判成功。
+5. **终态与稳定**：用有界 `_rpc` 轮询 A `get_payment(H)` 与 P `get_invoice(H)`，直到 A `Success`、P `Paid` 且目标 hash 无未终止 TLC，以该完整样本的 `finished` 记 `t_success`；随后至少 5 秒（末个完整样本的 `finished-t_success≥5s`，不计样本完成后的本地处理时间；采样间隔不超过 2s，至少 3 个样本，总截止遵循下节有效截止规则）重复采样 `get_payment`、`get_invoice`、A 的 `get_channel_signing_status`、四端视图，要求 status/fee/invoice/余额/outpoint/未终止 TLC 均不变、A 为 `NoSignatureRequired`（无目标待签）。成功轮询不得只返回一次响应就结束。若 A 在前提成立后为 `Failed`，或 P invoice 为 `Cancelled/Expired`，立即按产品断言失败停止，不等待 420s；若 A–T 已接纳且 H 已知、在有效截止内持续等待后 A 仍不暴露 records/preimage，按产品断言失败记录；若前置/发送/观察有效但到截止首跳仍未创建/接纳，按产品停滞候选保留；若观察源不可用/字段不足/预算不足，按观察/准备限制；若测试漏掉必要等待，或 fulfill 调用前置已经取得但测试漏调，按准备/编排失败；因产品未提供 records/preimage 而未调用 fulfill，沿用缺少可观察前置的归因。现有 fulfill 30s、终态 45s 等待上限不变，截止与到期归因统一遵循下节，不能因成功稳定窗口不足而提前降为观察/准备限制。
+6. **资金裁决**：对终态四端套用上表公式，核对 `ΔL_A=-u`、`ΔL_TA=+u`、`ΔL_P=+a`、`ΔL_TP=-a`、`f=u-a`、`f=get_payment.fee`、`f=effective_fee_budget=5,000`（763 直连路由的源码期望，非授权值；实测不符即产品/路由断言失败）、P 终态净增加 `a` 且稳定窗口内未观察到第二次变化（派生判据，不是事件计数）、测试只调用一次 `new_invoice`/`send_payment`。不要把 `get_invoice(H)` 的当前状态当作“只有一张发票”的证明；若产品有 `list_invoices`，按 H 过滤记录数量。发送/终态查询走带 `business_until` 的 `_rpc`，不要用无界直接 `client.call`；现有 30s fulfill、45s 终态轮询都必须 cap 到 `business_until`，不能替代 420s 总截止。结果按上文“归因规则”唯一口径区分：准备/编排失败、观察/准备限制、产品停滞候选/待归因、产品断言失败、成功，不能互相替代。A–T 已接纳且 H 已知后产品不暴露 records/preimage，归产品断言失败（可观察前置缺失）；首跳未创建/接纳且前置/观察有效，保留产品停滞候选，不能因“未接纳”直接归观察失败。`get_payment.fee` 是 U128Hex，比较前先转整数。
+
+- **一次经济结算（派生判据）**：每 2 秒读取余额/视图是离散状态快照，不能直接计数全部结算事件。本批固定单笔输入下，`H`、两段目标 TLC、四端精确净额、终态目标 TLC 清理，以及稳定窗口内未观察到第二次变化，共同支持“一次经济结算”的派生判据；不把“采样充分”写成“直接证明恰好一次”。若需要直接事件计数，必须另有能关联 H/channel/TLC 的完整结算事件，本批不新增此场景。内部合法 retry 仍与重复经济执行区分：不是“内部 attempt 恰好 1 个”，也不要求中段某一瞬间每段恰好一个；若 RPC 暴露 session/attempt 则记录但不计数。合法重试可造成瞬时多个/历史 TLC，但最终只能有一次结算；exact-amount 下改变首跳金额/授权会被 SDK 拒签，不能当合法 retry；无证据或出现第二次余额变化则按重复执行失败。不要求产品必须暴露 attempt 字段。`get_payment.routers`（debug 构建）只作辅助，不作为 attempt 数量或唯一判据。
+- **路由归属**：优先用保存的 A–T、P–T channel ID/outpoint 与两段 TLC 的 hash/amount 证明 A→T→P；`routers` 只在调试构建可用，不能代替 TLC/通道证据。
+- **P 结算一次（派生判据）**：测试只调用一次 `new_invoice`，`get_invoice(H)` 只核对该 hash 的当前发票为 `Paid`；不声称 `get_invoice` 能证明“只有一张发票”。若产品有 `list_invoices`，按 H 过滤记录创建数量。从付款前基线开始持续跟踪 P 的 `local_balance`，覆盖等待 records/preimage、本地 fulfill 和终态观察，不在 fulfill 后重置历史。每个完整样本只允许基线或基线 `+a`，且不允许从 `+a` 回退或出现第二次变化；fulfill 前的超额入账或回退同样失败。相邻完整采样完成间隔不超过 2s；这些离散快照只能检查观察到的变化，不能直接计数全部结算事件；观察到一次基线到 `+a` 的跃迁只是支持证据。最终以固定单笔输入、两段目标 TLC、四端精确净额、终态无活动目标 TLC、稳定窗口无第二次变化共同支持“只结算一次”的派生判据，不能宣称直接观测到恰好一次。不要求 A 的私有历史记录全部为空。
+
+### 预算、版本和证明边界
+
+**有效截止（本行唯一口径）：** 每个等待阶段沿用既定阶段上限，并与 `business_until`、付款 `timeout`、发票/授权到期，以及首跳 TLC 出现后的可用 expiry/安全余量取**当前可用且最早**的截止。新增期限证据只能收紧截止，不能延长或重置阶段计时。本地等待上限是测试预算，不是产品 SLA。
+
+- **付款开始前的预算资格**：准备完成、尚未发送付款时，核对剩余有效预算能覆盖本设计必要观察和 5s 成功稳定窗口；若因准备消耗而不足，报观察/准备限制，不发起付款或扩大预算。
+- **已进入合格等待后的到期归因**：前置和采集资格已成立后，时间自然接近截止，不因剩余时间不足成功后的 5s 稳定窗口而提前归为观察/准备限制。继续按原截止有界观察；到截止仍无首跳或业务不推进，依据已取得的证据保留产品停滞候选/待归因；已满足具体失败条件则按产品断言失败。若实际发生 RPC/日志不可用，单独记录观察限制。阶段上限先到但产品业务期限尚未到时，只能报告本测试预算内未完成的候选现象，不能宣称违反产品 SLA。
+- **成功后的稳定证据**：只有取得成功终态后才要求至少 5s 稳定窗口。若剩余有效时间不足，记录已观察到的成功状态和“成功稳定证据不足”，不得记为通过，也不得覆盖此前已经成立的产品候选或断言失败。失败/停滞归因不需要预留成功后的稳定窗口。
+
+- 沿用 `HostedTenantFixture` 的现有 `business_budget=420s`、`row_until=preparation_started+480s`；`business_until` 从 `preparation_started` 计算，不是从 `t_send` 重置。`t_send` 只作为观察起点，成功稳定窗口至少 5s。现有 fulfill 等待 30s、终态轮询 45s 均保留各自从阶段开始计算的上限，再受上文最早有效截止约束；成功稳定窗口也必须在有效截止内完成。准备造成的预算不足在付款开始前判断；合格等待中的自然到期按上文归因处理。本轮不重置或扩大任何预算。
+- 固定候选 763 的预期需要同源 FNN/SDK/driver bundle、`Cargo.lock`/`build.json`、devnet 合约和目标 SHA 校验；56c 的历史 bundle/运行不能转记为 763。`TestHostedOutboundPayment.setup_class` 已固定允许 763，并保留显式 `LSP_RETEST_REVISION == REVISION` 复验通道；本次运行未设置 retest。继承的启动前门禁检查真实 FNN 版本、bundle revision、FNN/SDK/driver 二进制及本地驱动/chain 源摘要；构建记录保留 Cargo.lock/build.json/SHA。版本门禁的旧843固定通过/763固定拒绝预期已同步，其他套件版本门禁不变。本次使用新的业务证据根和 JUnit/observations，未覆盖 56c 的 `report/lsp-p0-1/d5fix9.xml`；docstring 与分段注释已对齐“P 创建发票，A 支付”。
+- 763 文档 phase 5 仍明确写“complete external-signer outbound payment E2E remain”；本行只评审正常单笔路径，不覆盖生产 `Auto` policy、断线恢复、重启、MPP 或完整 outbound E2E。763 `payment_preimage.rs` 只证明 payer 侧 preimage-before-removal，不证明独立 P–T 拓扑；P–T 拓扑与资金由本 Python 用例的真实通道提供。
+- **待确认：** 763 是否把“正常单笔 hosted outbound”作为发布契约，而不是 prototype 观察；本行的资金/一次结算断言以固定源码和通用 trampoline 实现为依据，产品范围决定仍需人工确认。
 
 ## Gate3 所需最小测试代码与结果边界
 
@@ -289,3 +368,30 @@ GPT-6 Sol High复核通过，13项离线编排自检通过，driver-only构建�
 最终静态检查：设计4行exit0（SPEC-03/04为已确认的人工契约提示）；项目映射125评审/118映射，exit1为9个既有孤儿，无新增孤儿或重复ID；diff检查exit0。原始输出保存在本批document-checks.json。这些检查不替代04业务执行。
 
 2026-11-07 `LSP-PAYMENT-05` 结果：真实 A→T→P 付款。A 的 SDK 出站授权和本地 `fulfill` 均成功，P 发票 `Paid`，A 付款 `Success`；`1 passed / 95.22s`。成功路径的费用、资金守恒和重复 TLC 细项仍是后续补强。
+
+
+## LSP-PAYMENT-05 初版自动化补强与 763 历史结果（2026-11-09）
+
+用户已明确确认本批评审，并授权只实现本条及聚焦验证、自审。本次未扩展其他业务用例；原 ID、P1、TEST-MAP 和用例表行保留。 下列为 PR #16 初版实现的历史正常路径结果；后续自审发现的两处采样漏判及修复验证见下一节，历史通过不能替代修复验证。
+
+- 实现：`test_hosted_outbound_payment.py` 在独立 fixture 上核对四端基线、trace 资格与目标两段 AddTlc，A 通过 tenant RPC 观察前像后才批准 fulfill；断言实际费用、资金镜像、目标 TLC/锁定额/待签清理及稳定终态。内部重试和历史 TLC 不直接计为重复经济执行。
+- 固定产品 `76307312e8de518c9a32074e6d16867c04de4f86`，FNN/SDK/driver 同源构建，清单及实际版本校验通过；未修改产品。唯一真实业务方法首轮 **1 passed，runner 106.737s，exit 0**；自审补齐相邻完整采样≤2s的显式断言后，只重跑同一方法，最终版本 **1 passed，runner 97.416s，exit 0**。两轮证据均保留，原始 JUnit 与输入摘要齐全，各轮执行期间输入未变。
+- 实测 Shannon 增量：A `−1,005,000`、T-A `+1,005,000`、T-P `−1,000,000`、P `+1,000,000`；两段 TLC 金额为 `1,005,000`/`1,000,000`，实际费用与 `get_payment.fee` 均为 `5,000`。最终版本成功后6次采样，稳定窗口 `5.3080s`；相邻完整采样最大间隔 `1.0655s`，满足≤2s。这是本次固定单笔输入下的一次经济结算派生判据，不是直接事件计数。
+- 支持检查：9项离线资金/日志判据检查（含错误方向、重复收款、错误费用、残留锁定、镜像/资金源错误及历史 TLC）和5项 PAYMENT-05 版本门禁检查，共 **14 passed、exit 0**。它们不新增业务用例或 Case ID。
+- 本条节点进程由原 fixture 收束，任务运行目录已清理；新版本 bundle、构建及原始运行证据保留，旧56c证据未覆盖。
+- 本轮按用户要求自审；未另派模型，不将自审称为独立覆盖审计。新范围仍不包括 MPP、重启、其他 Delivery 状态、Watchtower 或退款，也不将正常单笔通过扩大为完整生产 outbound gate。
+
+完整构建、命令/退出码、原始业务观察、trace 和 JUnit 保存在执行机器的 `local-evidence/payment05-automation-20261109/`（不随 Git 提交）；PR 说明记录可复现的选择器、固定输入与验证摘要。本节仅保留人工可审阅的设计和结果，不提交节点数据、二进制或测试密钥。
+
+
+## PR #16 两处 P1 采样漏判修复与验证（2026-11-09）
+
+本轮只修复已确认 PAYMENT-05 判据的实现缺口，不改用例行、Case ID、P1、映射或其他业务用例；费用、资金公式、TLC 采集资格和时间预算保持原设计。
+
+- **贯穿全程的 P 余额检查**：初版在本地 fulfill 后才建立 P 的余额变化历史，可能遗漏等待 records/preimage 期间的超额入账或回退。当前以付款前基线初始化同一份历史，每个完整样本立即检查，并延续到 fulfill 后和成功稳定期。只允许基线到基线 `+a` 的单向变化。
+- **完整样本间的稳定时长**：初版用裁决时的本地时钟减稳定起点，末个样本之后的本地处理耗时可能凑足 5s。当前只用首末合格完整样本的 `finished` 差值，并在通过记录保存两个时间戳；仍要求至少 3 个样本、相邻完整样本间隔≤2s及原有效截止。
+- **先红后绿的离线回归**：新增直接调用真实测试主方法的受控观察回归，覆盖 fulfill 前 `+a→+2a→+a`、`+a→0→+a`，以及成功样本仅跨 2s、末样本后本地处理延迟 3.5s 的场景；另保留正常流程对照。旧主方法配新回归得到 **3 failed / 1 passed、exit 1**，三项预期拒绝均未发生，证明回归能复现旧漏判；这不是 FNN 产品失败。修复后，13项资金/trace/编排检查与5项既有版本门禁合计 **18 passed、exit 0**。
+- **修复版唯一真实业务重跑**：同一固定 763 同源 bundle、无 retest override，原唯一方法 **1 passed，runner 97.247s、exit 0**；本轮未重建或改产品。原始10个完整样本包括 fulfill 前3个，P 余额历史为 `100,000,000,000→100,001,000,000` Shannon。A/T-A/T-P/P 净增量依次 `−1,005,000/+1,005,000/−1,000,000/+1,000,000`，实际 TLC 差额与 RPC fee 均 `5,000`。6个成功稳定样本的首末 `finished` 跨 **5.241113s**，与通过记录一致；所有相邻完整样本最大间隔 **1.054705s**；原始 RPC 审计仍为1次发票创建、1次付款提交。
+- **自审和证明边界**：检查两阶段使用同一余额历史、稳定时长只来自完整样本、原预算/资金/费用/日志断言未削弱、正常流程仍可通过。未发现这两处 P1 的残余漏判；结论仍是离散采样与精确资金共同支持一次经济结算，不声称直接计数全部内部事件。未另派模型，不称独立复核。
+
+本轮原始回执、JUnit、失败输出、业务 JSONL、原始 FNN trace/SDK 数据、输入摘要和自审/静态检查保存在执行机器的 `local-evidence/payment05-pr16-fix-20261109/`，与初版 `payment05-automation-20261109/`、PR 准备及复核证据分开保留。节点由原 fixture 归档后清理；收尾检查自有进程和任务运行目录为空、六个套件端口释放。证据和节点数据均不随 Git 提交。
