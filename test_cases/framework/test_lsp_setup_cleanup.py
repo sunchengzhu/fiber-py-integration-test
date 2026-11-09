@@ -662,14 +662,14 @@ time.sleep(30)
 @pytest.mark.parametrize(
     "revision,retest,allowed",
     (
-        ("84333eea8488a8afc7e4474aa4bbd0e7e973cee9", None, True),
+        ("84333eea8488a8afc7e4474aa4bbd0e7e973cee9", None, False),
         (
             "56c761c45c271c086b05c8d5ea3e033448f5fdf8",
             "56c761c45c271c086b05c8d5ea3e033448f5fdf8",
             True,
         ),
         ("56c761c45c271c086b05c8d5ea3e033448f5fdf8", None, False),
-        ("76307312e8de518c9a32074e6d16867c04de4f86", None, False),
+        ("76307312e8de518c9a32074e6d16867c04de4f86", None, True),
         (
             "76307312e8de518c9a32074e6d16867c04de4f86",
             "76307312e8de518c9a32074e6d16867c04de4f86",
