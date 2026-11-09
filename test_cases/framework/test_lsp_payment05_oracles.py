@@ -5,13 +5,15 @@ from types import SimpleNamespace
 
 import pytest
 
-import test_cases.fiber.devnet.lsp.test_hosted_outbound_payment as outbound
+import test_cases.fiber.devnet.lsp._hosted_outbound as outbound
 
-from test_cases.fiber.devnet.lsp.test_hosted_outbound_payment import (
+from test_cases.fiber.devnet.lsp._hosted_outbound import (
     _active_target_tlcs,
     _assert_outbound_funds,
     _trace_add_tlc,
 )
+
+import test_cases.fiber.devnet.lsp.test_hosted_outbound_payment as outbound_case
 
 H = "0x" + "12" * 32
 C = "0x" + "34" * 32
@@ -112,7 +114,7 @@ def _exercise_outbound_body(tmp_path, monkeypatch, scenario, trace):
                 views[key]["channel_id"] = channel
                 views[key]["channel_outpoint"] = "funding-" + left
                 views[key]["pending_tlcs"] = []
-    obj = object.__new__(outbound.TestHostedOutboundPayment)
+    obj = object.__new__(outbound_case.TestHostedOutboundPayment)
     obj.tenants = [{"client": "A"}]
     obj.fiber2 = SimpleNamespace(client="P")
     obj.business_until = 420.0
