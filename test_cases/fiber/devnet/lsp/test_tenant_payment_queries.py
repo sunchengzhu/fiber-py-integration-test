@@ -235,7 +235,15 @@ class TestTenantPaymentQueries(HostedOutboundFixture):
                     )
                 if body.get("jsonrpc") != "2.0" or body.get("id") != payload["id"]:
                     self._fail_query("observation_limit", "unmatched JSON-RPC response")
-                assert ("result" in body) != ("error" in body), body
+                if ("result" in body) == ("error" in body):
+                    self._fail_query(
+                        "observation_limit",
+                        "invalid JSON-RPC result/error envelope",
+                        caller=tenant["label"],
+                        request=payload,
+                        response=body,
+                        http_status=response.status_code,
+                    )
                 return body
         except (requests.RequestException, ValueError) as error:
             self._fail_query(

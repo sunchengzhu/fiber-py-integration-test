@@ -580,3 +580,77 @@ def test_native_query_preserves_caller_target_and_original_response(
             client.other_params["Authorization"].encode()
         ).hexdigest()
     )
+
+
+@pytest.mark.parametrize(
+    "mode,expected_kind",
+    [
+        ("both_result_and_error", "observation_limit"),
+        ("neither_result_nor_error", "observation_limit"),
+        ("business_error", "assertion_failure"),
+        ("http_failure", "observation_limit"),
+    ],
+)
+def test_query_response_envelope_failure_attribution(
+    tmp_path, monkeypatch, mode, expected_kind
+):
+    """Use the actual HTTP parser after valid payment preparation and query matrix."""
+    cls = query.TestTenantPaymentQueries
+    original_body = cls.test_default_payment_namespace_is_isolated
+    trace, wire = {}, []
+
+    class Session:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def post(self, url, headers, json, timeout):
+            assert self.trust_env is False
+            body = {"jsonrpc": "2.0", "id": json["id"]}
+            if mode != "neither_result_nor_error":
+                body["error"] = {
+                    "code": -32000,
+                    "message": "Payment session not found",
+                }
+            if mode == "both_result_and_error":
+                body["result"] = deepcopy(trace["payments"]["A"]["snapshot"])
+            status = 401 if mode == "http_failure" else 200
+            wire.append((deepcopy(json), deepcopy(body), status))
+            return SimpleNamespace(status_code=status, json=lambda: body)
+
+    def driver(self):
+        seam = self._query_payment
+        fired = False
+
+        def read(tenant, payment_hash, until, tenant_id=None):
+            nonlocal fired
+            if trace["state"]["matrix"] and not fired:
+                fired = True
+                return cls._query_payment(
+                    self, tenant, payment_hash, until, tenant_id=tenant_id
+                )
+            return seam(tenant, payment_hash, until, tenant_id=tenant_id)
+
+        self._query_payment = read
+        return original_body(self)
+
+    monkeypatch.setattr(cls, "test_default_payment_namespace_is_isolated", driver)
+    monkeypatch.setattr(query.requests, "Session", Session)
+    with pytest.raises(AssertionError):
+        _run_body(tmp_path, monkeypatch, "normal", trace)
+    assert trace["state"]["prepared"] == ["A", "B"]
+    assert trace["state"]["matrix"] and len(wire) == 1
+    assert not any(r["stage"] == "query04_passed" for r in trace["events"])
+    raw = next(r for r in trace["events"] if r["stage"] == "query04_get_payment")
+    assert (raw["request"], raw["response"], raw["http_status"]) == wire[0]
+    assert trace["object"].result == expected_kind
+    failure = next(r for r in trace["events"] if r["stage"] == "query04_failure")
+    assert failure["kind"] == expected_kind
+    if mode in ("both_result_and_error", "neither_result_nor_error"):
+        assert failure["caller"] == "A"
+        assert failure["request"] == raw["request"]
+        assert failure["response"] == raw["response"]
+    elif mode == "business_error":
+        assert failure["response"] == raw["response"]
