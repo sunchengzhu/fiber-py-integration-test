@@ -111,6 +111,19 @@ def _assert_outbound_funds(before, after, amount, upstream, fee):
     )
 
 
+def _track_receiver_balance(history, balance, amount):
+    """Validate every observed P balance, including before local fulfillment."""
+    baseline = history[0]
+    assert balance in (baseline, baseline + amount), (
+        "unexpected receiver balance",
+        history,
+        balance,
+    )
+    if balance != history[-1]:
+        assert balance > history[-1], ("receiver balance reversed", history, balance)
+        history.append(balance)
+
+
 class TestHostedOutboundPayment(HostedTenantFixture):
     tenant_labels = ("A",)
     fnn_log_level = "trace"
@@ -407,6 +420,7 @@ class TestHostedOutboundPayment(HostedTenantFixture):
 
         # 3. 等待实际 TLC/SDK 记录和 A 自身 RPC 的前像，不使用测试输入替代。
         fulfill_until = min(until, time.monotonic() + 30)
+        receiver_balances = [_number(self.baseline["P"]["local_balance"])]
         sample = None
         try:
             while time.monotonic() < fulfill_until:
@@ -414,6 +428,11 @@ class TestHostedOutboundPayment(HostedTenantFixture):
                     tenant, payment_hash, logs, fulfill_until
                 )
                 fulfill_until = min(fulfill_until, self.outbound_until)
+                _track_receiver_balance(
+                    receiver_balances,
+                    _number(sample["views"]["P"]["local_balance"]),
+                    amount,
+                )
                 has_record = any(
                     tlc["payment_hash"] == payment_hash
                     for record in sample["records"]
@@ -462,7 +481,6 @@ class TestHostedOutboundPayment(HostedTenantFixture):
         stable_since = None
         stable_fingerprint = None
         stable_samples = 0
-        payer_balances = []
         try:
             while time.monotonic() < completion_until:
                 sample = self._outbound_sample(
@@ -470,18 +488,9 @@ class TestHostedOutboundPayment(HostedTenantFixture):
                 )
                 completion_until = min(completion_until, self.outbound_until)
                 views = sample["views"]
-                p_balance = _number(views["P"]["local_balance"])
-                if not payer_balances or p_balance != payer_balances[-1]:
-                    payer_balances.append(p_balance)
-                assert all(
-                    v
-                    in (
-                        _number(self.baseline["P"]["local_balance"]),
-                        _number(self.baseline["P"]["local_balance"]) + amount,
-                    )
-                    for v in payer_balances
-                ), payer_balances
-                assert payer_balances == sorted(set(payer_balances)), payer_balances
+                _track_receiver_balance(
+                    receiver_balances, _number(views["P"]["local_balance"]), amount
+                )
                 active = {
                     key: _active_target_tlcs(view, payment_hash)
                     for key, view in views.items()
@@ -536,13 +545,14 @@ class TestHostedOutboundPayment(HostedTenantFixture):
                         sort_keys=True,
                     )
                     if stable_since is None:
-                        stable_since = time.monotonic()
+                        stable_since = sample["finished"]
                         stable_fingerprint = fingerprint
                     assert (
                         fingerprint == stable_fingerprint
                     ), "terminal payment/funds/history changed during stability observation"
                     stable_samples += 1
-                    if time.monotonic() - stable_since >= 5 and stable_samples >= 3:
+                    stable_seconds = sample["finished"] - stable_since
+                    if stable_seconds >= 5 and stable_samples >= 3:
                         audit = [
                             json.loads(line)
                             for line in (self.evidence_dir / "observations.jsonl")
@@ -571,9 +581,11 @@ class TestHostedOutboundPayment(HostedTenantFixture):
                             amount=amount,
                             upstream=upstream,
                             fee=fee,
-                            stability_seconds=time.monotonic() - stable_since,
+                            stability_seconds=stable_seconds,
+                            stability_first_sample_finished=stable_since,
+                            stability_last_sample_finished=sample["finished"],
                             stability_samples=stable_samples,
-                            receiver_balance_changes=payer_balances,
+                            receiver_balance_changes=receiver_balances,
                             proof="derived from two-leg TLCs, exact four-endpoint deltas, cleanup and stable snapshots; not event counting",
                         )
                         self.result = "passed"

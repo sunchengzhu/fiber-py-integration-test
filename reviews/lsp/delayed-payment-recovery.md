@@ -230,12 +230,12 @@ Testing: required
 2. **发送前授权**：P 创建发票后只确认 `get_invoice(H)` 状态为 `Open`、发票地址由该 `new_invoice` 返回；763 `get_invoice` 不返回 preimage，`p` 是测试/P 侧输入，不能声称从该 RPC 读取。记录测试只调用一次 `new_invoice`；确认 A SDK 已保存 outbound authorization；记录 `send_payment` 只调用一次及返回的 `payment_hash=H`。A 的付款 `get_payment` 在发送前不应被当作成功；本行不要求未创建时的查询结果。
 3. **路径证据检查点（中段可选）**：优先在 A–T 已接纳、A 尚未本地 fulfill 时保存 A–T 目标 TLC（实测 u、id/expiry）。T–P 的 TLC 可能因 P 已持有 preimage 很快结算，不得因单段未同时观察到而直接判产品失败；补证只能使用发送前已确认采集资格的 trace/日志或其他源（见上节），并保存 H、a、channel/TLC ID、expiry 与起始位置；T–P 优先用接收侧 P 的 `PeerMessage(AddTlc)` trace 等能给出 tlc_id 的源，T 侧发送 `AddTlcCommand` 的 Debug 不保证 tlc_id；字段不足按采集资格不足处理。终态 `list_channels` 不足以补回已移除历史。`get_payment.routers` 仅 debug 构建可用，release 构建不存在，不能作为 release fallback。若 A–T 已有目标 TLC 而 T–P 在完整观测下始终没有，归产品停滞/路由候选；若 A–T 首跳在截止仍未创建/接纳，按归因规则保留产品停滞候选；只有采集资格/字段/预算不足才归观察/准备限制。正常异步等待或第一次未采到 TLC 不立即判产品失败；若事后仍无法建立两段对应，不能把 Inflight 或单段 TLC 当成功；中段看到同段两个未终止目标 TLC，按上节重试/重复规则保存证据。
 4. **本地 fulfill（观察 preimage）**：只在 SDK `records` 已包含该 hash 的 TLC 后，读取 A 的 `get_payment(H).payment_preimage`，断言它等于 P 创建发票的 `p`，再把**观察到的** preimage 传给 `fulfill`；不能在 records 前 fulfill，也不能用测试变量直接代替 A 的观察。若 A 侧未观察到 preimage，不得调用 fulfill 或判成功。
-5. **终态与稳定**：用有界 `_rpc` 轮询 A `get_payment(H)` 与 P `get_invoice(H)`，直到 A `Success`、P `Paid` 且目标 hash 无未终止 TLC，记 `t_success`；随后至少 5 秒（`t_success+5`，采样间隔不超过 2s，至少 3 个样本，总截止遵循下节有效截止规则）重复采样 `get_payment`、`get_invoice`、A 的 `get_channel_signing_status`、四端视图，要求 status/fee/invoice/余额/outpoint/未终止 TLC 均不变、A 为 `NoSignatureRequired`（无目标待签）。成功轮询不得只返回一次响应就结束。若 A 在前提成立后为 `Failed`，或 P invoice 为 `Cancelled/Expired`，立即按产品断言失败停止，不等待 420s；若 A–T 已接纳且 H 已知、在有效截止内持续等待后 A 仍不暴露 records/preimage，按产品断言失败记录；若前置/发送/观察有效但到截止首跳仍未创建/接纳，按产品停滞候选保留；若观察源不可用/字段不足/预算不足，按观察/准备限制；若测试漏掉必要等待，或 fulfill 调用前置已经取得但测试漏调，按准备/编排失败；因产品未提供 records/preimage 而未调用 fulfill，沿用缺少可观察前置的归因。现有 fulfill 30s、终态 45s 等待上限不变，截止与到期归因统一遵循下节，不能因成功稳定窗口不足而提前降为观察/准备限制。
+5. **终态与稳定**：用有界 `_rpc` 轮询 A `get_payment(H)` 与 P `get_invoice(H)`，直到 A `Success`、P `Paid` 且目标 hash 无未终止 TLC，以该完整样本的 `finished` 记 `t_success`；随后至少 5 秒（末个完整样本的 `finished-t_success≥5s`，不计样本完成后的本地处理时间；采样间隔不超过 2s，至少 3 个样本，总截止遵循下节有效截止规则）重复采样 `get_payment`、`get_invoice`、A 的 `get_channel_signing_status`、四端视图，要求 status/fee/invoice/余额/outpoint/未终止 TLC 均不变、A 为 `NoSignatureRequired`（无目标待签）。成功轮询不得只返回一次响应就结束。若 A 在前提成立后为 `Failed`，或 P invoice 为 `Cancelled/Expired`，立即按产品断言失败停止，不等待 420s；若 A–T 已接纳且 H 已知、在有效截止内持续等待后 A 仍不暴露 records/preimage，按产品断言失败记录；若前置/发送/观察有效但到截止首跳仍未创建/接纳，按产品停滞候选保留；若观察源不可用/字段不足/预算不足，按观察/准备限制；若测试漏掉必要等待，或 fulfill 调用前置已经取得但测试漏调，按准备/编排失败；因产品未提供 records/preimage 而未调用 fulfill，沿用缺少可观察前置的归因。现有 fulfill 30s、终态 45s 等待上限不变，截止与到期归因统一遵循下节，不能因成功稳定窗口不足而提前降为观察/准备限制。
 6. **资金裁决**：对终态四端套用上表公式，核对 `ΔL_A=-u`、`ΔL_TA=+u`、`ΔL_P=+a`、`ΔL_TP=-a`、`f=u-a`、`f=get_payment.fee`、`f=effective_fee_budget=5,000`（763 直连路由的源码期望，非授权值；实测不符即产品/路由断言失败）、P 终态净增加 `a` 且稳定窗口内未观察到第二次变化（派生判据，不是事件计数）、测试只调用一次 `new_invoice`/`send_payment`。不要把 `get_invoice(H)` 的当前状态当作“只有一张发票”的证明；若产品有 `list_invoices`，按 H 过滤记录数量。发送/终态查询走带 `business_until` 的 `_rpc`，不要用无界直接 `client.call`；现有 30s fulfill、45s 终态轮询都必须 cap 到 `business_until`，不能替代 420s 总截止。结果按上文“归因规则”唯一口径区分：准备/编排失败、观察/准备限制、产品停滞候选/待归因、产品断言失败、成功，不能互相替代。A–T 已接纳且 H 已知后产品不暴露 records/preimage，归产品断言失败（可观察前置缺失）；首跳未创建/接纳且前置/观察有效，保留产品停滞候选，不能因“未接纳”直接归观察失败。`get_payment.fee` 是 U128Hex，比较前先转整数。
 
 - **一次经济结算（派生判据）**：每 2 秒读取余额/视图是离散状态快照，不能直接计数全部结算事件。本批固定单笔输入下，`H`、两段目标 TLC、四端精确净额、终态目标 TLC 清理，以及稳定窗口内未观察到第二次变化，共同支持“一次经济结算”的派生判据；不把“采样充分”写成“直接证明恰好一次”。若需要直接事件计数，必须另有能关联 H/channel/TLC 的完整结算事件，本批不新增此场景。内部合法 retry 仍与重复经济执行区分：不是“内部 attempt 恰好 1 个”，也不要求中段某一瞬间每段恰好一个；若 RPC 暴露 session/attempt 则记录但不计数。合法重试可造成瞬时多个/历史 TLC，但最终只能有一次结算；exact-amount 下改变首跳金额/授权会被 SDK 拒签，不能当合法 retry；无证据或出现第二次余额变化则按重复执行失败。不要求产品必须暴露 attempt 字段。`get_payment.routers`（debug 构建）只作辅助，不作为 attempt 数量或唯一判据。
 - **路由归属**：优先用保存的 A–T、P–T channel ID/outpoint 与两段 TLC 的 hash/amount 证明 A→T→P；`routers` 只在调试构建可用，不能代替 TLC/通道证据。
-- **P 结算一次（派生判据）**：测试只调用一次 `new_invoice`，`get_invoice(H)` 只核对该 hash 的当前发票为 `Paid`；不声称 `get_invoice` 能证明“只有一张发票”。若产品有 `list_invoices`，按 H 过滤记录创建数量。付款期间按 2s 采 P 的 `local_balance` 只能检查采样窗口内是否出现第二次变化/回退，不能直接计数全部结算事件；观察到一次基线到 `+a` 的跃迁只是支持证据。最终以固定单笔输入、两段目标 TLC、四端精确净额、终态无活动目标 TLC、稳定窗口无第二次变化共同支持“只结算一次”的派生判据，不能宣称直接观测到恰好一次。不要求 A 的私有历史记录全部为空。
+- **P 结算一次（派生判据）**：测试只调用一次 `new_invoice`，`get_invoice(H)` 只核对该 hash 的当前发票为 `Paid`；不声称 `get_invoice` 能证明“只有一张发票”。若产品有 `list_invoices`，按 H 过滤记录创建数量。从付款前基线开始持续跟踪 P 的 `local_balance`，覆盖等待 records/preimage、本地 fulfill 和终态观察，不在 fulfill 后重置历史。每个完整样本只允许基线或基线 `+a`，且不允许从 `+a` 回退或出现第二次变化；fulfill 前的超额入账或回退同样失败。相邻完整采样完成间隔不超过 2s；这些离散快照只能检查观察到的变化，不能直接计数全部结算事件；观察到一次基线到 `+a` 的跃迁只是支持证据。最终以固定单笔输入、两段目标 TLC、四端精确净额、终态无活动目标 TLC、稳定窗口无第二次变化共同支持“只结算一次”的派生判据，不能宣称直接观测到恰好一次。不要求 A 的私有历史记录全部为空。
 
 ### 预算、版本和证明边界
 
@@ -370,9 +370,9 @@ GPT-6 Sol High复核通过，13项离线编排自检通过，driver-only构建�
 2026-11-07 `LSP-PAYMENT-05` 结果：真实 A→T→P 付款。A 的 SDK 出站授权和本地 `fulfill` 均成功，P 发票 `Paid`，A 付款 `Success`；`1 passed / 95.22s`。成功路径的费用、资金守恒和重复 TLC 细项仍是后续补强。
 
 
-## LSP-PAYMENT-05 自动化补强与 763 聚焦结果（2026-11-09）
+## LSP-PAYMENT-05 初版自动化补强与 763 历史结果（2026-11-09）
 
-用户已明确确认本批评审，并授权只实现本条及聚焦验证、自审。本次未扩展其他业务用例；原 ID、P1、TEST-MAP 和用例表行保留。
+用户已明确确认本批评审，并授权只实现本条及聚焦验证、自审。本次未扩展其他业务用例；原 ID、P1、TEST-MAP 和用例表行保留。 下列为 PR #16 初版实现的历史正常路径结果；后续自审发现的两处采样漏判及修复验证见下一节，历史通过不能替代修复验证。
 
 - 实现：`test_hosted_outbound_payment.py` 在独立 fixture 上核对四端基线、trace 资格与目标两段 AddTlc，A 通过 tenant RPC 观察前像后才批准 fulfill；断言实际费用、资金镜像、目标 TLC/锁定额/待签清理及稳定终态。内部重试和历史 TLC 不直接计为重复经济执行。
 - 固定产品 `76307312e8de518c9a32074e6d16867c04de4f86`，FNN/SDK/driver 同源构建，清单及实际版本校验通过；未修改产品。唯一真实业务方法首轮 **1 passed，runner 106.737s，exit 0**；自审补齐相邻完整采样≤2s的显式断言后，只重跑同一方法，最终版本 **1 passed，runner 97.416s，exit 0**。两轮证据均保留，原始 JUnit 与输入摘要齐全，各轮执行期间输入未变。
@@ -382,3 +382,16 @@ GPT-6 Sol High复核通过，13项离线编排自检通过，driver-only构建�
 - 本轮按用户要求自审；未另派模型，不将自审称为独立覆盖审计。新范围仍不包括 MPP、重启、其他 Delivery 状态、Watchtower 或退款，也不将正常单笔通过扩大为完整生产 outbound gate。
 
 完整构建、命令/退出码、原始业务观察、trace 和 JUnit 保存在执行机器的 `local-evidence/payment05-automation-20261109/`（不随 Git 提交）；PR 说明记录可复现的选择器、固定输入与验证摘要。本节仅保留人工可审阅的设计和结果，不提交节点数据、二进制或测试密钥。
+
+
+## PR #16 两处 P1 采样漏判修复与验证（2026-11-09）
+
+本轮只修复已确认 PAYMENT-05 判据的实现缺口，不改用例行、Case ID、P1、映射或其他业务用例；费用、资金公式、TLC 采集资格和时间预算保持原设计。
+
+- **贯穿全程的 P 余额检查**：初版在本地 fulfill 后才建立 P 的余额变化历史，可能遗漏等待 records/preimage 期间的超额入账或回退。当前以付款前基线初始化同一份历史，每个完整样本立即检查，并延续到 fulfill 后和成功稳定期。只允许基线到基线 `+a` 的单向变化。
+- **完整样本间的稳定时长**：初版用裁决时的本地时钟减稳定起点，末个样本之后的本地处理耗时可能凑足 5s。当前只用首末合格完整样本的 `finished` 差值，并在通过记录保存两个时间戳；仍要求至少 3 个样本、相邻完整样本间隔≤2s及原有效截止。
+- **先红后绿的离线回归**：新增直接调用真实测试主方法的受控观察回归，覆盖 fulfill 前 `+a→+2a→+a`、`+a→0→+a`，以及成功样本仅跨 2s、末样本后本地处理延迟 3.5s 的场景；另保留正常流程对照。旧主方法配新回归得到 **3 failed / 1 passed、exit 1**，三项预期拒绝均未发生，证明回归能复现旧漏判；这不是 FNN 产品失败。修复后，13项资金/trace/编排检查与5项既有版本门禁合计 **18 passed、exit 0**。
+- **修复版唯一真实业务重跑**：同一固定 763 同源 bundle、无 retest override，原唯一方法 **1 passed，runner 97.247s、exit 0**；本轮未重建或改产品。原始10个完整样本包括 fulfill 前3个，P 余额历史为 `100,000,000,000→100,001,000,000` Shannon。A/T-A/T-P/P 净增量依次 `−1,005,000/+1,005,000/−1,000,000/+1,000,000`，实际 TLC 差额与 RPC fee 均 `5,000`。6个成功稳定样本的首末 `finished` 跨 **5.241113s**，与通过记录一致；所有相邻完整样本最大间隔 **1.054705s**；原始 RPC 审计仍为1次发票创建、1次付款提交。
+- **自审和证明边界**：检查两阶段使用同一余额历史、稳定时长只来自完整样本、原预算/资金/费用/日志断言未削弱、正常流程仍可通过。未发现这两处 P1 的残余漏判；结论仍是离散采样与精确资金共同支持一次经济结算，不声称直接计数全部内部事件。未另派模型，不称独立复核。
+
+本轮原始回执、JUnit、失败输出、业务 JSONL、原始 FNN trace/SDK 数据、输入摘要和自审/静态检查保存在执行机器的 `local-evidence/payment05-pr16-fix-20261109/`，与初版 `payment05-automation-20261109/`、PR 准备及复核证据分开保留。节点由原 fixture 归档后清理；收尾检查自有进程和任务运行目录为空、六个套件端口释放。证据和节点数据均不随 Git 提交。
