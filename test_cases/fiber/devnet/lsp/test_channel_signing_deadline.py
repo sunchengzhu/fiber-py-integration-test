@@ -1277,6 +1277,8 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
 
     def _recovery_logs(self, payment):
         text = (Path(self.fiber1.tmp_path) / "node.log").read_text()
+        # Ignore display colors while parsing; preserve the original log and line numbers.
+        text = re.sub(r"\x1b\[[0-9;]*m", "", text)
         blocks = list(re.finditer(r"(?m)^  \d{4}-[^\n]+(?:\n(?!\s*$)[^\n]*)*", text))
         actor_pattern = (
             r'in ractor::actor::Actor with id: "([^"]+)", name: "HostedTenant 0x'

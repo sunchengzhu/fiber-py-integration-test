@@ -12,7 +12,7 @@ import signal
 import subprocess
 import time
 
-REVISION = "04c206465b48da85b99aa58e80afe9801a2cb2db"
+REVISION = "76307312e8de518c9a32074e6d16867c04de4f86"
 ROOT = Path(__file__).resolve().parents[1]
 F2_REVISION = "56c761c45c271c086b05c8d5ea3e033448f5fdf8"
 
@@ -22,7 +22,9 @@ def build_refund_f2(args):
     if args.revision != F2_REVISION:
         raise ValueError(f"F2 helper requires reviewed revision {F2_REVISION}")
     source, output, target = (
-        args.source.resolve(), args.output.resolve(), args.target_dir.resolve()
+        args.source.resolve(),
+        args.output.resolve(),
+        args.target_dir.resolve(),
     )
     helper = ROOT / "test_cases/fiber/devnet/lsp_nightly/_tlc_refund_adapter_fast.rs"
     started = time.monotonic()
@@ -35,10 +37,14 @@ def build_refund_f2(args):
 
     def check_budget():
         if time.monotonic() >= work_due:
-            raise TimeoutError("F2 build work exceeded 570 seconds; 30 seconds reserved for cleanup")
+            raise TimeoutError(
+                "F2 build work exceeded 570 seconds; 30 seconds reserved for cleanup"
+            )
         free = shutil.disk_usage(ROOT).free
         if free < 8 * 1024**3 or initial_free - free > 2 * 1024**3:
-            raise RuntimeError("F2 build disk budget exceeded (8 GiB floor / 2 GiB growth)")
+            raise RuntimeError(
+                "F2 build disk budget exceeded (8 GiB floor / 2 GiB growth)"
+            )
         if time.monotonic() >= work_due:
             raise TimeoutError("F2 build work deadline exceeded during resource check")
         return free
@@ -115,14 +121,20 @@ def build_refund_f2(args):
         head = run(["git", "rev-parse", "HEAD"], capture=True, seconds=10).strip()
         dirty = run(["git", "status", "--porcelain"], capture=True, seconds=10)
         if head != args.revision or dirty:
-            raise RuntimeError("F2 product source must be clean and match the fixed revision")
+            raise RuntimeError(
+                "F2 product source must be clean and match the fixed revision"
+            )
         check_budget()
 
     def run(command, capture=False, seconds=None):
         check_budget()  # Never start another Cargo command after work has expired.
         command_due = min(work_due, time.monotonic() + seconds) if seconds else work_due
         process = subprocess.Popen(
-            command, cwd=source, env=env, start_new_session=True, text=capture,
+            command,
+            cwd=source,
+            env=env,
+            start_new_session=True,
+            text=capture,
             stdout=subprocess.PIPE if capture else None,
             stderr=subprocess.PIPE if capture else None,
         )
@@ -136,7 +148,9 @@ def build_refund_f2(args):
                     raise TimeoutError(f"F2 build command deadline exceeded: {command}")
                 if capture:
                     try:
-                        stdout, stderr = process.communicate(timeout=min(0.2, remaining))
+                        stdout, stderr = process.communicate(
+                            timeout=min(0.2, remaining)
+                        )
                         break
                     except subprocess.TimeoutExpired:
                         continue
@@ -145,15 +159,21 @@ def build_refund_f2(args):
                 time.sleep(min(0.2, remaining))
             check_budget()  # Include disk growth in the final polling interval.
             if process.returncode:
-                raise subprocess.CalledProcessError(process.returncode, command, stdout, stderr)
+                raise subprocess.CalledProcessError(
+                    process.returncode, command, stdout, stderr
+                )
         finally:
             cleanup(process)
         check_budget()
         return stdout
 
     env = dict(
-        os.environ, CARGO_PROFILE_DEV_DEBUG="0", CARGO_INCREMENTAL="0",
-        CARGO_TARGET_DIR=str(target), CARGO_BUILD_JOBS="2", CARGO_NET_OFFLINE="true",
+        os.environ,
+        CARGO_PROFILE_DEV_DEBUG="0",
+        CARGO_INCREMENTAL="0",
+        CARGO_TARGET_DIR=str(target),
+        CARGO_BUILD_JOBS="2",
+        CARGO_NET_OFFLINE="true",
     )
 
     def build_locked():
@@ -186,18 +206,34 @@ def build_refund_f2(args):
             'anyhow = "1"\nasync-trait = "0.1"\nhex = "0.4"\n'
             'ckb-types = "1"\nckb-jsonrpc-types = "1"\nserde_json = "1"\n'
             'musig2 = { version = "=0.2.4", features = ["secp256k1", "serde"] }\n'
-            'tokio = { version = "1", features = ["macros", "rt"] }\n'
+            'tokio = { version = "1", features = ["macros", "rt"] }\n',
         )
         copy(helper, build / "main.rs")
         copy(source / "Cargo.lock", build / "Cargo.lock")
         # Resolve only this new local package against the copied lock, using cache.
         # Subsequent compilations use the resulting helper lock unchanged.
-        command = ["cargo", "build", "--offline", "--manifest-path", str(build / "Cargo.toml")]
+        command = [
+            "cargo",
+            "build",
+            "--offline",
+            "--manifest-path",
+            str(build / "Cargo.toml"),
+        ]
         print(f"F2-only build: {json.dumps(command)}", flush=True)
-        print(f"free_before={initial_free}; growth_limit=2147483648; cache={target}", flush=True)
+        print(
+            f"free_before={initial_free}; growth_limit=2147483648; cache={target}",
+            flush=True,
+        )
         run(command)
         helper_lock = sha(build / "Cargo.lock")
-        locked_command = ["cargo", "build", "--locked", "--offline", "--manifest-path", str(build / "Cargo.toml")]
+        locked_command = [
+            "cargo",
+            "build",
+            "--locked",
+            "--offline",
+            "--manifest-path",
+            str(build / "Cargo.toml"),
+        ]
         run(locked_command)
         check_source()
         if sha(source / "Cargo.lock") != product_lock or sha(helper) != helper_digest:
@@ -207,14 +243,18 @@ def build_refund_f2(args):
         binary = output / "lsp-refund-f2-fast"
         copy(target / "debug/lsp-refund-f2-fast", binary)
         manifest = {
-            "kind": "lsp-refund-f2-fast", "revision": args.revision,
-            "source": str(source), "cargo_lock_sha256": product_lock,
+            "kind": "lsp-refund-f2-fast",
+            "revision": args.revision,
+            "source": str(source),
+            "cargo_lock_sha256": product_lock,
             "helper_source_sha256": helper_digest,
             "helper_lock_sha256": helper_lock,
             "helper_manifest_sha256": sha(build / "Cargo.toml"),
             "sha256": {binary.name: sha(binary)},
-            "prepare_command": command, "build_command": locked_command,
-            "profile": "dev", "target_dir": str(target),
+            "prepare_command": command,
+            "build_command": locked_command,
+            "profile": "dev",
+            "target_dir": str(target),
             "duration_seconds": time.monotonic() - started,
             "free_before_bytes": initial_free,
             "free_after_bytes": check_budget(),
@@ -259,7 +299,8 @@ def build_refund_f2(args):
             if old_timer[0]:
                 signal.setitimer(
                     signal.ITIMER_REAL,
-                    max(0.001, old_timer[0] - (time.monotonic() - started)), old_timer[1],
+                    max(0.001, old_timer[0] - (time.monotonic() - started)),
+                    old_timer[1],
                 )
 
 
@@ -279,15 +320,23 @@ def main():
     )
     parser.add_argument("--driver-only", action="store_true")
     parser.add_argument(
-        "--refund-f2-only", action="store_true",
+        "--refund-f2-only",
+        action="store_true",
         help="Build only the fixed-revision offline F2 SDK helper (no FNN)",
     )
     parser.add_argument("--base-bundle", type=Path)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.refund_f2_only:
-        if args.upstream_only or args.driver_only or args.base_bundle or not all((args.output, args.target_dir)):
-            parser.error("--refund-f2-only requires --output and --target-dir and excludes other build modes")
+        if (
+            args.upstream_only
+            or args.driver_only
+            or args.base_bundle
+            or not all((args.output, args.target_dir))
+        ):
+            parser.error(
+                "--refund-f2-only requires --output and --target-dir and excludes other build modes"
+            )
         if args.output.exists() or args.output.is_symlink():
             parser.error("--output must not already exist")
         build_refund_f2(args)

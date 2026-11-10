@@ -10,13 +10,13 @@ import time
 import requests
 
 from test_cases.fiber.devnet.lsp._hosted_tenant_fixture import HostedTenantFixture
-from test_cases.fiber.devnet.lsp._lsp_test import REVISION
+from test_cases.fiber.devnet.lsp._lsp_test import DEFAULT_REVISION, REVISION
 from test_cases.fiber.devnet.lsp.test_delayed_payment_recovery import (
     _number,
     _PaymentBudgetExpired,
 )
 
-FIXED_REVISION = "76307312e8de518c9a32074e6d16867c04de4f86"
+FIXED_REVISION = DEFAULT_REVISION
 
 
 def revision_allowed(revision, retest_revision):

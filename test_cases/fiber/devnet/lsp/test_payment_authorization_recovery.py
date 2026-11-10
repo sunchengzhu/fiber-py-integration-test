@@ -1,4 +1,4 @@
-"""PR #1623 / 84333ee: explicit authorization recovers a real rejected payment."""
+"""PR #1623: explicit authorization recovers a real rejected payment."""
 
 import hashlib
 import json
@@ -15,6 +15,7 @@ from framework.util import get_project_root
 from test_cases.fiber.devnet.lsp._isolated_contract import align_devnet_commitment_lock
 from test_cases.fiber.devnet.lsp._watchtower_rpc import ChainAudit
 from test_cases.fiber.devnet.lsp._lsp_test import (
+    DEFAULT_REVISION,
     BUNDLE,
     ChannelSigningTestBase,
     REVISION,
@@ -27,7 +28,7 @@ from test_cases.fiber.devnet.lsp.test_delayed_payment_recovery import (
     _outpoint,
 )
 
-FIXED_REVISION = "84333eea8488a8afc7e4474aa4bbd0e7e973cee9"
+FIXED_REVISION = DEFAULT_REVISION
 AMOUNT = 1_000_000
 
 
@@ -42,9 +43,9 @@ class TestPaymentAuthorizationRecovery(_DelayedPaymentBase):
             RETEST_REVISION is not None and REVISION == RETEST_REVISION
         ), "use a separately reviewed revision for repair regression"
         row_start_raw = os.environ.get("LSP_PAYMENT04_ROW_START")
-        assert row_start_raw, (
-            "LSP_PAYMENT04_ROW_START is required for the PAYMENT-04 row budget"
-        )
+        assert (
+            row_start_raw
+        ), "LSP_PAYMENT04_ROW_START is required for the PAYMENT-04 row budget"
         row_started = float(row_start_raw)
         artifacts = require_env_path(
             "LSP_RUN_ARTIFACTS", "to archive PAYMENT-04 preparation evidence"
