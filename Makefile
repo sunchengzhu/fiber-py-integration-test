@@ -1,4 +1,7 @@
-.PHONY: prepare test clean docs
+.PHONY: prepare test clean docs lsp_test
+
+# Run from the existing project Python environment; only the two query groups share.
+PYTHON ?= python3
 
 prepare:
 	python3 -m venv venv
@@ -191,6 +194,9 @@ develop_test:
     fi
 
 
+
+lsp_test:
+	$(PYTHON) scripts/run_lsp_regression.py $(LSP_ARGS)
 
 clean:
 	- pkill ckb
