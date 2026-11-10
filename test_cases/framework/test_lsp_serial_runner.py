@@ -3,6 +3,8 @@
 import json
 import os
 from pathlib import Path
+import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -12,6 +14,8 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
+import framework.config as framework_config
+import framework.test_node as node_module
 from scripts import lsp_regression_runtime as runtime
 from scripts import run_lsp_regression as runner
 
@@ -123,6 +127,61 @@ def test_runtime_rejects_extra_or_reordered_methods(monkeypatch):
     assert all(item.cls.tmp_path_name == "tmp/fresh" for item in items)
     with pytest.raises(ValueError, match="selection/order"):
         runtime.pytest_collection_modifyitems(list(reversed(items)))
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "run with spaces",
+        "run; echo marker && echo marker | cat",
+        "run-$(echo marker)-`echo marker`",
+        "run-'quoted'-\"double\"-*[1]\t\n",
+    ],
+    ids=["spaces", "separators", "substitutions", "quotes-globs-whitespace"],
+)
+def test_output_path_cannot_change_runtime_or_cleanup_operands(
+    monkeypatch, tmp_path, name
+):
+    directory = tmp_path / name / "job-000"
+    directory.mkdir(parents=True)
+    original = directory / "evidence.txt"
+    original.write_text("retained evidence\n")
+    job = {"group": None, "nodeids": [EVICT]}
+    env = runner.environment(tmp_path / "bundle", directory, job)
+    runtime_name = env["LSP_REGRESSION_RUNTIME"]
+    assert re.fullmatch(r"tmp/lsp-serial-[0-9a-f]{32}", runtime_name)
+    assert env["LSP_REGRESSION_CASE"] == str(directory)
+    assert env["LSP_PAYMENT_REPORT_DIR"] == str(directory / "business")
+    for key in ("LSP_REGRESSION_SELECTORS", "LSP_REGRESSION_RUNTIME"):
+        monkeypatch.setenv(key, env[key])
+    item = SimpleNamespace(nodeid=EVICT, cls=type("Case", (), {}))
+    runtime.pytest_collection_modifyitems([item])
+    monkeypatch.setattr(framework_config, "TMP_PATH", item.cls.tmp_path_name)
+    node = node_module.CkbNode.init_dev_by_port(
+        node_module.CkbNodeConfigPath.CURRENT_TEST, "contract/node", 8114, 8125
+    )  # Construction only: no prepare, start or RPC.
+    expected = runner.ROOT / runtime_name / "contract/node"
+    assert Path(node.ckb_dir) == expected
+    commands = []
+    monkeypatch.setattr(node_module, "run_command", commands.append)
+    node.clean()  # Capture the real cleanup command; never execute its shell.
+    assert len(commands) == 1
+    assert shlex.split(commands[0]) == ["rm", "-rf", str(expected)]
+    assert original.read_text() == "retained evidence\n"
+
+
+def test_runtime_names_are_fresh_even_for_same_output_basename(tmp_path):
+    job = {"group": None, "nodeids": [EVICT]}
+    directories = [tmp_path / "one/run/job-000", tmp_path / "two/run/job-000"]
+    directories.append(directories[0])
+    names = [
+        runner.environment(tmp_path / "bundle", directory, job)[
+            "LSP_REGRESSION_RUNTIME"
+        ]
+        for directory in directories
+    ]
+    assert len(set(names)) == 3
+    assert all(re.fullmatch(r"tmp/lsp-serial-[0-9a-f]{32}", name) for name in names)
 
 
 def test_evidence_copy_failure_yields_for_native_cleanup_and_keeps_original(

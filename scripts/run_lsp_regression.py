@@ -15,6 +15,7 @@ import socket
 import subprocess
 import sys
 import time
+import uuid
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -121,8 +122,10 @@ def environment(bundle, directory=None, job=None, delivery=None, nolsp=None):
         ):
             env[variable] = str(directory / name)
         env["LSP_REGRESSION_CASE"] = str(directory)
+        # Legacy framework commands use this path in a shell. Keep its basename
+        # independent of the user-supplied evidence path, including whitespace.
         env["LSP_REGRESSION_RUNTIME"] = str(
-            Path("tmp") / ("lsp-serial-" + directory.parent.name + "-" + directory.name)
+            Path("tmp") / f"lsp-serial-{uuid.uuid4().hex}"
         )
         env["LSP_REGRESSION_SELECTORS"] = json.dumps(job["nodeids"])
         if job["group"]:
