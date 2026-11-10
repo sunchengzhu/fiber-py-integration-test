@@ -18,6 +18,7 @@ from test_cases.fiber.devnet.lsp._hosted_outbound import (
     _PaymentBudgetExpired,
 )
 from test_cases.fiber.devnet.lsp._lsp_test import REVISION
+from test_cases.fiber.devnet.lsp._query_environment import QueryEnvironmentPilot
 
 
 def _payment_snapshot(payment, expected):
@@ -155,7 +156,7 @@ def _assert_query_funds(before, after, payments):
         )
 
 
-class TestTenantPaymentQueries(HostedOutboundFixture):
+class TestTenantPaymentQueries(QueryEnvironmentPilot, HostedOutboundFixture):
     tenant_labels = ("A", "B")
     runtime_prefix = "lsp-payment-query-"
     evidence_prefix = "lsp-payment-query-"
@@ -305,6 +306,7 @@ class TestTenantPaymentQueries(HostedOutboundFixture):
                 "finished": time.monotonic(),
             }
             self._record(stage, **sample)
+            self._query_last_sample = sample
             return sample
 
     def _prepare_query_payments(self, case):
@@ -334,6 +336,7 @@ class TestTenantPaymentQueries(HostedOutboundFixture):
             time.monotonic() + 30,
             *(p["until"] for p in payments.values()),
         )
+        self._query_prepared = (payments, expected)
         return payments, expected, before, until
 
     @contextmanager
@@ -434,7 +437,7 @@ class TestTenantPaymentQueries(HostedOutboundFixture):
         2. 各显式指定自身读取成功，指定另一租户必须因目标授权被拒，随后重读自身。
         3. 持续复查原历史、发票及六端资金，确认拒绝未产生副作用。
         """
-        # 1. 使用本方法独立的新数据，不依赖QUERY-04先执行。
+        # 1. 使用本方法新建的付款，不依赖QUERY-04先执行。
         payments, expected, before, until = self._prepare_query_payments("query05")
         with self._query_observation():
             self._query_snapshot(payments, expected, before, until, "query05_before")
@@ -474,7 +477,7 @@ class TestTenantPaymentQueries(HostedOutboundFixture):
         2. operator按所有者目标读取成功；同一hash只改为另一目标必须返回付款不存在。
         3. 重读各所有者目标，并持续验证原历史、发票及六端资金无副作用。
         """
-        # 1. 每次使用本方法独立的真实付款及具有payments/lsp读取能力的operator。
+        # 1. 每次新建真实付款，并使用具有payments/lsp读取能力的operator。
         payments, expected, before, until = self._prepare_query_payments("query06")
         with self._query_observation():
             self._query_snapshot(payments, expected, before, until, "query06_before")
