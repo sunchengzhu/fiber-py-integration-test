@@ -19,7 +19,11 @@ import framework.test_node as node_module
 from scripts import lsp_regression_runtime as runtime
 from scripts import run_lsp_regression as runner
 
-SEVEN = [nodeid for group in runner.GROUPS.values() for nodeid in group]
+SEVEN = [
+    nodeid
+    for name in ("invoice-query", "payment-query")
+    for nodeid in runner.GROUPS[name]
+]
 EVICT = runner.INVOICE + "test_tenant_token_cannot_evict_tenants"
 
 
@@ -93,6 +97,9 @@ def test_environment_does_not_leak_shared_flags_budgets_or_pytest_parallelism(
     )
     assert env["LSP_INVOICE_QUERY_ENV_MODE"] == (
         "shared" if group == "invoice-query" else "independent"
+    )
+    assert env["LSP_CANCEL_ENV_MODE"] == (
+        "shared" if group == "invoice-cancel" else "independent"
     )
     assert env["PYTEST_ADDOPTS"] == "" and "PYTEST_PLUGINS" not in env
     assert "LSP_WATCHTOWER_ROUND_UNTIL" not in env

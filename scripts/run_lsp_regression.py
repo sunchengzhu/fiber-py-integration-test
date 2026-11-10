@@ -24,6 +24,15 @@ REVISION = "76307312e8de518c9a32074e6d16867c04de4f86"
 INVOICE = SUITE + "/test_tenant_boundaries.py::TestTenantQueryIsolation::"
 PAYMENT = SUITE + "/test_tenant_payment_queries.py::TestTenantPaymentQueries::"
 GROUPS = {
+    "invoice-cancel": tuple(
+        SUITE
+        + "/test_hosted_invoice_cancellation.py::TestHostedInvoiceCancellation::"
+        + name
+        for name in (
+            "test_open_invoice_cancelled_old_payment_fails_new_payment_succeeds",
+            "test_received_invoice_without_preimage_can_be_cancelled",
+        )
+    ),
     "invoice-query": tuple(
         INVOICE + name
         for name in (
@@ -104,8 +113,10 @@ def environment(bundle, directory=None, job=None, delivery=None, nolsp=None):
         LSP_TEST_BUNDLE=str(bundle),
         LSP_QUERY_ENV_MODE="independent",
         LSP_INVOICE_QUERY_ENV_MODE="independent",
+        LSP_CANCEL_ENV_MODE="independent",
         LSP_QUERY_KEEP_RUNTIME="1",
         LSP_INVOICE_QUERY_KEEP_RUNTIME="1",
+        LSP_CANCEL_KEEP_RUNTIME="1",
         PYTHONPATH=str(ROOT),
         PYTHONDONTWRITEBYTECODE="1",
         PYTHONUNBUFFERED="1",
@@ -129,11 +140,11 @@ def environment(bundle, directory=None, job=None, delivery=None, nolsp=None):
         )
         env["LSP_REGRESSION_SELECTORS"] = json.dumps(job["nodeids"])
         if job["group"]:
-            variable = (
-                "LSP_QUERY_ENV_MODE"
-                if job["group"] == "payment-query"
-                else "LSP_INVOICE_QUERY_ENV_MODE"
-            )
+            variable = {
+                "payment-query": "LSP_QUERY_ENV_MODE",
+                "invoice-query": "LSP_INVOICE_QUERY_ENV_MODE",
+                "invoice-cancel": "LSP_CANCEL_ENV_MODE",
+            }[job["group"]]
             env[variable] = "shared"
         env["LSP_PAYMENT04_ROW_START"] = str(time.monotonic())
     if delivery:
