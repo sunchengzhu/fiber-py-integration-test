@@ -1,4 +1,4 @@
-"""Opt-in sequential environment reuse for QUERY-04..06 only.
+"""Bounded Hosted resource ownership and QUERY-04..06 checkpoints.
 
 The resource owner keeps unittest cleanup callbacks until class teardown. Each
 native method has its own evidence, budgets, fresh payments and unchanged oracles.
@@ -18,13 +18,19 @@ from test_cases.fiber.devnet.lsp._hosted_tenant_fixture import _stop_verified_ck
 from test_cases.fiber.devnet.lsp._lsp_test import stop_agent
 
 
-class QueryEnvironmentPilot:
+class HostedEnvironmentReuse:
+    """Lifecycle only; each concrete group owns its eligibility and oracles."""
+
+    mode_variable = "LSP_QUERY_ENV_MODE"
+    keep_variable = "LSP_QUERY_KEEP_RUNTIME"
+    owner_fixture = HostedOutboundFixture
+
     @classmethod
     def setup_class(cls):
-        cls._query_mode = os.environ.get("LSP_QUERY_ENV_MODE", "independent")
+        cls._query_mode = os.environ.get(cls.mode_variable, "independent")
         if cls._query_mode not in ("independent", "shared"):
-            raise ValueError("LSP_QUERY_ENV_MODE must be independent or shared")
-        cls._query_keep_runtime = os.environ.get("LSP_QUERY_KEEP_RUNTIME") == "1"
+            raise ValueError(f"{cls.mode_variable} must be independent or shared")
+        cls._query_keep_runtime = os.environ.get(cls.keep_variable) == "1"
         cls._query_owner = None
         cls._query_failed = False
         cls._query_checkpoints = []
@@ -178,24 +184,25 @@ class QueryEnvironmentPilot:
         return True
 
     def setup_method(self, method):
-        if self._query_mode == "independent":
-            return super().setup_method(method)
         if type(self)._query_failed:
-            raise AssertionError(
-                "shared QUERY environment invalidated; no rebuild/retry"
-            )
+            raise AssertionError("Hosted environment invalidated; no rebuild/retry")
         creating_owner = False
         try:
+            # Evidence initialization can fail before the fixture registers any
+            # cleanup. Both modes must invalidate and preserve the CKB owner.
+            if self._query_mode == "independent":
+                return super().setup_method(method)
+            self._validate_shared_method(method)
             self._start_case_evidence(method)
             if type(self)._query_owner is None:
                 creating_owner = True
                 owner = type(self)()
                 type(self)._query_owner = owner
                 # Call the original fixture directly, without this mixin's hooks.
-                HostedOutboundFixture.setup_method(
+                self.owner_fixture.setup_method(
                     owner, SimpleNamespace(__name__="shared_environment")
                 )
-                HostedOutboundFixture.setUp(owner)
+                self.owner_fixture.setUp(owner)
             owner = type(self)._query_owner
             self.business_until = min(self.business_until, owner.business_until)
             self.row_until = min(self.row_until, owner.row_until)
@@ -272,6 +279,58 @@ class QueryEnvironmentPilot:
             "runtime": str(Path(self.node.ckb_dir).resolve()),
         }
 
+    def doCleanups(self):
+        if getattr(self, "_query_mode", "independent") != "shared":
+            try:
+                return super().doCleanups()
+            except BaseException:
+                type(self)._query_failed = True
+                raise
+        if self is type(self)._query_owner:
+            return self._cleanup_query_owner()
+        try:
+            if self.result == "passed":
+                self._finish_shared_case()
+            else:
+                type(self)._query_failed = True
+        except BaseException:
+            self.result = "shared_checkpoint_failure"
+            type(self)._query_failed = True
+            raise
+        finally:
+            try:
+                super().doCleanups()
+            except BaseException:
+                type(self)._query_failed = True
+                raise
+
+    def teardown_method(self, method):
+        if self._query_mode == "shared":
+            return  # The class owner retains the live environment and all files.
+        if self._query_keep_runtime or type(self)._query_failed:
+            # An incomplete archive must never enter Fiber.clean(), even when
+            # the caller did not opt into keeping successful runtimes.
+            errors = []
+            for fiber in getattr(self, "fibers", []):
+                try:
+                    stop_agent(getattr(fiber, "process", None))
+                except BaseException as error:
+                    type(self)._query_failed = True
+                    errors.append(error)
+            if errors:
+                for error in errors[1:]:
+                    errors[0].add_note(f"additional FNN stop error: {error!r}")
+                raise errors[0]
+            return
+        return super().teardown_method(method)
+
+    def _validate_shared_method(self, method):
+        """A group may reject methods before creating or binding resources."""
+
+
+class QueryEnvironmentPilot(HostedEnvironmentReuse):
+    """The existing payment query guards remain specific to QUERY-04..06."""
+
     def _check_query_environment(self):
         from test_cases.fiber.devnet.lsp.test_tenant_payment_queries import (
             _assert_query_funds,
@@ -317,43 +376,16 @@ class QueryEnvironmentPilot:
                     payment_hash=payment["hash"],
                 )
 
-    def doCleanups(self):
-        if getattr(self, "_query_mode", "independent") != "shared":
-            return super().doCleanups()
-        if self is type(self)._query_owner:
-            return self._cleanup_query_owner()
-        try:
-            if self.result == "passed":
-                # Cross-method guards supplement, never replace, each method's
-                # original funds/history/isolation and five-second assertions.
-                self._check_prior_query_histories()
-                payments, expected = self._query_prepared
-                type(self)._query_checkpoints.append(
-                    {
-                        "case": self._testMethodName,
-                        "payments": payments,
-                        "expected": expected,
-                        "views": self._query_last_sample["views"],
-                    }
-                )
-            else:
-                type(self)._query_failed = True
-        except BaseException:
-            self.result = "shared_checkpoint_failure"
-            type(self)._query_failed = True
-            raise
-        finally:
-            try:
-                super().doCleanups()
-            except BaseException:
-                type(self)._query_failed = True
-                raise
-
-    def teardown_method(self, method):
-        if self._query_mode == "shared":
-            return  # The class owner retains the live environment and all files.
-        if self._query_keep_runtime:
-            for fiber in getattr(self, "fibers", []):
-                stop_agent(getattr(fiber, "process", None))
-            return
-        return super().teardown_method(method)
+    def _finish_shared_case(self):
+        # Cross-method guards supplement, never replace, each method's
+        # original funds/history/isolation and five-second assertions.
+        self._check_prior_query_histories()
+        payments, expected = self._query_prepared
+        type(self)._query_checkpoints.append(
+            {
+                "case": self._testMethodName,
+                "payments": payments,
+                "expected": expected,
+                "views": self._query_last_sample["views"],
+            }
+        )

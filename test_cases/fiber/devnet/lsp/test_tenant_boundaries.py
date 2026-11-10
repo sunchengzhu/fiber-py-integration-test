@@ -2,12 +2,15 @@
 
 import requests
 
+from test_cases.fiber.devnet.lsp._invoice_query_environment import (
+    InvoiceQueryEnvironment,
+)
 from test_cases.fiber.devnet.lsp.test_hosted_invoice_cancellation import (
     _CancellationBase,
 )
 
 
-class TestTenantQueryIsolation(_CancellationBase):
+class TestTenantQueryIsolation(InvoiceQueryEnvironment, _CancellationBase):
     """Real A/B tenant channels; no extra payment for the query boundary."""
 
     tenant_labels = ("A", "B")
@@ -28,6 +31,14 @@ class TestTenantQueryIsolation(_CancellationBase):
             )
             response.raise_for_status()
             body = response.json()
+        if self._invoice_selected:
+            self._record(
+                "tenant_boundary_rejection",
+                method=method,
+                params=params,
+                response=body,
+                http_status=response.status_code,
+            )
         assert "error" in body, (method, body)
         return body["error"]
 
@@ -131,8 +142,9 @@ class TestTenantQueryIsolation(_CancellationBase):
         """
         1. A 用 tenant token 查询自己的发票，证明 token 有效。
         2. A 调 lsp_list_tenants，预期被拒绝。
-        3. operator 调 lsp_list_tenants，确认 A/B 仍可见。
+        3. operator 确认 A/B runtime 和通道未变，再由 A 合法查询自身发票。
         """
+        # 1. 创建真实 Open 发票，并用 A 的合法查询证明 token 有效。
         a, b = self.tenants
         a_payment = self._new_hold(a, "a", self.business_until)
 
@@ -144,9 +156,11 @@ class TestTenantQueryIsolation(_CancellationBase):
         )
         assert own_a["status"] == "Open", own_a
 
+        # 2. 同一 tenant token 调 operator 列表方法必须被拒绝。
         error = self._rpc_error(a["client"], "lsp_list_tenants", [])
         assert error, error
 
+        # 3. 先由 operator 观察，再验证拒绝后的合法 tenant 查询。
         listed = self._rpc(
             self.fiber1.client,
             "lsp_list_tenants",
@@ -155,6 +169,16 @@ class TestTenantQueryIsolation(_CancellationBase):
         )
         ids = {tenant["tenant_id"] for tenant in listed["tenants"]}
         assert {self._tenant_id(a), self._tenant_id(b)} <= ids, listed
+        # Operator 健康检查先于 tenant 查询，避免重新拉起 runtime 掩盖错误。
+        self._check_query_environment()
+        after = self._rpc(
+            a["client"],
+            "get_invoice",
+            [{"payment_hash": a_payment["hash"]}],
+            self.business_until,
+        )
+        assert after["status"] == "Open", after
+        assert after["invoice_address"] == a_payment["invoice"], after
         self.result = "passed"
 
     # TEST-MAP: LSP-ADMIN-AUTH-02

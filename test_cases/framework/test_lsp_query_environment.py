@@ -393,3 +393,38 @@ def test_owner_error_keeps_primary_failure_and_raw_ckb_state(environment, monkey
     assert any("secondary CKB stop failure" in note for note in error.value.__notes__)
     assert ("archive", "shared_environment", "environment_closed") in events
     assert cls._query_failed
+
+
+def test_default_independent_archive_error_invalidates_payment_group(
+    environment, monkeypatch
+):
+    import test_cases.fiber.devnet.lsp.test_delayed_payment_recovery as delayed
+
+    cls, case, events = environment
+    cls._query_mode = "independent"
+    cls._query_keep_runtime = False
+
+    def partial(self):
+        (self.evidence_dir / "partial-payment-archive.txt").write_text("original bytes")
+        raise OSError("payment archive incomplete")
+
+    monkeypatch.setattr(cls, "_archive", partial)
+    monkeypatch.setattr(delayed, "stop_agent", lambda process: None)
+    obj = case("query04")
+    cleaned = []
+    for fiber in obj.fibers:
+        fiber.clean = lambda: cleaned.append(True)
+    obj.result = "passed"
+    try:
+        with pytest.raises(OSError, match="payment archive incomplete"):
+            obj.doCleanups()
+        assert cls._query_failed
+        obj.teardown_method(None)
+        assert not cleaned
+        assert (
+            obj.evidence_dir / "partial-payment-archive.txt"
+        ).read_text() == "original bytes"
+        cls.teardown_class()
+        assert ("stop_ckb",) in events
+    finally:
+        cls._query_keep_runtime = True
