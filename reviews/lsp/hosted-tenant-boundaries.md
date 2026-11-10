@@ -269,3 +269,9 @@ Testing: required
 ### QUERY-04～06 可选共享环境试点（2026-11-10）
 
 用例行、资金/费用、历史、隔离和错误归因判据保持不变。默认仍走独立环境路径；`LSP_QUERY_ENV_MODE=shared` 仅为这三个方法复用类内环境，每个方法仍新建两笔真实付款，另加跨方法资金、历史及环境身份检查。原生独立/共享对照、失败证据及使用边界见[共享环境试点记录](../../docs/analysis/lsp-query-shared-environment-pilot.md)。本轮不扩展其他业务场景。
+
+### QUERY-01/02、ADMIN-AUTH-01/03 可选共享环境（2026-11-10）
+
+原用例行与 TEST-MAP 保持，ADMIN-AUTH-01 补齐拒绝后的合法查询。`LSP_INVOICE_QUERY_ENV_MODE=shared` 只允许这四条，默认独立，ADMIN-AUTH-02 继续独立并保持 evict 后无 tenant 读取。默认独立的归档/证据初始化失败会失效并保留现场，不依赖 keep-runtime。
+
+固定 763 的最终真实对照为独立 4/4（418.812 秒）、共享 4/4（148.824 秒），本机单轮耗时减少 64.5%；QUERY-04～06 共享影响回归另有 3/3，不计入提速比较。仓库离线 146 项通过，另有本地探针形成的 150/153 项验证记录；本地产物不随代码提交。入口、状态边界、耗时口径及证据范围见[发票查询与权限共享环境说明](../../docs/analysis/lsp-next-shared-environment-review.md)。
