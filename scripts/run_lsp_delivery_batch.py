@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the authorized 843 delivery qualification and six single-shot cases."""
+"""Run the fixed-revision delivery qualification and six single-shot cases."""
 
 import argparse
 import errno
@@ -17,9 +17,9 @@ import time
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "download/fiber/source-pr-1623-84333ee"
+SOURCE = ROOT / "download/fiber/source-pr-1623-76307312"
 CARGO_SEED = Path.home() / ".cargo"
-REVISION = "84333eea8488a8afc7e4474aa4bbd0e7e973cee9"
+REVISION = "76307312e8de518c9a32074e6d16867c04de4f86"
 TEST_FILE = "test_cases/fiber/devnet/lsp/test_delivery_acceptance.py"
 CASES = [
     "TestDeliveryAcceptance::test_accept_after_original_caller_timeout",
@@ -56,7 +56,7 @@ class Batch:
         self.until = self.started + 120 * 60
         self.qualification_until = self.started + 60 * 60
         stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime(time.time() + 8 * 3600))
-        self.root = ROOT / "report" / f"lsp-delivery-84333ee-{stamp}"
+        self.root = ROOT / "report" / f"lsp-delivery-{REVISION[:7]}-{stamp}"
         self.root.mkdir(parents=True, exist_ok=False)
         self.bundle = self.root / "bundle"
         self.target = self.cache
@@ -708,7 +708,7 @@ if __name__ == "__main__":
         "--base-bundle",
         type=Path,
         required=True,
-        help="Matching 84333ee bundle including the reviewed SDK driver",
+        help="Matching fixed-revision bundle including the reviewed SDK driver",
     )
     parser.add_argument(
         "--target-cache",

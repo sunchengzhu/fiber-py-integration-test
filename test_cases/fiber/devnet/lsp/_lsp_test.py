@@ -24,9 +24,8 @@ from test_cases.fiber.devnet.lsp._retry_signer_gate import RetrySignatureGate
 from test_cases.fiber.devnet.lsp._subscription_observer import SubscriptionProxy
 
 PROJECT_ROOT = Path(get_project_root()).resolve()
-REVISION = os.environ.get(
-    "LSP_TEST_REVISION", "04c206465b48da85b99aa58e80afe9801a2cb2db"
-)
+DEFAULT_REVISION = "76307312e8de518c9a32074e6d16867c04de4f86"
+REVISION = os.environ.get("LSP_TEST_REVISION", DEFAULT_REVISION)
 assert len(REVISION) == 40 and all(
     c in "0123456789abcdef" for c in REVISION
 ), "LSP_TEST_REVISION must be a full lowercase commit SHA"

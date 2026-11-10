@@ -11,7 +11,7 @@ import subprocess
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
-REVISION = "84333eea8488a8afc7e4474aa4bbd0e7e973cee9"
+REVISION = "76307312e8de518c9a32074e6d16867c04de4f86"
 
 
 def digest(path):
@@ -43,7 +43,9 @@ def main():
     parser.add_argument("--base-bundle", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--target-dir", type=Path, required=True)
-    parser.add_argument("--revision", default=REVISION, help="Exact reviewed Fiber commit")
+    parser.add_argument(
+        "--revision", default=REVISION, help="Exact reviewed Fiber commit"
+    )
     args = parser.parse_args()
     source, base, output, target = (
         p.resolve()

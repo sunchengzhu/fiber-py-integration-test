@@ -80,6 +80,7 @@ static STATE: OnceLock<Arc<Mutex<State>>> = OnceLock::new();
 static STORE: OnceLock<Store> = OnceLock::new();
 static START: OnceLock<Instant> = OnceLock::new();
 static EVENTS: OnceLock<Mutex<std::fs::File>> = OnceLock::new();
+static SNAPSHOTS: OnceLock<Mutex<(Value, u64)>> = OnceLock::new();
 fn ms() -> u64 {
     START.get().unwrap().elapsed().as_millis() as u64
 }
@@ -306,6 +307,25 @@ async fn forward_observed(
         let _ = port.send(reply);
     }
 }
+// Serialize collection and publication, not product actors or store writes.
+// A direct response is published before returning so Python never merges two clocks.
+fn ordered_snapshot(store: &Store, always_log: bool) -> Result<Value, String> {
+    let mut observation = SNAPSHOTS
+        .get_or_init(|| Mutex::new((Value::Null, 0)))
+        .lock()
+        .unwrap();
+    let mut current = snapshot(store)?;
+    let mut fingerprint = current.clone();
+    fingerprint.as_object_mut().unwrap().remove("channels");
+    if always_log || fingerprint != observation.0 {
+        observation.1 += 1;
+        current["snapshot_sequence"] = json!(observation.1);
+        event("snapshot", current.clone());
+        observation.0 = fingerprint;
+    }
+    Ok(current)
+}
+
 fn snapshot(store: &Store) -> Result<Value, String> {
     let captures = STATE.get().unwrap().lock().unwrap().captures.iter().map(|c|json!({
         "key":LspPaymentDeliveryKey::from_request(&c.request),"request":c.request,"mode":c.mode,
@@ -399,7 +419,7 @@ async fn command(v: Value, store: &Store) -> Result<Value, String> {
             let s = STATE.get().unwrap().lock().unwrap();
             Ok(json!({"ready":s.ready,"armed":s.arm.is_some(),"capture_count":s.captures.len()}))
         }
-        "snapshot" => snapshot(store),
+        "snapshot" => ordered_snapshot(store, true),
         "arm" => {
             let mode = v["mode"].as_str().ok_or("mode required")?;
             if !["observe", "delay_accept", "drop_reply"].contains(&mode) {
@@ -474,7 +494,9 @@ async fn command(v: Value, store: &Store) -> Result<Value, String> {
                 }
                 "hash" => {
                     request.payment_hash = serde_json::from_value(v["payment_hash"].clone())
-                        .map_err(|e| e.to_string())?
+                        .map_err(|e| e.to_string())?;
+                    request.next_node_id = serde_json::from_value(v["next_node_id"].clone())
+                        .map_err(|e| e.to_string())?;
                 }
                 _ => return Err("unknown replay variant".into()),
             }
@@ -570,20 +592,9 @@ async fn control(
     );
     let observation_store = store.clone();
     let observations = tokio::spawn(async move {
-        let mut previous = Value::Null;
         loop {
-            match snapshot(&observation_store) {
-                Ok(current) => {
-                    // Captures include the original K's TLC, so compare those and
-                    // delivery/session changes for 100 ms events. Each direct
-                    // snapshot also returns the projected channel facts.
-                    let mut fingerprint = current.clone();
-                    fingerprint.as_object_mut().unwrap().remove("channels");
-                    if fingerprint != previous {
-                        event("snapshot", current);
-                        previous = fingerprint;
-                    }
-                }
+            match ordered_snapshot(&observation_store, false) {
+                Ok(_) => {}
                 Err(error) => event("snapshot_failed", json!({"error":error})),
             }
             tokio::time::sleep(Duration::from_millis(100)).await;

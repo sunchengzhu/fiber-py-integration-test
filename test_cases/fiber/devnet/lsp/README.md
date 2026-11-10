@@ -1,8 +1,59 @@
 # Hosted LSP 通道签名集成测试
 
-## 当前运行入口（工程整理 2026-11-08）
+## 当前基线与全量复验（2026-11-10 完成）
 
-本次工程整理的测试基线是 `4052079f374376eb31b951788ecc4e8f4e9c9c35`（分支 `codex/lsp-test-engineering`），产品仍固定 `56c761c45c271c086b05c8d5ea3e033448f5fdf8`。本节只描述当前可复现入口；下方各节保留历史版本记录和原始结果，历史命令不作为默认入口。
+普通 LSP 测试及普通二进制/Delivery 构建脚本的默认产品版本统一为 `76307312e8de518c9a32074e6d16867c04de4f86`（本轮启动时 PR #1623 的 head）。测试基线为合并 PR #17 后的 `7d263c9003fb5f8a5f371cca10e0ff0158aa4561`。版本更新只调整运行输入和门禁，不修改已确认用例的业务预期；下文旧版本命令和结果均为历史证据。
+
+- 普通目录 `test_cases/fiber/devnet/lsp/` 收集 **98 个 pytest 方法**；方法数、评审 ID 数和离线回归参数数是不同口径。收集不代表执行通过。
+- 普通 bundle 默认目录为 `download/fiber/pr-1623-7630731`，必须重新通过 revision、二进制版本/摘要和 SDK driver/chain 源摘要校验。
+- Delivery wrapper 与关闭 `lsp` feature 的节点必须分别来自同一个固定 SHA；不得用旧 843/56c 二进制替代。Delivery 故障场景先通过同版本正常路径资格测试。
+- `LSP_RETEST_REVISION` 只用于显式的其他固定版本复验；当前默认 SHA 不需要这个覆盖变量。
+- 退款专项仍位于 `lsp_nightly/`，不在本轮普通目录的 98 个方法内；其独立版本、VM 资格、预算和执行门禁不因本次默认值调整而改变。
+
+本轮真实执行逐方法串行，使用独立运行目录、`CKB_CLI_HOME` 和证据目录；每条保留原生 JUnit、stdout、退出码、执行前后输入摘要、节点/业务原始证据。原始材料保存在 `/Users/sunchengzhu/project/fiber-py-integration-test/local-evidence/lsp-763-full-regression-20261109/`，不受 `make clean` 删除。普通目录 98 个方法现已全部取得执行结果；通过与失败分别统计，以原生回执为准。
+
+2026-11-10 最终结果：按方法最新原生回执去重，**98/98 个方法已执行，95 passed、3 failed，无未运行项或 skip**。失败仍为 TIMEOUT-04/05 等待 abort 超时，以及 DELIVERY-02 原 K failed / 下游 paid；04/05 后续晚签等断言、02 的最终资金/稳定期未执行到，不能记通过。PAYMENT-04 本轮完整通过（133.659s），PAYMENT-05 通过（96.841s），QUERY-04～06 也全部通过。退款 `lsp_nightly/` 未运行。
+
+本次恢复的 35 个方法首跑为 **34 passed、1 failed**。唯一新增失败是 WATCHTOWER-03 的终态采样间隔 2.219s 超过原定 2s；先前隔离及结算资金断言已经走到，但 65s 稳定窗口未完成，原生失败完整保留在 `cases/093-a7/`。仅追加一次原样定点复验 `cases/093-a8/`：**1 passed、exit 0、319.975s**；两次声明输入摘要完全相同，稳定观察 65.102s、最大采样间隔 1.585s。未修改阈值、业务断言或预算；不将首跑失败改写为通过，也不以单次复验消除采样偶发超限的执行稳定性记录。详见 `watchtower-sampling-revalidation.json`。
+
+`native-final-audit-20261110.json` 从原生回执导出上述统计，已逐份核验全部 110 份尝试回执对应的 stdout/JUnit 摘要、固定产品 SHA 及执行前后输入不变；其中包含历史失败、修复重跑和用户中断，不能把尝试数当方法数。配套离线工程回归 **116 passed、exit 0、输入不变**，单列为离线结果。`final-environment-20261110.json` 记录源码干净、12 个保存文件摘要通过复核、8 个端口释放及节点/编译器无残留；原始证据继续保存在上述受保护目录。
+
+收尾静态检查：`git diff --check` exit 0；Delivery 6 行已确认用例与合并基线逐字一致，显式 `--root` 的设计结构检查 exit 0（原有待确认/未展开说明保留）。项目级映射检查为 147 个评审 ID / 141 个已映射，exit 1 仅保留既有 6 个孤儿 ID（PMP-01～05、SETTLE-01），无重复 ID；这不是普通目录通过率。实际输出及首次设计检查路径参数纠正记录见证据根 `static-final-verification.json`。
+
+PR 整理验证：真实节点 95/3 的回执对应格式化前源码；本轮随后仅对 `build_lsp_test_binaries.py`、`test_delivery_acceptance.py`、`test_delivery_fnn_restart.py` 应用 Black，三份 Python AST 逐一相同，Rust wrapper/业务断言/采样阈值未变。格式化后重新取得 **116 passed、exit 0、输入不变** 的离线原生回执，见证据根 `pr-prep-20261110/offline-pr/` 与 `pr-prep-20261110/format-only-equivalence.json`。本批 15 个 Python 文件 Black 检查通过；全仓 445 文件检查仍有 3 个基线文件不通过：`test_cases/fiber/devnet/lsp_nightly/test_tlc_refund_adapter_fast.py`、`test_cases/fiber/devnet/lsp_nightly/test_tlc_timeout_refund.py`、`test_cases/framework/test_lsp_refund_f2_runner.py`。三文件与目标分支原样一致，未混入本 PR，未运行退款专项。
+
+本轮首次 `LSP-TIMEOUT-12` 业务状态在约 264.6 秒正确恢复并观察满窗口，但日志解析因 ANSI 颜色码出现假阴性，原生结果仍保留为 failed（`cases/011-a2/`）。修复仅在解析副本中移除 SGR，保留原始日志、行号和原有租户/通道/同一 actor 归因要求。离线先取得 1 failed / 8 passed 的红测，再取得 9 passed 的绿测；旧原始日志复核也找到正确归因，但不据此改写原生失败，真实重跑另存 `cases/011-a3/`：1 passed、exit 0、执行前后输入不变，runner 434.367s，完整观察 330.684s、恢复后稳定 66.140s。未修改评审用例行或业务断言。
+
+
+```bash
+export LSP_TEST_REVISION=76307312e8de518c9a32074e6d16867c04de4f86
+export LSP_TEST_BUNDLE="$PWD/download/fiber/pr-1623-7630731"
+# 所有输出变量使用新的批次目录；各套件的额外必需变量见下表。
+python -m pytest -o addopts= -p no:cacheprovider --collect-only -q test_cases/fiber/devnet/lsp
+```
+
+Delivery 构建显式输入示例（输出目录必须全新，缓存串行加锁复用）：
+
+```bash
+python scripts/build_lsp_delivery_node.py \
+  --source /path/to/clean/fiber-76307312 \
+  --base-bundle download/fiber/pr-1623-7630731 \
+  --output download/fiber/pr-1623-7630731-delivery-<new> \
+  --target-dir <reusable-cargo-target> \
+  --revision 76307312e8de518c9a32074e6d16867c04de4f86
+```
+
+### Delivery 观察器与目标输入修复（2026-11-10）
+
+D1 同源正常资格通过后，`DELIVERY-02` 仍观察到原 K failed / 下游 paid 的既有产品一致性失败。`DELIVERY-04` 在重放前因混合直接快照与旧周期事件产生伪回退；`DELIVERY-06` 仅改 B hash 却保留 A next_node_id，触发最新源码的 NotHosted 前置拒绝，未进入预定冲突阶段。这两条分别归测试观察器和测试输入问题，不转记产品缺陷。
+
+修复使用单一、连续序号的快照日志；直接响应须与对应日志事实一致，原有终态回退及资金断言全部保留。06 同时给出真实 B hash/公钥，保持原 K 及非目标字段。见[已有评审的维护说明](../../../../reviews/lsp/delivery-acceptance-consistency.md)。离线红测 8 failed / 8 passed，最终绿测 17 passed。D1 原始证据不变；新 wrapper `pr-1623-7630731-delivery-ordered-v2` 在 D2 中先重新资格，再复验同组 8 个方法：7 passed、1 failed（仅原 K failed / 下游 paid 的 DELIVERY-02）。此前误判的成功重放和输入不合格的目标冲突均通过；完整 FNN 重启也通过。全部原生回执输入不变，见证据根 `delivery-fix-validation.json`。
+
+重建时保留了一次 Cargo 特征缓存失败：`fnn` 的 cdylib/rlib 文件无特征哈希，无 LSP 构建覆盖了库文件但旧 LSP fingerprint 仍被判 Fresh。只将本批对应 LSP fingerprint 备份到证据根后重编译，未改产品或清空共享缓存；修复版构建 exit 0。不同 feature 交错构建时不可仅凭 Cargo 的 Fresh 行判断库内容。
+
+## 历史运行入口（工程整理 2026-11-08）
+
+本次工程整理的测试基线是 `4052079f374376eb31b951788ecc4e8f4e9c9c35`（分支 `codex/lsp-test-engineering`），产品仍固定 `56c761c45c271c086b05c8d5ea3e033448f5fdf8`。本节保留当时可复现入口；以下 56c/843 命令均为历史记录，不作为上方最新基线的默认入口。
 
 ### 选择同源产物
 

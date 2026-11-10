@@ -1,9 +1,7 @@
-"""Authorized 01/02 implementation draft for fixed 84333ee Hosted invoice cancellation.
+"""Hosted invoice cancellation on the current fixed LSP revision.
 
-The first tenant cancel is expected to fail on 843's allowlist. Keep the full
-post-cancel assertions for a separately pinned repair revision; do not substitute
-an operator credential or call settle_invoice directly from Python. Received
-cancellation (03) remains an open product-contract decision.
+Historical 843 allowlist failures remain evidence; all approved cancellation and
+funds assertions are retained for the current product regression.
 """
 
 import copy
@@ -17,13 +15,17 @@ import yaml
 
 from framework.util import get_project_root
 from test_cases.fiber.devnet.lsp._hosted_tenant_fixture import HostedTenantFixture
-from test_cases.fiber.devnet.lsp._lsp_test import REVISION, RETEST_REVISION
+from test_cases.fiber.devnet.lsp._lsp_test import (
+    DEFAULT_REVISION,
+    REVISION,
+    RETEST_REVISION,
+)
 from test_cases.fiber.devnet.lsp.test_delayed_payment_recovery import (
     _number,
     _outpoint,
 )
 
-FIXED_REVISION = "84333eea8488a8afc7e4474aa4bbd0e7e973cee9"
+FIXED_REVISION = DEFAULT_REVISION
 AMOUNT = 1_000_000
 FEE_CAP = 10_000
 
@@ -422,7 +424,6 @@ class TestHostedInvoiceCancellation(_CancellationBase):
         self._no_old_release(old)
         self.result = "passed"
 
-
     # TEST-MAP: LSP-INVOICE-CANCEL-03
     def test_received_invoice_without_preimage_can_be_cancelled(self):
         """
@@ -482,6 +483,7 @@ class TestHostedInvoiceCancellation(_CancellationBase):
             settled, "A", AMOUNT, _number(settled["payer"]["fee"])
         )
         self.result = "passed"
+
 
 class TestHostedInvoiceCancellationIsolation(_CancellationBase):
     tenant_labels = ("A", "B")

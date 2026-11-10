@@ -1,4 +1,4 @@
-"""84333ee: real Hosted delivery acceptance, timeout and same-key replay."""
+"""Hosted delivery acceptance, timeout and same-key replay at the fixed LSP revision."""
 
 import copy
 import json
@@ -10,6 +10,7 @@ import tempfile
 import time
 
 from test_cases.fiber.devnet.lsp._lsp_test import (
+    DEFAULT_REVISION,
     BUNDLE,
     ChannelSigningTestBase,
     REVISION,
@@ -31,7 +32,7 @@ class _DeliveryBase(_DelayedPaymentBase):
 
     @classmethod
     def setup_class(cls):
-        assert REVISION == "84333eea8488a8afc7e4474aa4bbd0e7e973cee9" or (
+        assert REVISION == DEFAULT_REVISION or (
             RETEST_REVISION is not None and REVISION == RETEST_REVISION
         ), "use a separately reviewed revision for repair regression"
         wrapper = require_env_path(
@@ -50,7 +51,9 @@ class _DeliveryBase(_DelayedPaymentBase):
         root = os.environ.get("LSP_DELIVERY_REPORT_DIR")
         if root is None:
             Path("report").mkdir(exist_ok=True)
-            root = tempfile.mkdtemp(prefix="lsp-delivery-84333ee-", dir="report")
+            root = tempfile.mkdtemp(
+                prefix=f"lsp-delivery-{REVISION[:7]}-", dir="report"
+            )
         self.evidence_dir = Path(root).resolve() / method.__name__
         self.evidence_dir.mkdir(parents=True, exist_ok=False)
         # Unix sockets have a short platform path limit; evidence is copied before cleanup.
@@ -70,6 +73,7 @@ class _DeliveryBase(_DelayedPaymentBase):
         self.tlc_history = {}
         self.session_history = {}
         self.snapshot_event_offset = 0
+        self.snapshot_last_sequence = 0
         self.previous_sample = None
         self._record(
             "environment_start",
@@ -163,6 +167,8 @@ class _DeliveryBase(_DelayedPaymentBase):
         assert reply["payment_hash"] == payment["hash"], reply
 
     def _snapshot_delivery(self, until):
+        # The adapter flushes this exact observation to the ordered log before replying.
+        snapshot = self._delivery("snapshot", until)
         new_events = []
         if self.events_path.exists():
             with self.events_path.open("rb") as stream:
@@ -179,16 +185,34 @@ class _DeliveryBase(_DelayedPaymentBase):
                 if line.strip()
             ]
             self.snapshot_event_offset += complete
-        snapshot = self._delivery("snapshot", until)
+        ordered = [event for event in new_events if event["event"] == "snapshot"]
+        for event in ordered:
+            sequence = event.get("snapshot_sequence")
+            assert (
+                type(sequence) is int and sequence == self.snapshot_last_sequence + 1
+            ), "snapshot sequence missing, duplicated or reordered"
+            self.snapshot_last_sequence = sequence
+        matches = [
+            event
+            for event in ordered
+            if event["snapshot_sequence"] == snapshot.get("snapshot_sequence")
+        ]
+        assert len(matches) == 1, "direct snapshot missing from ordered event stream"
+        logged = {
+            key: value
+            for key, value in matches[0].items()
+            if key not in ("event", "monotonic_ms")
+        }
+        assert logged == snapshot, "direct snapshot differs from its logged observation"
         for capture in snapshot["captures"]:
             key = json.dumps(capture["key"], sort_keys=True)
             original = self.all_keys.setdefault(key, copy.deepcopy(capture["request"]))
             assert (
                 original == capture["request"]
             ), "captured request changed for original K"
-        # The event log is ordered. The direct read fills any gap before the next
-        # observer tick, without replaying old observations on every sample.
-        for current in [e for e in new_events if e["event"] == "snapshot"] + [snapshot]:
+        # One serialized evidence stream includes both periodic and direct reads.
+        # Never append a newer direct read ahead of buffered older observations.
+        for current in ordered:
             for capture in current["captures"]:
                 tlc = capture["upstream_tlc"]
                 if tlc is not None:
@@ -474,6 +498,7 @@ class _DeliveryBase(_DelayedPaymentBase):
             values["amount_to_forward"] = 1_000_001
         if variant == "hash":
             values["payment_hash"] = self.payments["B"]["hash"]
+            values["next_node_id"] = self.baseline["T-B"]["pubkey"]
         response = self._delivery("replay", until, **values)
         original = next(iter(self.all_keys.values()))
         expected = copy.deepcopy(original)
@@ -482,6 +507,7 @@ class _DeliveryBase(_DelayedPaymentBase):
             assert _number(expected["amount_to_forward"]) == 1_000_001
         elif variant == "hash":
             expected["payment_hash"] = self.payments["B"]["hash"]
+            expected["next_node_id"] = self.baseline["T-B"]["pubkey"]
         assert (
             response["request"] == expected
         ), "replay changed fields outside approved variant"
@@ -853,9 +879,8 @@ class _DeliveryBase(_DelayedPaymentBase):
         assert len(timeout) == 1, timeout
         log = self._log_since_send()
         assert (
-            ("Hosted trampoline delivery unavailable" in log and "timeout" in log)
-            or "Failed to consult LSP delivery service: timeout" in log
-        ), log
+            "Hosted trampoline delivery unavailable" in log and "timeout" in log
+        ) or "Failed to consult LSP delivery service: timeout" in log, log
         snapshot = self._snapshot_delivery(fault_until)
         captures = snapshot["captures"]
         original = captures[0]
@@ -1045,7 +1070,7 @@ class TestDeliveryTargetConflict(_DeliveryBase):
     def test_valid_other_tenant_target_cannot_replace_original_key(self):
         """
         1. 准备 A/B 独立真实通道、同额发票和本地授权，暂扣 A 的 InFlight 签名。
-        2. 保留原 K 改投合法 B hash，确认规范化目标后在 existing-key 拒绝。
+        2. 保留原 K 改投合法 B hash 与 next_node_id，在 existing-key 拒绝。
         3. B 发票保持 Open 且无支出，放行 A 后只完成原 M 并稳定三十秒。
         """
         # 1. B 独立身份、真实私有通道和有效发票由准备阶段建立。
@@ -1058,7 +1083,7 @@ class TestDeliveryTargetConflict(_DeliveryBase):
         self._arm("observe")
         before = self._held_checkpoint()
 
-        # 2. 产品自行以 B hash 规范化合法目标，不伪造绑定。
+        # 2. B 的 hash 与真实通道对端公钥共同满足产品目标检查，不伪造绑定。
         self._active_replay("hash", before)
 
         # 3. 同时核对 B 无新增 TLC/付款/余额变化与 A 的唯一结算。

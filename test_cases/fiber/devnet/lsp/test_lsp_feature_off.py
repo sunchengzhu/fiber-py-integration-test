@@ -14,6 +14,7 @@ import requests
 from framework.basic_fiber import FiberTest
 from framework.test_fiber import Fiber, FiberConfigPath
 from framework.util import get_project_root
+from test_cases.fiber.devnet.lsp._lsp_test import REVISION
 
 
 class TestLspFeatureOff(FiberTest):
@@ -65,9 +66,9 @@ class TestLspFeatureOff(FiberTest):
     def _assert_ports_free(self):
         for port in (self.fiber_rpc_port, self.fiber_p2p_port):
             with socket.socket() as sock:
-                assert sock.connect_ex(("127.0.0.1", int(port))) != 0, (
-                    f"port {port} is already in use; refusing to disturb an unrelated process"
-                )
+                assert (
+                    sock.connect_ex(("127.0.0.1", int(port))) != 0
+                ), f"port {port} is already in use; refusing to disturb an unrelated process"
 
     def _run_feature_off_probe(self):
         """Prove the binary rejects an lsp service before any RPC listener starts."""
@@ -124,7 +125,9 @@ class TestLspFeatureOff(FiberTest):
                     finally:
                         self._stop_config_process()
                 combined = stdout_path.read_text() + stderr_path.read_text()
-            assert not listened, f"binary listened on RPC before rejecting lsp: {combined}"
+            assert (
+                not listened
+            ), f"binary listened on RPC before rejecting lsp: {combined}"
             assert process.returncode != 0, (process.returncode, combined)
             assert "built without the `lsp` feature" in combined, combined
             assert "biscuit" not in combined.lower(), combined
@@ -139,7 +142,7 @@ class TestLspFeatureOff(FiberTest):
         version = subprocess.check_output(
             [str(self.binary), "--version"], text=True, timeout=15
         )
-        assert "56c761c" in version, version
+        assert REVISION[:7] in version and "dirty" not in version, version
         expected = os.environ.get("LSP_NOLSP_FNN_SHA256")
         if expected:
             actual = hashlib.sha256(self.binary.read_bytes()).hexdigest()
