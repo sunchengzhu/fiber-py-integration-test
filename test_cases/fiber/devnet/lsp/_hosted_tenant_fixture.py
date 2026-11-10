@@ -77,6 +77,15 @@ def _pid_alive(pid):
     state = _command_text(["ps", "-p", str(pid), "-o", "stat="])
     if state.startswith("Z"):
         return False
+    if not state:
+        # The process can exit between kill(0) and ps. Empty ps output alone
+        # is not proof of exit (ps may be unavailable), so probe once again.
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
     return True
 
 
@@ -421,7 +430,8 @@ class HostedTenantFixture(_DelayedPaymentBase):
         super().teardown_class()
         cls._remove_empty_runtime_dirs(Path(get_project_root()).resolve())
 
-    def setup_method(self, method):
+    def _start_case_evidence(self, method):
+        """Fresh per-method budgets and evidence, independent of node ownership."""
         self.preparation_started = time.monotonic()
         self.preparation_until = self.preparation_started + self.preparation_budget
         self.business_until = self.preparation_started + self.business_budget
@@ -445,6 +455,9 @@ class HostedTenantFixture(_DelayedPaymentBase):
             row_until=self.row_until,
         )
         self.addCleanup(self._archive)
+
+    def setup_method(self, method):
+        self._start_case_evidence(method)
         try:
             with self._budget(self.preparation_until, self.preparation_budget):
                 # This suite's own setup_method owns preparation; keep the
