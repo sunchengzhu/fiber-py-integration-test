@@ -102,7 +102,7 @@ def test_terminal_tlc_history_is_not_an_active_lock():
     assert _active_target_tlcs({"pending_tlcs": [old, live, other]}, H) == [live]
 
 
-def _exercise_outbound_body(tmp_path, monkeypatch, scenario, trace):
+def _exercise_outbound_body(tmp_path, monkeypatch, scenario, trace, sample_cost=0):
     """Drive the real test body with controlled observations, without nodes."""
     clock = [0.0]
     preimage = "0x" + "42" * 32
@@ -155,6 +155,7 @@ def _exercise_outbound_body(tmp_path, monkeypatch, scenario, trace):
 
     def sample(tenant, target, sources, until):
         assert target == payment_hash
+        clock[0] += sample_cost
         if trace["samples"] and clock[0] - trace["samples"][-1]["finished"] > 2:
             # Preserve the real sampling seam's guard while mocking RPC traffic.
             obj._fail_outbound(
@@ -268,3 +269,37 @@ def test_outbound_body_accepts_fresh_stable_normal_flow(tmp_path, monkeypatch):
     assert trace["object"].result == "passed"
     assert fresh_span >= 5
     assert passed["stability_seconds"] == pytest.approx(fresh_span)
+
+
+@pytest.mark.parametrize("mode", ["independent", "shared"])
+def test_query_poll_cadence_keeps_sample_limit_and_full_stability_window(
+    tmp_path, monkeypatch, mode
+):
+    from test_cases.fiber.devnet.lsp.test_tenant_payment_queries import (
+        TestTenantPaymentQueries,
+    )
+
+    query = object.__new__(TestTenantPaymentQueries)
+    query._query_mode = mode
+    assert outbound_case.TestHostedOutboundPayment.outbound_completion_pause == 1
+    pause = query.outbound_completion_pause
+    assert pause == (0.2 if mode == "shared" else 1)
+    # Exercise the real common payment loop with a slow, complete observation.
+    # Defaults remain unchanged for PAYMENT-05 and independent queries.
+    monkeypatch.setattr(
+        outbound_case.TestHostedOutboundPayment, "outbound_completion_pause", pause
+    )
+    trace = {}
+    if mode == "independent":
+        with pytest.raises(AssertionError, match="complete sample interval exceeded"):
+            _exercise_outbound_body(
+                tmp_path, monkeypatch, "normal", trace, sample_cost=1.2
+            )
+        assert not any(r["stage"] == "payment05_passed" for r in trace["events"])
+    else:
+        _exercise_outbound_body(tmp_path, monkeypatch, "normal", trace, sample_cost=1.2)
+        ts = trace["success_samples"]
+        assert len(ts) >= 3 and ts[-1] - ts[0] >= 5
+        assert max(b - a for a, b in zip(ts, ts[1:])) <= 2
+        passed = next(r for r in trace["events"] if r["stage"] == "payment05_passed")
+        assert passed["stability_seconds"] == pytest.approx(ts[-1] - ts[0])

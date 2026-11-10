@@ -331,6 +331,12 @@ class HostedEnvironmentReuse:
 class QueryEnvironmentPilot(HostedEnvironmentReuse):
     """The existing payment query guards remain specific to QUERY-04..06."""
 
+    @property
+    def outbound_completion_pause(self):
+        # Leave headroom for cumulative SDK records without weakening the 2s
+        # complete-sample limit or the five-second terminal observation window.
+        return 0.2 if self._query_mode == "shared" else 1
+
     def _check_query_environment(self):
         from test_cases.fiber.devnet.lsp.test_tenant_payment_queries import (
             _assert_query_funds,

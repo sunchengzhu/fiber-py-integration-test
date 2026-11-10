@@ -129,6 +129,7 @@ class HostedOutboundFixture(HostedTenantFixture):
     fnn_log_level = "trace"
     runtime_prefix = "lsp-payment05-"
     evidence_prefix = "lsp-payment05-"
+    outbound_completion_pause = 1
 
     def _payer_views(self, until):
         # Keep PAYMENT-05's four-role oracle: A denotes this payment's payer,
@@ -612,7 +613,7 @@ class HostedOutboundFixture(HostedTenantFixture):
                     raise AssertionError(
                         "terminal payment regressed during stability observation"
                     )
-                self._pause(completion_until, 1)
+                self._pause(completion_until, self.outbound_completion_pause)
         except _PaymentBudgetExpired:
             if time.monotonic() < min(completion_until, self.outbound_until) - 0.02:
                 self._fail_outbound(
