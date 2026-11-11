@@ -19,6 +19,10 @@ import uuid
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from scripts.lsp_parallel import validate_ports, validate_plan, wait_child, run_two_jobs
+
 SUITE = "test_cases/fiber/devnet/lsp"
 REVISION = "76307312e8de518c9a32074e6d16867c04de4f86"
 INVOICE = SUITE + "/test_tenant_boundaries.py::TestTenantQueryIsolation::"
@@ -177,7 +181,16 @@ def build_plan(nodeids, independent=False):
     return jobs
 
 
-def environment(bundle, directory=None, job=None, delivery=None, nolsp=None):
+def environment(
+    bundle,
+    directory=None,
+    job=None,
+    delivery=None,
+    nolsp=None,
+    *,
+    port_map=None,
+    worker_id=None,
+):
     # Prevent inherited shared flags, budgets, output paths or pytest -n options.
     env = {
         k: v
@@ -218,6 +231,9 @@ def environment(bundle, directory=None, job=None, delivery=None, nolsp=None):
             Path("tmp") / f"lsp-serial-{uuid.uuid4().hex}"
         )
         env["LSP_REGRESSION_SELECTORS"] = json.dumps(job["nodeids"])
+        if port_map is not None:
+            env["LSP_REGRESSION_PORTS"] = json.dumps(validate_ports(port_map))
+            env["LSP_REGRESSION_WORKER"] = str(worker_id)
         if any(
             n.split("::")[1]
             in (
@@ -272,11 +288,11 @@ def collect(selectors, output, env):
     ]
 
 
-def check_environment():
+def check_environment(ports=PORTS):
     free = shutil.disk_usage(ROOT).free
     if free < 8 * 2**30:
         raise RuntimeError(f"free disk below 8 GiB: {free} bytes")
-    for port in PORTS:
+    for port in ports:
         with socket.socket() as sock:
             sock.settimeout(0.2)
             if sock.connect_ex(("127.0.0.1", port)) == 0:
@@ -351,9 +367,30 @@ def native_outcomes(path, nodeids):
     return results
 
 
-def run_job(job, directory, bundle, timeout, delivery=None, nolsp=None):
+def run_job(
+    job,
+    directory,
+    bundle,
+    timeout,
+    delivery=None,
+    nolsp=None,
+    *,
+    port_map=None,
+    cancel_event=None,
+    worker_id=None,
+):
     directory.mkdir()
-    env = environment(bundle, directory, job, delivery, nolsp)
+    env = environment(
+        bundle, directory, job, delivery, nolsp, port_map=port_map, worker_id=worker_id
+    )
+
+    def check_job_environment():
+        return (
+            check_environment()
+            if port_map is None
+            else check_environment(port_map.values())
+        )
+
     runtime = ROOT / env["LSP_REGRESSION_RUNTIME"]
     if runtime.exists():
         raise ValueError(f"runtime already exists: {runtime}")
@@ -374,7 +411,7 @@ def run_job(job, directory, bundle, timeout, delivery=None, nolsp=None):
             k: v for k, v in env.items() if k.startswith("LSP_") or k == "CKB_CLI_HOME"
         },
         "started_at": datetime.now(timezone.utc).isoformat(),
-        "free_bytes_before": check_environment(),
+        "free_bytes_before": check_job_environment(),
         "errors": [],
     }
     write_json(directory / "command.json", record)
@@ -392,8 +429,15 @@ def run_job(job, directory, bundle, timeout, delivery=None, nolsp=None):
             )
             record["pid"] = process.pid
             try:
-                process.wait(timeout=timeout)
-            except (subprocess.TimeoutExpired, KeyboardInterrupt) as error:
+                if cancel_event is None:
+                    process.wait(timeout=timeout)
+                else:
+                    wait_child(process, timeout, cancel_event)
+            except (
+                subprocess.TimeoutExpired,
+                KeyboardInterrupt,
+                InterruptedError,
+            ) as error:
                 record["errors"].append(type(error).__name__)
                 # Interrupt pytest first so its fixture teardown can archive.
                 process.send_signal(signal.SIGINT)
@@ -415,7 +459,7 @@ def run_job(job, directory, bundle, timeout, delivery=None, nolsp=None):
                 directory / "junit.xml", job["nodeids"]
             )
             record["junit_sha256"] = digest(directory / "junit.xml")
-            record["free_bytes_after"] = check_environment()
+            record["free_bytes_after"] = check_job_environment()
         except (
             OSError,
             ValueError,
@@ -469,6 +513,13 @@ def main():
         type=Path,
         help="fresh aggregate native JUnit path; default: <output>/junit.xml",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        choices=(1, 2),
+        default=1,
+        help="default 1; 2 only accepts complete browser+filter pilot groups",
+    )
     args = parser.parse_args()
     if args.only_shared_groups and args.selectors:
         parser.error("--only-shared-groups cannot be combined with selectors")
@@ -496,6 +547,7 @@ def main():
     junit = (args.junitxml or output / "junit.xml").absolute()
     results = []
     nodeids = []
+    batch_started = time.monotonic()
     try:
         if junit.exists() or junit.is_symlink():
             raise ValueError(f"refusing to replace existing JUnit: {junit}")
@@ -503,6 +555,8 @@ def main():
         env = environment(bundle)
         nodeids = collect(selectors, output, env)
         jobs = build_plan(nodeids, args.independent)
+        if args.workers == 2:
+            validate_plan(jobs, GROUPS)
         write_json(
             output / "plan.json",
             {
@@ -510,10 +564,11 @@ def main():
                 "bundle": str(bundle),
                 "nodeids": nodeids,
                 "jobs": jobs,
+                "workers": args.workers,
             },
         )
         print(
-            f"{len(nodeids)} methods / {len(jobs)} serial jobs; evidence: {output}",
+            f"{len(nodeids)} methods / {len(jobs)} {'serial' if args.workers == 1 else '2-worker parallel'} jobs; evidence: {output}",
             flush=True,
         )
         if args.plan_only:
@@ -529,39 +584,46 @@ def main():
             and not args.nolsp_fnn
         ):
             raise ValueError("--nolsp-fnn is required for feature-off methods")
-        for index, job in enumerate(jobs):
-            row = run_job(
-                job,
-                output / f"job-{index:03d}",
-                bundle,
-                args.job_timeout,
-                args.delivery_node,
-                args.nolsp_fnn,
+        if args.workers == 2:
+            run_two_jobs(
+                jobs, output, bundle, args.job_timeout, run_job, results, write_json
             )
-            results.append(row)
-            print(
-                json.dumps(
-                    {
-                        "job": index,
-                        "group": job["group"],
-                        "outcomes": row.get("outcomes"),
-                        "seconds": row["duration_seconds"],
-                        "errors": row["errors"],
-                    }
-                ),
-                flush=True,
-            )
-            if row["errors"] or any(
-                v in ("error", "skipped", "not_run")
-                for v in row.get("outcomes", {}).values()
-            ):
-                raise RuntimeError("incomplete/unsafe job; batch stopped, no retry")
-            if QUALIFICATION in job["nodeids"] and row.get("exit_code") != 0:
-                raise RuntimeError(
-                    "Delivery qualification failed; fault tests not started"
+        else:
+            for index, job in enumerate(jobs):
+                row = run_job(
+                    job,
+                    output / f"job-{index:03d}",
+                    bundle,
+                    args.job_timeout,
+                    args.delivery_node,
+                    args.nolsp_fnn,
                 )
+                results.append(row)
+                print(
+                    json.dumps(
+                        {
+                            "job": index,
+                            "group": job["group"],
+                            "outcomes": row.get("outcomes"),
+                            "seconds": row["duration_seconds"],
+                            "errors": row["errors"],
+                        }
+                    ),
+                    flush=True,
+                )
+                if row["errors"] or any(
+                    v in ("error", "skipped", "not_run")
+                    for v in row.get("outcomes", {}).values()
+                ):
+                    raise RuntimeError("incomplete/unsafe job; batch stopped, no retry")
+                if QUALIFICATION in job["nodeids"] and row.get("exit_code") != 0:
+                    raise RuntimeError(
+                        "Delivery qualification failed; fault tests not started"
+                    )
         failed = any(
-            r.get("exit_code") != 0 or set(r["outcomes"].values()) != {"passed"}
+            r.get("exit_code") != 0
+            or r.get("errors")
+            or set(r["outcomes"].values()) != {"passed"}
             for r in results
         )
         return int(failed)
@@ -580,6 +642,8 @@ def main():
             output / "summary.json",
             {
                 "revision": REVISION,
+                "workers": args.workers,
+                "duration_seconds": time.monotonic() - batch_started,
                 "finished_jobs": len(results),
                 "counts": dict(
                     Counter(v for r in results for v in r.get("outcomes", {}).values())

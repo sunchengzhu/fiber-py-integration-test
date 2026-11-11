@@ -220,6 +220,15 @@ def _stop_verified_ckb(node):
     for pid in tuple(store):
         if not _pid_alive(pid):
             store.pop(pid, None)
+    # Parallel pilot nodes hold their direct Popen handle. Reap an exited child
+    # after the same identity-verified stop; never signal through an unverified
+    # handle or assume that a closed RPC socket means process exit.
+    process = getattr(node, "_lsp_process", None)
+    if process is not None and not _pid_alive(process.pid):
+        try:
+            process.wait(timeout=1)
+        except (OSError, subprocess.SubprocessError) as error:
+            errors.append(f"reap owned CKB child: {error!r}")
     return errors
 
 

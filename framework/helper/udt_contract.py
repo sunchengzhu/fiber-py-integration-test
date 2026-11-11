@@ -111,7 +111,9 @@ class UdtContract(CkbContract):
         return self.method[key]["args"], self.method[key]["data"]
 
 
-def issue_udt_tx(udt_contract, rpc_url, owner_private, account_private, amount):
+def issue_udt_tx(
+    udt_contract, rpc_url, owner_private, account_private, amount, *, tx_file=None
+):
     account = util_key_info_by_private_key(owner_private)
     account1 = util_key_info_by_private_key(account_private)
     invoke_arg, invoke_data = udt_contract.issue(account["lock_arg"], amount)
@@ -128,5 +130,6 @@ def issue_udt_tx(udt_contract, rpc_url, owner_private, account_private, amount):
         input_cells=[],
         output_lock_arg=account1["lock_arg"],
         skip_type_cells=True,
+        tx_file=tx_file,
     )
     return tx_hash
