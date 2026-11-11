@@ -10,12 +10,45 @@ import time
 import pytest
 
 from scripts.lsp_parallel import PILOT_CLASSES, validate_ports
+from scripts.lsp_ci_progress import emit
 from framework.test_node import CkbNode
+from framework.test_fiber import Fiber
 from framework.util import get_ckb_configs
 
 
+def install_runtime_retention():
+    """CI-only: retain stores for export, preserving all native stop callbacks."""
+    from framework.util import get_project_root
+    from test_cases.fiber.devnet.lsp._hosted_tenant_fixture import HostedTenantFixture
+
+    root = Path(get_project_root()).resolve()
+
+    def preserve(path):
+        path = Path(path).resolve()
+        if (
+            not path.is_relative_to(root / "tmp")
+            or path == root / "tmp"
+            or not path.relative_to(root / "tmp").parts[0].startswith("lsp-")
+        ):
+            raise RuntimeError(f"refusing to retain unrelated runtime: {path}")
+        destination = Path(os.environ["LSP_REGRESSION_CASE"]) / "retained-paths.jsonl"
+        with destination.open("a") as stream:
+            stream.write(json.dumps({"path": str(path)}) + "\n")
+
+    CkbNode.clean = lambda node: preserve(node.ckb_dir)
+    Fiber.clean = lambda node: preserve(node.tmp_path)
+
+    def keep_failed_setup(cls, root):
+        runtime = cls._runtime_dir(root)
+        if runtime is not None:
+            preserve(runtime)
+        return []
+
+    HostedTenantFixture._remove_runtime_dir = classmethod(keep_failed_setup)
+
+
 class PilotCkbNode(CkbNode):
-    """Own the pilot CKB child directly, without the legacy global pid.txt."""
+    """Own the pilot/CI CKB child directly, without the legacy global pid.txt."""
 
     @classmethod
     def init_dev_by_port(cls, config, directory, rpc_port, p2p_port):
@@ -32,11 +65,41 @@ class PilotCkbNode(CkbNode):
         self.ckb_pid = self._lsp_process.pid
         time.sleep(3)  # Preserve the framework's existing startup wait.
 
+    def stop(self):
+        self.stop_miner()
+        process = getattr(self, "_lsp_process", None)
+        if process is not None:
+            if process.poll() is None:
+                process.terminate()
+            process.wait(timeout=30)
+        self.ckb_pid = -1
+
+
+def pytest_runtest_logstart(nodeid, location):
+    emit("start", nodeid)
+
+
+def pytest_runtest_logreport(report):
+    detail = (
+        str(getattr(report, "longrepr", ""))[:4000]
+        if getattr(report, "failed", False)
+        else ""
+    )
+    emit(
+        "phase", report.nodeid, phase=report.when, outcome=report.outcome, detail=detail
+    )
+
+
+def pytest_runtest_logfinish(nodeid, location):
+    emit("finish", nodeid)
+
 
 def pytest_collection_modifyitems(items):
     expected = json.loads(os.environ["LSP_REGRESSION_SELECTORS"])
     if [item.nodeid for item in items] != expected:
         raise ValueError("native selection/order differs from the serial job plan")
+    if os.environ.get("LSP_REGRESSION_RETAIN") == "1":
+        install_runtime_retention()
     raw_ports = os.environ.get("LSP_REGRESSION_PORTS")
     ports = validate_ports(json.loads(raw_ports)) if raw_ports is not None else None
     if ports is not None and any(
@@ -47,6 +110,8 @@ def pytest_collection_modifyitems(items):
         )
     for item in items:
         item.cls.tmp_path_name = os.environ["LSP_REGRESSION_RUNTIME"]
+        if os.environ.get("LSP_REGRESSION_RETAIN") == "1":
+            item.cls.CkbNode = PilotCkbNode
         if ports is not None:
             item.cls.CkbNode = PilotCkbNode
             item.cls._lsp_parallel = True

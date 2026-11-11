@@ -5,7 +5,7 @@ import os
 
 from framework.util import get_project_root
 from test_cases.fiber.devnet.lsp._hosted_tenant_fixture import HostedTenantFixture
-from test_cases.fiber.devnet.lsp._lsp_test import REVISION
+from test_cases.fiber.devnet.lsp._lsp_test import REVISION, RETEST_REVISION
 from test_cases.fiber.devnet.lsp._query_environment import HostedEnvironmentReuse
 from test_cases.fiber.devnet.lsp.test_delayed_payment_recovery import _number
 
@@ -50,8 +50,8 @@ class InvoiceQueryEnvironment(HostedEnvironmentReuse):
     @classmethod
     def setup_class(cls):
         assert (
-            REVISION == FIXED_INVOICE_REVISION
-        ), "invoice query reuse is fixed to 76307312"
+            REVISION == FIXED_INVOICE_REVISION or REVISION == RETEST_REVISION
+        ), "invoice query reuse requires explicit pinned retest revision"
         disk = os.statvfs(get_project_root())
         if disk.f_bavail * disk.f_frsize < 8 * 2**30:
             raise RuntimeError("invoice-query qualification: free disk below 8GiB")

@@ -12,12 +12,13 @@ import requests
 from framework.util import get_project_root
 from test_cases.fiber.devnet.lsp._hosted_outbound import (
     FIXED_REVISION,
+    revision_allowed,
     HostedOutboundFixture,
     _active_target_tlcs,
     _number,
     _PaymentBudgetExpired,
 )
-from test_cases.fiber.devnet.lsp._lsp_test import REVISION
+from test_cases.fiber.devnet.lsp._lsp_test import REVISION, RETEST_REVISION
 from test_cases.fiber.devnet.lsp._query_environment import QueryEnvironmentPilot
 
 
@@ -163,7 +164,9 @@ class TestTenantPaymentQueries(QueryEnvironmentPilot, HostedOutboundFixture):
 
     @classmethod
     def setup_class(cls):
-        assert REVISION == FIXED_REVISION, "QUERY-04/05/06 are fixed to 76307312"
+        assert revision_allowed(
+            REVISION, RETEST_REVISION
+        ), "QUERY-04/05/06 require an explicit pinned retest revision"
         disk = os.statvfs(get_project_root())
         if disk.f_bavail * disk.f_frsize < 8 * 2**30:
             raise RuntimeError(
