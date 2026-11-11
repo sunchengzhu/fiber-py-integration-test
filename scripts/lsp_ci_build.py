@@ -140,6 +140,16 @@ def build(source, revision, target, output):
         env,
         guard,
     )
+    # Offline Cargo metadata also needs optional/platform crates that the base
+    # build did not compile. Warm the fixed product lock, without re-resolving it.
+    execute(
+        ["cargo", "fetch", "--locked", "--manifest-path", str(source / "Cargo.toml")],
+        source,
+        output / "locked-dependencies.log",
+        env,
+        guard,
+        300,
+    )
     execute(
         [
             sys.executable,

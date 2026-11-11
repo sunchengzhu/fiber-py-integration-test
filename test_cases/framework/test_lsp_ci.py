@@ -688,6 +688,88 @@ def test_batch_deadline_does_not_start_next_job_and_retains_unstarted_plan(
     assert ci.read(out / "summary.json")["unstarted_methods"] == nodes(1)
 
 
+@pytest.mark.parametrize("fetch_failure", [False, True])
+def test_cold_build_fetches_locked_dependencies_before_offline_delivery(
+    tmp_path, monkeypatch, fetch_failure
+):
+    root, source, target = (tmp_path / n for n in ("workspace", "product", "target"))
+    root.mkdir()
+    source.mkdir()
+    (source / "Cargo.toml").write_text("[workspace]\n")
+    lock = source / "Cargo.lock"
+    lock.write_text("version = 4\n# includes unbuilt optional/platform dependencies\n")
+    original_lock = lock.read_bytes()
+    cache = set()
+    stages = []
+    monkeypatch.setattr(builder, "ROOT", root)
+    monkeypatch.setattr(builder, "disk_guard", lambda *a, **kw: lambda: None)
+
+    def identity(command, **kwargs):
+        if command[:2] == ["git", "rev-parse"]:
+            return REVISION + "\n"
+        if command[:2] == ["git", "status"]:
+            return ""
+        assert command[-1] == "--version"
+        return "Fiber (" + REVISION[:7] + ")"
+
+    monkeypatch.setattr(builder.subprocess, "check_output", identity)
+
+    def put(relative):
+        p = root / relative
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"synthetic binary")
+
+    def execute(command, cwd, log_path, env, guard, timeout=5400):
+        log_path.write_text("synthetic build step\n")
+        assert (source / "Cargo.lock").read_bytes() == original_lock
+        guard()
+        if str(command[1]).endswith("download.py"):
+            stages.append("ckb")
+            put("download/0.202.0/ckb")
+            put("download/0.202.0/ckb-cli")
+            (root / "source").mkdir()
+        elif str(command[1]).endswith("build_lsp_test_binaries.py"):
+            stages.append("base")
+            put("download/fiber/pr-1623-" + REVISION[:7] + "/fnn")
+        elif command[:2] == ["cargo", "fetch"]:
+            stages.append("fetch")
+            assert command == [
+                "cargo",
+                "fetch",
+                "--locked",
+                "--manifest-path",
+                str(source / "Cargo.toml"),
+            ]
+            assert cwd == source and timeout == 300
+            if fetch_failure:
+                raise RuntimeError("synthetic dependency fetch failed")
+            cache.add("bincode-2.0.1")
+        elif str(command[1]).endswith("build_lsp_delivery_node.py"):
+            stages.append("delivery")
+            if "bincode-2.0.1" not in cache:
+                raise RuntimeError("bincode missing; --offline was specified")
+            put("download/fiber/delivery-" + REVISION[:7] + "/lsp-delivery-node")
+        else:
+            assert command[:2] == ["cargo", "build"] and "--locked" in command
+            stages.append("nolsp")
+            (target / "debug").mkdir(parents=True)
+            (target / "debug/fnn").write_bytes(b"synthetic fnn")
+
+    monkeypatch.setattr(builder, "execute", execute)
+    output = root / "output"
+    if fetch_failure:
+        with pytest.raises(RuntimeError, match="dependency fetch failed"):
+            builder.build(source, REVISION, target, output)
+        assert stages == ["ckb", "base", "fetch"]
+        assert not (output / "runtime.tar.gz").exists()
+    else:
+        builder.build(source, REVISION, target, output)
+        assert stages == ["ckb", "base", "fetch", "delivery", "nolsp"]
+        assert ci.read(output / "runtime-manifest.json")["revision"] == REVISION
+        assert (output / "runtime.tar.gz").is_file()
+    assert lock.read_bytes() == original_lock
+
+
 def test_workflow_has_no_schedule_no_runtime_parallel_and_always_reports():
     workflow = yaml.load(
         (runner.ROOT / ".github/workflows/lsp-ci.yml").read_text(),
