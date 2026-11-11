@@ -103,9 +103,11 @@ class PortLease:
             self.stream.close()  # OS releases the lease; the lock inode stays stable.
 
 
-def wait_child(process, timeout, cancel):
+def wait_child(process, timeout, cancel, tick=None):
     until = time.monotonic() + timeout
     while True:
+        if tick is not None:
+            tick()
         if cancel.is_set():
             raise InterruptedError("parallel batch interrupted")
         remaining = until - time.monotonic()

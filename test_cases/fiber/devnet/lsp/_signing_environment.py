@@ -118,9 +118,15 @@ class SigningEnvironment:
                     isinstance(selected, list) and len(selected) == 1
                 ), "independent keep-runtime requires one method per serial job"
             if cls._node_mode == "shared":
-                from test_cases.fiber.devnet.lsp._lsp_test import REVISION
+                from test_cases.fiber.devnet.lsp._lsp_test import (
+                    DEFAULT_REVISION,
+                    REVISION,
+                    RETEST_REVISION,
+                )
 
-                assert REVISION == "76307312e8de518c9a32074e6d16867c04de4f86"
+                assert (
+                    REVISION == DEFAULT_REVISION or REVISION == RETEST_REVISION
+                ), "shared signing requires explicit pinned retest revision"
                 assert (
                     cls.__name__ in SIGNING_METHODS
                 ), "class not qualified for signing reuse"

@@ -14,6 +14,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import uuid
 import xml.etree.ElementTree as ET
@@ -22,9 +23,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from scripts.lsp_parallel import validate_ports, validate_plan, wait_child, run_two_jobs
+from scripts.lsp_ci_progress import DiskBudgetExceeded, disk_guard
 
 SUITE = "test_cases/fiber/devnet/lsp"
 REVISION = "76307312e8de518c9a32074e6d16867c04de4f86"
+DEFAULT_REVISION = REVISION
 INVOICE = SUITE + "/test_tenant_boundaries.py::TestTenantQueryIsolation::"
 PAYMENT = SUITE + "/test_tenant_payment_queries.py::TestTenantPaymentQueries::"
 GROUPS = {
@@ -378,11 +381,18 @@ def run_job(
     port_map=None,
     cancel_event=None,
     worker_id=None,
+    progress=False,
+    guard=None,
+    retain_runtime=False,
 ):
     directory.mkdir()
     env = environment(
         bundle, directory, job, delivery, nolsp, port_map=port_map, worker_id=worker_id
     )
+    if progress:
+        env["LSP_REGRESSION_PROGRESS"] = "1"
+    if retain_runtime:
+        env["LSP_REGRESSION_RETAIN"] = "1"
 
     def check_job_environment():
         return (
@@ -428,8 +438,28 @@ def run_job(
                 start_new_session=True,
             )
             record["pid"] = process.pid
+            write_json(directory / "command.json", record)
             try:
-                if cancel_event is None:
+                if progress or guard is not None:
+                    from scripts.lsp_ci_progress import display_events
+
+                    cursor = [0]
+
+                    def tick():
+                        if guard is not None:
+                            guard()
+                        if progress:
+                            display_events(directory, job["nodeids"], cursor)
+
+                    wait_child(
+                        process,
+                        timeout,
+                        cancel_event or threading.Event(),
+                        tick=tick,
+                    )
+                    if progress:
+                        display_events(directory, job["nodeids"], cursor)
+                elif cancel_event is None:
                     process.wait(timeout=timeout)
                 else:
                     wait_child(process, timeout, cancel_event)
@@ -437,8 +467,16 @@ def run_job(
                 subprocess.TimeoutExpired,
                 KeyboardInterrupt,
                 InterruptedError,
+                DiskBudgetExceeded,
             ) as error:
-                record["errors"].append(type(error).__name__)
+                record["errors"].append(
+                    type(error).__name__
+                    + (
+                        ": " + str(error)
+                        if isinstance(error, DiskBudgetExceeded)
+                        else ""
+                    )
+                )
                 # Interrupt pytest first so its fixture teardown can archive.
                 process.send_signal(signal.SIGINT)
                 try:
@@ -476,6 +514,7 @@ def run_job(
 
 
 def main():
+    global REVISION
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "selectors",
@@ -502,12 +541,33 @@ def main():
         type=Path,
         help="fresh evidence directory; default: local-evidence/<unique batch>",
     )
+    parser.add_argument("--bundle", type=Path)
     parser.add_argument(
-        "--bundle", type=Path, default=ROOT / "download/fiber/pr-1623-7630731"
+        "--revision", default=DEFAULT_REVISION, help="Exact Fiber commit SHA"
+    )
+    parser.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream native per-case lifecycle events",
+    )
+    parser.add_argument(
+        "--disk-budget-gib",
+        type=float,
+        help="Optional serial batch growth limit, preserving 8GiB free",
     )
     parser.add_argument("--delivery-node", type=Path)
     parser.add_argument("--nolsp-fnn", type=Path)
     parser.add_argument("--job-timeout", type=float, default=1800)
+    parser.add_argument(
+        "--batch-timeout",
+        type=float,
+        help="Optional serial batch deadline; reserves native cleanup after interruption",
+    )
+    parser.add_argument(
+        "--retain-runtime",
+        action="store_true",
+        help="CI-only: retain stopped stores for artifact export",
+    )
     parser.add_argument(
         "--junitxml",
         type=Path,
@@ -521,6 +581,30 @@ def main():
         help="default 1; 2 only accepts complete browser+filter pilot groups",
     )
     args = parser.parse_args()
+    if args.batch_timeout is not None and (
+        not math.isfinite(args.batch_timeout)
+        or args.batch_timeout <= 0
+        or args.workers != 1
+    ):
+        parser.error("--batch-timeout requires a positive finite value and workers=1")
+    if args.disk_budget_gib is not None and (
+        not math.isfinite(args.disk_budget_gib)
+        or args.disk_budget_gib <= 0
+        or args.workers != 1
+    ):
+        parser.error("--disk-budget-gib requires a positive finite value and workers=1")
+    if len(args.revision) != 40 or any(
+        c not in "0123456789abcdef" for c in args.revision
+    ):
+        parser.error("--revision must be a full lowercase commit SHA")
+    if args.workers == 2 and args.revision != DEFAULT_REVISION:
+        parser.error(
+            "2-worker pilot is qualified only for the default 76307312 revision"
+        )
+    if args.workers == 2 and args.retain_runtime:
+        parser.error("--retain-runtime currently requires serial workers=1")
+    REVISION = args.revision
+    args.bundle = args.bundle or ROOT / "download/fiber" / f"pr-1623-{REVISION[:7]}"
     if args.only_shared_groups and args.selectors:
         parser.error("--only-shared-groups cannot be combined with selectors")
     if not math.isfinite(args.job_timeout) or args.job_timeout <= 0:
@@ -556,6 +640,8 @@ def main():
         nodeids = collect(selectors, output, env)
         jobs = build_plan(nodeids, args.independent)
         if args.workers == 2:
+            if args.progress:
+                raise ValueError("live progress currently requires serial workers=1")
             validate_plan(jobs, GROUPS)
         write_json(
             output / "plan.json",
@@ -575,7 +661,7 @@ def main():
             return 0
         manifest = bundle / "build.json"
         if json.loads(manifest.read_text())["revision"] != REVISION:
-            raise ValueError("bundle is not the fixed 76307312 revision")
+            raise ValueError("bundle does not match the selected revision")
         shutil.copy2(manifest, output / "build.json")
         if any(is_delivery(n) for n in nodeids) and not args.delivery_node:
             raise ValueError("--delivery-node is required for Delivery methods")
@@ -589,14 +675,41 @@ def main():
                 jobs, output, bundle, args.job_timeout, run_job, results, write_json
             )
         else:
+            guard = (
+                disk_guard(ROOT, args.disk_budget_gib)
+                if args.disk_budget_gib is not None
+                else None
+            )
             for index, job in enumerate(jobs):
+                remaining = args.job_timeout
+                if args.batch_timeout is not None:
+                    remaining = min(
+                        remaining,
+                        args.batch_timeout - (time.monotonic() - batch_started),
+                    )
+                    if remaining <= 0:
+                        raise RuntimeError(
+                            "serial batch deadline exhausted; remaining methods not started"
+                        )
+                print(
+                    f"[LSP group {index + 1}/{len(jobs)}] {job['group'] or job['nodeids'][0]}",
+                    flush=True,
+                )
+                options = {}
+                if args.progress:
+                    options["progress"] = True
+                if guard is not None:
+                    options["guard"] = guard
+                if args.retain_runtime:
+                    options["retain_runtime"] = True
                 row = run_job(
                     job,
                     output / f"job-{index:03d}",
                     bundle,
-                    args.job_timeout,
+                    remaining,
                     args.delivery_node,
                     args.nolsp_fnn,
+                    **options,
                 )
                 results.append(row)
                 print(

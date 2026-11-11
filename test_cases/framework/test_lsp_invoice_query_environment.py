@@ -379,10 +379,28 @@ def test_mode_is_separate_from_payment_query_switch(monkeypatch):
         invoice_env.InvoiceQueryEnvironment.setup_class()
 
 
-def test_fixed_revision_rejects_other_head_before_node_start(monkeypatch):
+def test_unpinned_revision_rejects_other_head_before_node_start(monkeypatch):
     monkeypatch.setattr(invoice_env, "REVISION", "different-head")
-    with pytest.raises(AssertionError, match="fixed to 76307312"):
+    with pytest.raises(AssertionError, match="explicit pinned retest revision"):
         invoice_env.InvoiceQueryEnvironment.setup_class()
+
+
+def test_explicit_matching_retest_revision_reaches_original_setup(monkeypatch):
+    called = []
+    monkeypatch.setattr(invoice_env, "REVISION", "a" * 40)
+    monkeypatch.setattr(invoice_env, "RETEST_REVISION", "a" * 40)
+    monkeypatch.setattr(
+        invoice_env.os,
+        "statvfs",
+        lambda _: SimpleNamespace(f_bavail=16 * 2**30, f_frsize=1),
+    )
+    monkeypatch.setattr(
+        lifecycle.HostedEnvironmentReuse,
+        "setup_class",
+        classmethod(lambda cls: called.append(cls)),
+    )
+    invoice_env.InvoiceQueryEnvironment.setup_class()
+    assert called == [invoice_env.InvoiceQueryEnvironment]
 
 
 def test_independent_repeated_cleanup_does_not_query_or_archive_again(environment):
