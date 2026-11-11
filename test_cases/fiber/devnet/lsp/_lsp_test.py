@@ -423,7 +423,17 @@ class LspTestBase(SigningEnvironment, FiberTest):
             f"LSP integration binaries: {manifest['fnn_version']}, "
             f"SDK source {REVISION}, bundle manifest {cls.bundle_manifest_sha256}"
         )
-        for port in (8114, 8125, 8227, 8228, 8229, 8230):
+        ports = (
+            cls.ckb_rpc_port,
+            cls.ckb_p2p_port,
+            cls.fiber1_rpc_port,
+            cls.fiber1_p2p_port,
+            cls.fiber2_rpc_port,
+            cls.fiber2_p2p_port,
+        )
+        if getattr(cls, "lsp_ws_port", None) is not None:
+            ports += (cls.lsp_ws_port,)
+        for port in ports:
             with socket.socket() as sock:
                 assert (
                     sock.connect_ex(("127.0.0.1", port)) != 0
@@ -667,6 +677,11 @@ class LspTestBase(SigningEnvironment, FiberTest):
             self.account1_private_key,
             self.account1_private_key,
             1000 * 100000000,
+            **(
+                {"tx_file": str(Path(self.node.ckb_dir) / "udt-issue.json")}
+                if getattr(self, "_lsp_parallel", False)
+                else {}
+            ),
         )
         self.Miner.miner_until_tx_committed(self.node, tx_hash)
         self.node.start_miner()
@@ -695,9 +710,11 @@ class LspTestBase(SigningEnvironment, FiberTest):
         config = config.replace(
             "  enabled_modules:\n", "  enabled_modules:\n    - lsp\n"
         )
-        with socket.socket() as sock:
-            sock.bind(("127.0.0.1", 0))
-            ws_port = sock.getsockname()[1]
+        ws_port = getattr(self, "lsp_ws_port", None)
+        if ws_port is None:
+            with socket.socket() as sock:
+                sock.bind(("127.0.0.1", 0))
+                ws_port = sock.getsockname()[1]
         self.ws_url = f"ws://127.0.0.1:{ws_port}"
         config = config.replace(
             "rpc:\n",

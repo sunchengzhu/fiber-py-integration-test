@@ -231,6 +231,8 @@ def invoke_ckb_contract(
     input_cells=[],
     output_lock_arg="0x470dcdc5e44064909650113a274b3b36aecb6dc7",
     skip_type_cells=False,
+    *,
+    tx_file=None,
 ):
     """
 
@@ -245,6 +247,7 @@ def invoke_ckb_contract(
         api_url:
         skip_type_cells: Exclude live cells with a type script from automatic
             capacity input selection. Explicit ``input_cells`` are unchanged.
+        tx_file: Optional caller-owned transaction file, for isolated runtimes.
 
     Returns:
 
@@ -354,7 +357,7 @@ def invoke_ckb_contract(
         "index": hex(contract_out_point_tx_index),
     }
     # tx file init
-    tmp_tx_file = "/tmp/demo.json"
+    tmp_tx_file = tx_file if tx_file is not None else "/tmp/demo.json"
     tx_init(tmp_tx_file, api_url)
     tx_add_multisig_config(account_address, tmp_tx_file, api_url)
     # add input
