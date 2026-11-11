@@ -36,6 +36,10 @@ class _FilterSubscriptionBase(SubscriptionTestBase):
 
     @classmethod
     def teardown_class(cls):
+        if getattr(cls, "_node_mode", "independent") == "shared" or getattr(
+            cls, "_node_keep", False
+        ):
+            return super().teardown_class()
         # Keep the class chain even after archive failure; do not call node.clean().
         try:
             if "node" in cls.__dict__:
@@ -230,6 +234,12 @@ class _FilterSubscriptionBase(SubscriptionTestBase):
         return outcome.success
 
     def teardown_method(self, method):
+        if self._node_mode == "shared" or self._node_keep:
+            try:
+                self._save_evidence()
+                return super().teardown_method(method)
+            finally:
+                framework_config.TMP_PATH = self._method_tmp_before
         self._begin_cleanup()
         try:
             with self._budget(30, self.cleanup_until - 2):
@@ -474,6 +484,7 @@ class _FilterSubscriptionBase(SubscriptionTestBase):
         with self._budget(120):
             self._finish_channels()  # Preserves the existing 300-second window guard.
             host = self._rpc(self.fiber1.client, "list_channels", [{}])["channels"]
+            host = self._current_host_channels(host)
             assert {c["channel_id"] for c in host} == {
                 t["channel_id"] for t in self.tenants
             }

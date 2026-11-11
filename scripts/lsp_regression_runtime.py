@@ -16,9 +16,25 @@ def pytest_collection_modifyitems(items):
         item.cls.tmp_path_name = os.environ["LSP_REGRESSION_RUNTIME"]
 
 
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    report = outcome.get_result()
+    case = getattr(item, "instance", None)
+    if case is not None and (
+        getattr(case, "_node_mode", "independent") == "shared"
+        or getattr(case, "_node_keep", False)
+    ):
+        if report.when == "call":
+            case._node_case_passed = report.passed
+        if report.failed or report.skipped:
+            type(case)._node_failed = True
+
+
 @pytest.hookimpl(hookwrapper=True, tryfirst=True)
 def pytest_runtest_teardown(item, nextitem):
     errors, sources = [], []
+    instance = None
     try:
         instance = getattr(item, "instance", None)
         node = getattr(item.cls, "node", None)
@@ -60,6 +76,16 @@ def pytest_runtest_teardown(item, nextitem):
         )
     except Exception as error:
         errors.append(repr(error))
+    # Mark the owner before fixture/class teardown, including on the last case.
+    if (
+        errors
+        and instance is not None
+        and (
+            getattr(instance, "_node_mode", "independent") == "shared"
+            or getattr(instance, "_node_keep", False)
+        )
+    ):
+        type(instance)._node_failed = True
     # Evidence failures must never prevent the fixture's own resource cleanup.
     yield
     if errors:

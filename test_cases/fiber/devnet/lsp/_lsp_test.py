@@ -22,6 +22,7 @@ from framework.util import get_project_root
 from test_cases.fiber.devnet.lsp._signer_gate import SignatureGate
 from test_cases.fiber.devnet.lsp._retry_signer_gate import RetrySignatureGate
 from test_cases.fiber.devnet.lsp._subscription_observer import SubscriptionProxy
+from test_cases.fiber.devnet.lsp._signing_environment import SigningEnvironment
 
 PROJECT_ROOT = Path(get_project_root()).resolve()
 DEFAULT_REVISION = "76307312e8de518c9a32074e6d16867c04de4f86"
@@ -388,7 +389,7 @@ def start_owned_lsp_nodes(
         raise
 
 
-class LspTestBase(FiberTest):
+class LspTestBase(SigningEnvironment, FiberTest):
     tenant_labels = ("A", "B")
     gate_class = SignatureGate
     channel_open_options = {"commitment_delay_epoch": "0x10000000001"}
@@ -629,6 +630,8 @@ class LspTestBase(FiberTest):
 
     def setup_method(self, method):
         # Keep FiberTest's fresh nodes, chain preparation and cleanup contract.
+        if self._bind_shared_signing_nodes(method, LspTestBase.setup_method):
+            return
         started = time.monotonic()
         self.did_pass = None
         self.beginNum = hex(self.node.getClient().get_tip_block_number())
@@ -765,7 +768,7 @@ class LspTestBase(FiberTest):
             self.Miner.miner_until_tx_committed(self.node, tx_hash, True)
 
         for label, private_key in zip(self.tenant_labels, funding_accounts):
-            directory = Path(self.fiber1.tmp_path) / f"sdk-{label}"
+            directory = self._sdk_directory(label)
             directory.mkdir()
             status_file = directory / "status.json"
             gate = self.gate_class(self.fiber1.client.url)
@@ -997,6 +1000,8 @@ class LspTestBase(FiberTest):
                 shutil.copy2(source, destination / name)
 
     def teardown_method(self, method):
+        if self._shared_signing_teardown(method):
+            return
         if not os.environ.get("LSP_RUN_ARTIFACTS"):
             return super().teardown_method(method)
         # Do not let the generic failure archiver replace an older report/<method>.
