@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run ordinary LSP tests serially; reuse only the two validated query groups."""
+"""Run ordinary LSP tests serially; reuse only explicitly qualified environment groups."""
 
 import argparse
 from collections import Counter
@@ -24,6 +24,92 @@ REVISION = "76307312e8de518c9a32074e6d16867c04de4f86"
 INVOICE = SUITE + "/test_tenant_boundaries.py::TestTenantQueryIsolation::"
 PAYMENT = SUITE + "/test_tenant_payment_queries.py::TestTenantPaymentQueries::"
 GROUPS = {
+    "subscription-auth": tuple(
+        SUITE + "/test_signing_subscriptions.py::TestInvalidSubscriptions::" + name
+        for name in (
+            "test_missing_token_does_not_disrupt_subscription",
+            "test_invalid_token_does_not_disrupt_subscription",
+            "test_missing_subscription_write_does_not_disrupt_subscription",
+            "test_missing_channel_read_does_not_disrupt_subscription",
+        )
+    ),
+    "browser-auth": tuple(
+        SUITE
+        + "/test_browser_signing_subscriptions.py::TestBrowserSigningSubscriptions::"
+        + name
+        for name in (
+            "test_browser_registration_token_receives_real_work",
+            "test_browser_padded_token_and_bearer_inputs_are_compatible",
+            "test_browser_missing_protocol_rejected_by_server",
+            "test_browser_multiple_credentials_rejected_by_server",
+            "test_browser_conflicting_credentials_rejected_by_server",
+            "test_browser_empty_credential_rejected_by_server",
+            "test_browser_invalid_encoding_rejected_by_server",
+            "test_browser_invalid_biscuit_rejected_after_upgrade",
+            "test_browser_missing_write_rejected_after_upgrade",
+            "test_browser_missing_read_rejected_after_upgrade",
+        )
+    ),
+    "subscription-filters": tuple(
+        SUITE
+        + "/test_signing_subscription_filters.py::TestSigningSubscriptionFilters::"
+        + name
+        for name in (
+            "test_default_option_forms",
+            "test_explicit_and_duplicate_channel_ids",
+            "test_empty_channel_filter",
+            "test_invalid_topic_and_options_field",
+            "test_invalid_parameter_types",
+            "test_invalid_hash_lengths_and_null_element",
+            "test_invalid_hex_and_options_sequences",
+            "test_unknown_channel_and_mixed_orders",
+            "test_256_repeated_channel_ids",
+            "test_257_repeated_channel_ids_rejected",
+            "test_fixed_version_options_array_compatibility",
+        )
+    ),
+    "subscription-streams": tuple(
+        SUITE + "/test_signing_subscriptions.py::TestSigningSubscriptions::" + name
+        for name in (
+            "test_initial_subscription_preserves_pending_request",
+            "test_next_request_arrives_on_original_subscription",
+            "test_reconnect_replays_unsubmitted_request",
+            "test_sdk_reconnects_without_restart",
+            "test_reconnect_replays_only_current_request",
+            "test_same_tenant_connections_receive_independent_updates",
+            "test_unsubscribe_preserves_other_subscriptions",
+            "test_cross_connection_and_unknown_unsubscribe_preserve_subscriptions",
+        )
+    ),
+    "signing-retry": tuple(
+        SUITE + "/test_channel_signing_retry.py::TestChannelSigningRetry::" + name
+        for name in (
+            "test_identical_retry_preserves_next_request",
+            "test_conflicting_retry_preserves_original_receipt",
+            "test_older_receipt_is_rejected_after_next_apply",
+            "test_unsent_signature_recovers_after_disconnect",
+            "test_applied_signature_recovers_after_http_timeout",
+        )
+    ),
+    "signing-isolation": tuple(
+        SUITE
+        + "/test_channel_signing_isolation.py::TestChannelSigningIsolation::"
+        + name
+        for name in (
+            "test_pending_tenant_does_not_block_another_tenant",
+            "test_tenant_cannot_read_another_tenants_signing_request",
+            "test_tenant_cannot_submit_another_tenants_valid_signature",
+        )
+    ),
+    "invoice-cancel": tuple(
+        SUITE
+        + "/test_hosted_invoice_cancellation.py::TestHostedInvoiceCancellation::"
+        + name
+        for name in (
+            "test_open_invoice_cancelled_old_payment_fails_new_payment_succeeds",
+            "test_received_invoice_without_preimage_can_be_cancelled",
+        )
+    ),
     "invoice-query": tuple(
         INVOICE + name
         for name in (
@@ -104,8 +190,12 @@ def environment(bundle, directory=None, job=None, delivery=None, nolsp=None):
         LSP_TEST_BUNDLE=str(bundle),
         LSP_QUERY_ENV_MODE="independent",
         LSP_INVOICE_QUERY_ENV_MODE="independent",
+        LSP_CANCEL_ENV_MODE="independent",
+        LSP_SIGNING_ENV_MODE="independent",
+        LSP_SIGNING_KEEP_RUNTIME="0",
         LSP_QUERY_KEEP_RUNTIME="1",
         LSP_INVOICE_QUERY_KEEP_RUNTIME="1",
+        LSP_CANCEL_KEEP_RUNTIME="1",
         PYTHONPATH=str(ROOT),
         PYTHONDONTWRITEBYTECODE="1",
         PYTHONUNBUFFERED="1",
@@ -128,12 +218,31 @@ def environment(bundle, directory=None, job=None, delivery=None, nolsp=None):
             Path("tmp") / f"lsp-serial-{uuid.uuid4().hex}"
         )
         env["LSP_REGRESSION_SELECTORS"] = json.dumps(job["nodeids"])
-        if job["group"]:
-            variable = (
-                "LSP_QUERY_ENV_MODE"
-                if job["group"] == "payment-query"
-                else "LSP_INVOICE_QUERY_ENV_MODE"
+        if any(
+            n.split("::")[1]
+            in (
+                "TestChannelSigningRetry",
+                "TestChannelSigningIsolation",
+                "TestSigningSubscriptions",
+                "TestInvalidSubscriptions",
+                "TestBrowserSigningSubscriptions",
+                "TestSigningSubscriptionFilters",
             )
+            for n in job["nodeids"]
+        ):
+            env["LSP_SIGNING_KEEP_RUNTIME"] = "1"
+        if job["group"]:
+            variable = {
+                "payment-query": "LSP_QUERY_ENV_MODE",
+                "invoice-query": "LSP_INVOICE_QUERY_ENV_MODE",
+                "invoice-cancel": "LSP_CANCEL_ENV_MODE",
+                "signing-retry": "LSP_SIGNING_ENV_MODE",
+                "signing-isolation": "LSP_SIGNING_ENV_MODE",
+                "subscription-streams": "LSP_SIGNING_ENV_MODE",
+                "subscription-auth": "LSP_SIGNING_ENV_MODE",
+                "browser-auth": "LSP_SIGNING_ENV_MODE",
+                "subscription-filters": "LSP_SIGNING_ENV_MODE",
+            }[job["group"]]
             env[variable] = "shared"
         env["LSP_PAYMENT04_ROW_START"] = str(time.monotonic())
     if delivery:
@@ -181,6 +290,9 @@ def group_exists(pgid):
         return True
     except ProcessLookupError:
         return False
+    except PermissionError:
+        # EPERM is not proof of exit, including transient orphan/zombie groups.
+        return True
 
 
 def interrupt_on_termination(signum, _frame):
@@ -198,6 +310,9 @@ def drain_group(process):
             os.killpg(process.pid, sig)
         except ProcessLookupError:
             break
+        except PermissionError:
+            # Continue bounded probing; persistent denial must still fail below.
+            pass
         until = time.monotonic() + 5
         while group_exists(process.pid) and time.monotonic() < until:
             process.poll()
@@ -326,7 +441,7 @@ def main():
     parser.add_argument(
         "--only-shared-groups",
         action="store_true",
-        help="select exactly the seven validated methods",
+        help="select exactly the qualified shared groups",
     )
     parser.add_argument(
         "--independent",

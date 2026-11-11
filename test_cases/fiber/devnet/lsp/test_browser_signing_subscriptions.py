@@ -355,6 +355,7 @@ class _BrowserSubscriptionBase(SubscriptionTestBase):
             host_channels = self._rpc(self.fiber1.client, "list_channels", [{}])[
                 "channels"
             ]
+            host_channels = self._current_host_channels(host_channels)
             assert len(host_channels) == len(self.tenants), host_channels
             assert {c["channel_id"] for c in host_channels} == {
                 t["channel_id"] for t in self.tenants

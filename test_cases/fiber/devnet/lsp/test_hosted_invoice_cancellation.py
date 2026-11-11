@@ -14,6 +14,7 @@ import time
 import yaml
 
 from framework.util import get_project_root
+from test_cases.fiber.devnet.lsp._cancel_environment import CancellationEnvironment
 from test_cases.fiber.devnet.lsp._hosted_tenant_fixture import HostedTenantFixture
 from test_cases.fiber.devnet.lsp._lsp_test import (
     DEFAULT_REVISION,
@@ -385,7 +386,7 @@ class _CancellationBase(HostedTenantFixture):
             self._pause(until, 0.1)
 
 
-class TestHostedInvoiceCancellation(_CancellationBase):
+class TestHostedInvoiceCancellation(CancellationEnvironment, _CancellationBase):
     # TEST-MAP: LSP-INVOICE-CANCEL-01
     def test_open_invoice_cancelled_old_payment_fails_new_payment_succeeds(self):
         """

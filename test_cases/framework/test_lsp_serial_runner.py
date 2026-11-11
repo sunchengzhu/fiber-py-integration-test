@@ -19,7 +19,11 @@ import framework.test_node as node_module
 from scripts import lsp_regression_runtime as runtime
 from scripts import run_lsp_regression as runner
 
-SEVEN = [nodeid for group in runner.GROUPS.values() for nodeid in group]
+SEVEN = [
+    nodeid
+    for name in ("invoice-query", "payment-query")
+    for nodeid in runner.GROUPS[name]
+]
 EVICT = runner.INVOICE + "test_tenant_token_cannot_evict_tenants"
 
 
@@ -93,6 +97,22 @@ def test_environment_does_not_leak_shared_flags_budgets_or_pytest_parallelism(
     )
     assert env["LSP_INVOICE_QUERY_ENV_MODE"] == (
         "shared" if group == "invoice-query" else "independent"
+    )
+    assert env["LSP_CANCEL_ENV_MODE"] == (
+        "shared" if group == "invoice-cancel" else "independent"
+    )
+    assert env["LSP_SIGNING_ENV_MODE"] == (
+        "shared"
+        if group
+        in (
+            "subscription-auth",
+            "browser-auth",
+            "subscription-filters",
+            "subscription-streams",
+            "signing-retry",
+            "signing-isolation",
+        )
+        else "independent"
     )
     assert env["PYTEST_ADDOPTS"] == "" and "PYTEST_PLUGINS" not in env
     assert "LSP_WATCHTOWER_ROUND_UNTIL" not in env
@@ -375,3 +395,61 @@ def test_sigterm_uses_job_cleanup_and_retains_failure_report(tmp_path):
         if parent.poll() is None:
             parent.kill()
             parent.wait(timeout=5)
+
+
+@pytest.mark.parametrize("group", list(runner.GROUPS))
+def test_every_group_partial_selection_stays_independent(group):
+    selected = list(runner.GROUPS[group][:-1])
+    assert runner.build_plan(selected) == [
+        {"group": None, "nodeids": [n]} for n in selected
+    ]
+
+
+def test_all_groups_execute_exactly_once_and_keep_destructive_methods_separate():
+    excluded = [
+        EVICT,
+        runner.SUITE
+        + "/test_signing_subscriptions.py::TestSigningSubscriptions::test_operator_subscribes_only_to_host_signing_state",
+        runner.SUITE
+        + "/test_channel_signing_retry.py::TestChannelSigningRetry::test_payment_retry_settles_balances_once",
+    ]
+    selected = [n for values in runner.GROUPS.values() for n in values] + excluded
+    assert len(set(selected)) == len(selected)
+    jobs = runner.build_plan(selected)
+    assert len(jobs) == len(runner.GROUPS) + len(excluded)
+    assert sorted(n for j in jobs for n in j["nodeids"]) == sorted(selected)
+    assert all(
+        j["group"] is None for j in jobs if any(n in excluded for n in j["nodeids"])
+    )
+
+
+@pytest.mark.parametrize("disappears", [True, False])
+def test_permission_denial_never_counts_as_process_group_exit(monkeypatch, disappears):
+    calls, waited = [], []
+    denied = False
+
+    def signal_group(pgid, sig):
+        nonlocal denied
+        calls.append((pgid, sig))
+        if disappears and denied and sig == 0:
+            raise ProcessLookupError()
+        if sig != 0:
+            denied = True
+        raise PermissionError("temporary or persistent denial")
+
+    monkeypatch.setattr(runner.os, "killpg", signal_group)
+    monkeypatch.setattr(runner.time, "monotonic", iter(range(100)).__next__)
+    monkeypatch.setattr(runner.time, "sleep", lambda _: None)
+    process = SimpleNamespace(
+        pid=12345, poll=lambda: 0, wait=lambda timeout: waited.append(timeout)
+    )
+    assert runner.group_exists(process.pid)  # EPERM cannot claim absence.
+    if disappears:
+        assert runner.drain_group(process)
+        assert not runner.group_exists(process.pid)
+    else:
+        with pytest.raises(RuntimeError, match="owned process group still exists"):
+            runner.drain_group(process)
+        assert (process.pid, signal.SIGKILL) in calls
+    assert waited == [1]
+    assert {pgid for pgid, _ in calls} == {process.pid}
