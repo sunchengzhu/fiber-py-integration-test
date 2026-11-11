@@ -10,7 +10,7 @@
 # 只检查完整执行计划；不启动节点，不代表业务测试通过。
 make lsp_test LSP_ARGS='--plan-only'
 
-# 只运行已资格的九组，共五十条；仍然串行，不包含其他方法。
+# 只运行已验证的九组，共五十条；仍然串行，不包含其他方法。
 make lsp_test LSP_ARGS='--only-shared-groups'
 
 # 普通全目录：显式提供同源 Delivery wrapper 和无 LSP feature 节点。
@@ -41,7 +41,7 @@ make lsp_test LSP_ARGS='--delivery-node /absolute/fixed-bundle/lsp-delivery-node
 | 签名重试 | 5 | 423.025 | 211.100 | 50.1% |
 | 签名隔离 | 3 | 311.181 | 220.029 | 29.3% |
 
-七组共享合计 **2075.680 秒（34 分 36 秒）**，独立参考合计 4044.987 秒，参考减少 **1969.307 秒（32 分 49 秒，48.7%）**。只有取消两条是本批完整独立/共享配对；其余使用 2026-11-09/10 同一固定版本的逐方法独立回执，并各补跑一条本批独立控制。混合参考值不等于一次完整批次基准，更不能外推为全部 98 条的实测降幅。计时含 native pytest、准备、业务、fixture 收尾及归档；重试/隔离组还含串行入口收集和调度，不含事后的统一审计。
+七组共享合计 **2075.680 秒（34 分 36 秒）**，独立参考合计 4044.987 秒，参考减少 **1969.307 秒（32 分 49 秒，48.7%）**。只有取消两条是本批完整独立/共享配对；其余使用 2026-11-09/10 同一固定版本的逐方法独立回执，并各补跑一条本批独立控制。混合参考值不等于一次完整批次基准，更不能外推为全部 98 条的实测降幅。计时含 native pytest、准备、业务、fixture 收尾及归档；订阅鉴权最终复验、重试和隔离组还含串行入口收集和调度，不含事后的统一审计。
 
 查询/取消组复用既有拓扑、身份和通道，每条创建新的发票/付款并检查累计历史。六个签名/订阅组**只复用 CKB/FNN**，每条重新分配租户、SDK store/进程、通道和订阅连接。共享模式的 `max_active_tenants` 为“本组方法数 × 每方法租户数 + 1”，保留完成租户为 active；独立模式维持原配置，不能称两种模式配置完全相同。每条先用 operator-only 列表核对既有 runtime，随后核对旧通道资金、OutPoint、零锁定和 NoSignatureRequired；浏览器/过滤器先严格核对宿主完整通道并集，再对当前通道执行原数量断言。原 R1/R2、权限拒绝、资金、历史和观察窗口不变。
 
@@ -51,7 +51,7 @@ Native 失败/跳过、前序检查或证据失败均使环境失效，不重建
 
 完整计划与前轮 98 方法清单一致：57 任务 = 9 个共享组 + 48 个独立方法，无漏选、重复或 nightly；`--independent` 仍为 98 任务。原七条共享查询复用已确认真实证据，相关离线影响检查在本轮 227 项内；没有再次运行这七条。退款长用例、并行、文件清理均未推进，原三项已知产品失败保留。
 
-原始材料位于受保护的 `/Users/sunchengzhu/project/fiber-py-integration-test/local-evidence/lsp-shared-expansion-763-20261111/`：各阶段 `command.json`、`receipt/`、节点/业务原始输出，`performance-summary.json`、`receipt-audit.json`、`plan-verification.json` 及 SHA 匹配的源码快照。重试/隔离通过真实串行入口执行，原生 stdout/JUnit 另在 `entry/job-000/`。早期 framework 导入别名意外收集原生 TestCase 的记录单独隔离，不计正式测试或提速基线；后续离线入口先检查只收集 framework 函数。正式批次的原始运行目录、全部回执及失败/修复复验记录保留，未提交产物。意外收集阶段只保存实际取得的归档，不补称其标准 teardown 已删除的原库仍完整存在。
+原始材料位于受保护的 `/Users/sunchengzhu/project/fiber-py-integration-test/local-evidence/lsp-shared-expansion-763-20261111/`：各阶段 `command.json`、`receipt/`、节点/业务原始输出，`performance-summary.json`、`receipt-audit.json`、`plan-verification.json` 及 SHA 匹配的源码快照。订阅鉴权最终复验、重试和隔离组通过真实串行入口执行，原生 stdout/JUnit 另在 `entry/job-000/`。早期 framework 导入别名意外收集原生 TestCase 的记录单独隔离，不计正式测试或提速基线；后续离线入口先检查只收集 framework 函数。正式批次的原始运行目录、全部回执及失败/修复复验记录保留，未提交产物。意外收集阶段只保存实际取得的归档，不补称其标准 teardown 已删除的原库仍完整存在。
 
 ### 首轮查询组接入验证（2026-11-11，历史记录）
 
