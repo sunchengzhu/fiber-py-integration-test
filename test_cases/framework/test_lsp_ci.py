@@ -770,14 +770,14 @@ def test_cold_build_fetches_locked_dependencies_before_offline_delivery(
     assert lock.read_bytes() == original_lock
 
 
-def test_workflow_has_no_schedule_no_runtime_parallel_and_always_reports():
+def test_workflow_parallelizes_isolated_groups_keeps_serial_workers_and_reports():
     workflow = yaml.load(
         (runner.ROOT / ".github/workflows/lsp-ci.yml").read_text(),
         Loader=yaml.BaseLoader,
     )
     assert set(workflow["on"]) == {"workflow_call"}
     strategy = workflow["jobs"]["tests"]["strategy"]
-    assert strategy["max-parallel"] == "1" and strategy["fail-fast"] == "false"
+    assert strategy["max-parallel"] == "8" and strategy["fail-fast"] == "false"
     assert workflow["jobs"]["report"]["if"] == "always()"
     assert workflow["permissions"] == {"contents": "read"}
     source = (runner.ROOT / "scripts/lsp_ci.py").read_text()
