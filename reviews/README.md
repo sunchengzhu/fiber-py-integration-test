@@ -19,7 +19,9 @@ LusoCryptoLabs 报告的第三项“租户不能取消自己的发票”已补�
 
 订阅过滤20～28的[Gate1](lsp/signing-subscriptions-scope.md#2026-10-28过滤参数补充-gate1)及[Gate2行集/数组兼容/预算](lsp/signing-subscriptions.md#过滤参数-gate2输入断言预算与最小适配04c2064)已获确认，12方法与TEST-MAP已实现。用户进一步授权更新LSP分支后，固定 `84333ee` 独立构建并完成相关3/3及正式1+3共48/48；04缓存准备失败保留历史，详见[最新运行记录](../test_cases/fiber/devnet/lsp/README.md#84333ee-订阅过滤-gate3完成2026-10-29)。同身份多通道严格子集仍是覆盖缺口。
 
-**已知问题入口：** `LSP-TIMEOUT-04/05` 的普通开通计时器缺口已由
+**04/05 已确认的处理方案：** 保留固定 `76307312` 的旧版本失败记录，等待 LSP 同步新版后再调整两条用例；05 的失败发生在中止前提阶段，没有执行到晚到签名。版本依据和原始证据见[已收尾的开通超时重审](lsp/channel-signing-deadline.md#导读)。本轮仅收尾文档，不修改自动化、不重跑测试、不改写历史结果；产品安全规则仍待开发明确，`DELIVERY-02` 继续跟踪产品修复。
+
+**历史已知问题入口：** `LSP-TIMEOUT-04/05` 的普通开通计时器缺口已由
 [Fiber #1674](https://github.com/nervosnetwork/fiber/issues/1674) 跟踪，2026-10-23 核实时为 Open；
 `24b5c38` 的两轮回归仍可复现。新会话先读 [既有归因与日志](../test_cases/fiber/devnet/lsp/README.md#已知问题关联1674)，
 相同版本和失败特征沿用该 issue；目标版本或现象变化时先核对修复与差异，再决定针对性验证，避免重复建 issue 或从头定位。
