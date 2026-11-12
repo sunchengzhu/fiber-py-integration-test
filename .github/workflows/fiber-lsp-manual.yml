@@ -1,0 +1,21 @@
+name: Fiber LSP 手动回归
+run-name: LSP 手动 · ${{ inputs.fiber_commit || 'PR 1623 最新 head' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      fiber_commit:
+        description: Fiber commit（7～40 位 SHA）；留空使用 PR 1623 最新 head
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  lsp:
+    uses: sunchengzhu/fiber-py-integration-test/.github/workflows/lsp-ci.yml@7c4f36e2f8e94639dcf838a9d58dfed4bcf7b03a
+    with:
+      fiber_commit: ${{ inputs.fiber_commit }}
+      integration_commit: '7c4f36e2f8e94639dcf838a9d58dfed4bcf7b03a'
