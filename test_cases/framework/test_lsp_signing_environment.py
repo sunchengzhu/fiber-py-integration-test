@@ -11,6 +11,7 @@ import pytest
 import test_cases.fiber.devnet.lsp._signing_environment as env
 import test_cases.fiber.devnet.lsp._lsp_test as lsp
 import test_cases.fiber.devnet.lsp._hosted_tenant_fixture as hosted
+import test_cases.fiber.devnet.lsp.test_channel_signing_deadline as deadline
 from scripts import lsp_regression_runtime as runtime
 
 
@@ -241,6 +242,153 @@ def test_runner_signing_groups_match_qualified_methods_exactly():
             if cls in qualified:
                 selected.setdefault(cls, set()).add(method)
     assert selected == qualified
+
+
+@pytest.mark.parametrize(
+    "case_name",
+    (
+        "test_signature_after_deadline_is_not_applied",
+        "test_no_preimage_outcome_after_close",
+    ),
+)
+def test_a_close_cases_accept_no_t_attempt_and_reject_unblocked_t(case_name):
+    assert case_name in deadline.ISOLATED_CLOSE_TESTS
+    due = int(time.time() * 1000) - 1000
+    local = {
+        "classification": "local",
+        "actual_hash": "0x" + "a" * 64,
+        "received_wall_ms": due + 500,
+    }
+    remote = {
+        "classification": "remote",
+        "outcome": "blocked",
+        "response": {"error": deadline.REMOTE_ERROR},
+        "received_wall_ms": due + 500,
+    }
+    view = {
+        "state": {
+            "state_name": "ShuttingDown",
+            "state_flags": "WAITING_COMMITMENT_CONFIRMATION",
+        }
+    }
+
+    class Probe:
+        def __init__(self, events):
+            self.events = events
+            self.observed = []
+
+        def _isolation_health(self, _until):
+            return {"events": self.events}
+
+        def _isolated_view(self, _client, _until):
+            return view
+
+        def _observe(self, stage, **values):
+            self.observed.append((stage, values))
+
+        def _remaining(self, _until):
+            raise AssertionError("incomplete close qualification")
+
+    for events, blocked in (([local], 0), ([local, remote], 1)):
+        valid = Probe(events)
+        valid.client = object()
+        accepted, protection = (
+            deadline.TestChannelSigningDeadline._qualify_competing_close(
+                valid, {"deadline": due}
+            )
+        )
+        assert accepted == local["actual_hash"]
+        assert protection[0] == view
+        assert valid.observed[0][0] == "competing_close_qualified"
+        assert valid.observed[0][1]["remote_blocks"] == blocked
+
+    for invalid in (
+        [local, {**remote, "outcome": "forwarded"}],
+        [local, {**remote, "response": {"error": {"code": -32099}}}],
+    ):
+        probe = Probe(invalid)
+        probe.client = object()
+        with pytest.raises(AssertionError):
+            deadline.TestChannelSigningDeadline._qualify_competing_close(
+                probe, {"deadline": due}
+            )
+        assert not probe.observed
+
+    missing_local = Probe([{**local, "actual_hash": None}, remote])
+    missing_local.client = object()
+    with pytest.raises(AssertionError, match="incomplete close qualification"):
+        deadline.TestChannelSigningDeadline._qualify_competing_close(
+            missing_local, {"deadline": due}
+        )
+    assert not missing_local.observed
+
+
+def test_a_close_gate_binds_local_and_remote_signed_commitments_in_order():
+    funding = {"tx_hash": "0x" + "f" * 64, "index": "0x0"}
+    a_hash, t_hash = "0x" + "a" * 64, "0x" + "b" * 64
+    a_message, t_message = "0x" + "c" * 64, "0x" + "d" * 64
+    a = {
+        "state": {"state_name": "ChannelReady"},
+        "channel_outpoint": funding,
+        "latest_commitment_transaction_hash": a_hash,
+    }
+    t = {
+        "state": {"state_name": "ChannelReady"},
+        "channel_outpoint": funding,
+        "latest_commitment_transaction_hash": t_hash,
+    }
+    records = [
+        {
+            "complete": True,
+            "for_remote": False,
+            "transaction_hash": a_hash,
+            "signing_message": a_message,
+            "tlcs": [{"payment_hash": "target", "expiry": 123}],
+        },
+        {
+            "complete": True,
+            "for_remote": True,
+            "transaction_hash": t_hash,
+            "signing_message": t_message,
+            "tlcs": [],
+        },
+    ]
+    calls = []
+
+    class Probe:
+        def __init__(self):
+            self.client = object()
+            self.fiber1 = SimpleNamespace(client=object())
+            self.broadcast_gate = SimpleNamespace(
+                arm=lambda *args: calls.append(args) or {"bound": True}
+            )
+
+        def _isolated_view(self, client, _until):
+            return a if client is self.client else t
+
+        def _funding_outpoint(self, view):
+            return view["channel_outpoint"]
+
+        def _commitment_hash(self, _client):
+            return a_hash
+
+        def _isolated_records(self, _until):
+            return records
+
+        def _isolated_status(self, _until):
+            return {"type": "SignatureRequired"}
+
+        def _observe(self, *_args, **_kwargs):
+            pass
+
+    payment = {
+        "hash": "target",
+        "expiry": 123,
+        "deadline": 456,
+        "b_request": {"type": "SignatureRequired"},
+    }
+    deadline.TestChannelSigningDeadline._arm_competing_close(Probe(), payment, funding)
+    assert calls == [(funding, a_message, t_message, 456)]
 
 
 @pytest.mark.parametrize("failure", ["evidence-directory", "partial-setup"])

@@ -26,7 +26,7 @@ from scripts.lsp_parallel import validate_ports, validate_plan, wait_child, run_
 from scripts.lsp_ci_progress import DiskBudgetExceeded, disk_guard
 
 SUITE = "test_cases/fiber/devnet/lsp"
-REVISION = "cf8a56f96f6bae25d128524e47321a9d1472705b"
+REVISION = "c04dc087f2b9d65075079077b8d0b73a44c87c3b"
 DEFAULT_REVISION = REVISION
 TWO_WORKER_PILOT_REVISION = "76307312e8de518c9a32074e6d16867c04de4f86"
 INVOICE = SUITE + "/test_tenant_boundaries.py::TestTenantQueryIsolation::"

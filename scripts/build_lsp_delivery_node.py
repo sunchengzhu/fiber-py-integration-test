@@ -11,7 +11,7 @@ import subprocess
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
-REVISION = "cf8a56f96f6bae25d128524e47321a9d1472705b"
+REVISION = "c04dc087f2b9d65075079077b8d0b73a44c87c3b"
 
 
 def digest(path):

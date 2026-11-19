@@ -55,6 +55,8 @@ ISOLATED_CLOSE_TESTS = {
     "test_node_protects_without_any_submission",
     "test_force_close_uses_commitment_with_target_tlc",
     "test_remote_side_recovers_after_local_force_close",
+    "test_signature_after_deadline_is_not_applied",
+    "test_no_preimage_outcome_after_close",
 }
 RECOVERY_TEST = "test_checkpoint_b_loser_recovers_remote_close"
 
@@ -104,7 +106,8 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         "external_funding_timeout_seconds": 60,
     }
     tlc_amount = 1_000_000
-    # Both A and T can protect at this deadline. Only 08/10 isolate T's broadcast.
+    # Both A and T can protect at this deadline. Cases requiring A's confirmed
+    # commitment isolate T's competing broadcast and retain the raw CKB replies.
     tlc_lifetime_seconds = 22
 
     def setup_method(self, method):
@@ -532,7 +535,7 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
             time.sleep(1)
         assert False, f"force close did not confirm: {tx_hash}, {view}"
 
-    def _assert_force_close_uses(self, funding, commitment_after):
+    def _assert_force_close_uses(self, funding, commitment_after, protection=None):
         records = self.signer_control(self.tenant, "records")
         signed = [
             record
@@ -542,7 +545,7 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
             and record["transaction_hash"] == commitment_after
         ]
         assert len(signed) == 1, records
-        view, observed_at = self._wait_protection()
+        view, observed_at = protection or self._wait_protection()
         # Force close refreshes cell_deps. Bind the confirmed transaction to the
         # exact SDK-verified commitment using Fiber's signed transaction message,
         # which excludes deps and witnesses, rather than comparing different hashes.
@@ -564,11 +567,6 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
             message,
             signed[0],
         )
-        peer = self._channel_view(self.fiber1.client)
-        if peer and peer["shutdown_transaction_hash"]:
-            assert (
-                peer["shutdown_transaction_hash"] != closed["shutdown_transaction_hash"]
-            )
         return view, tx, observed_at
 
     def _arm_signature_gate(self):
@@ -578,7 +576,7 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
             self.gate.passthrough = False
         assert self._status()["type"] == "NoSignatureRequired"
 
-    # These bounded observations are exclusive to the reviewed 08/10 isolation.
+    # These bounded observations apply to the A-close qualification cases.
     def _remaining(self, until, cap=10):
         remaining = until - time.monotonic()
         assert remaining > 0, "isolated deadline observation budget exhausted"
@@ -831,6 +829,118 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
             request_id=status["request_id"],
         )
         return payment
+
+    def _arm_competing_close(self, payment, funding):
+        """Bind an existing checkpoint to A/T's real signed commitments before D."""
+        until = time.monotonic() + 10
+        local = self._isolated_view(self.client, until)
+        remote = self._isolated_view(self.fiber1.client, until)
+        assert local["state"]["state_name"] == "ChannelReady", local
+        assert remote["state"]["state_name"] == "ChannelReady", remote
+        assert self._funding_outpoint(local) == funding, (local, funding)
+        assert self._funding_outpoint(remote) == funding, (remote, funding)
+        assert local["latest_commitment_transaction_hash"] == self._commitment_hash(
+            self.client
+        )
+        records = self._isolated_records(until)
+        local_records = [
+            record
+            for record in records
+            if record["complete"]
+            and not record["for_remote"]
+            and record["transaction_hash"]
+            == local["latest_commitment_transaction_hash"]
+        ]
+        remote_records = [
+            record
+            for record in records
+            if record["for_remote"]
+            and record["transaction_hash"]
+            == remote["latest_commitment_transaction_hash"]
+        ]
+        assert len(local_records) == len(remote_records) == 1, records
+        signed, peer_signed = local_records[0], remote_records[0]
+        assert signed["signing_message"] != peer_signed["signing_message"]
+        assert any(
+            tlc["payment_hash"] == payment["hash"]
+            and tlc["expiry"] == payment["expiry"]
+            for tlc in signed["tlcs"]
+        ), signed
+        assert self._isolated_status(until) == payment["b_request"]
+        armed = self.broadcast_gate.arm(
+            funding,
+            signed["signing_message"],
+            peer_signed["signing_message"],
+            payment["deadline"],
+        )
+        self._observe(
+            "competing_close_armed",
+            funding=funding,
+            deadline_ms=payment["deadline"],
+            local_record=signed,
+            remote_record=peer_signed,
+            rule=armed,
+        )
+
+    def _qualify_competing_close(self, payment):
+        """Require real A acceptance; block any exact T attempt before mining."""
+        until = time.monotonic() + 15
+        protection = None
+        while True:
+            audit = self._isolation_health(until)
+            local = [
+                event
+                for event in audit["events"]
+                if event["classification"] == "local" and event.get("actual_hash")
+            ]
+            remote_events = [
+                event
+                for event in audit["events"]
+                if event["classification"] == "remote"
+            ]
+            remote = [
+                event
+                for event in remote_events
+                if event["outcome"] == "blocked"
+                and event.get("response", {}).get("error") == REMOTE_ERROR
+            ]
+            assert not any(
+                event["outcome"] not in ("received", "blocked")
+                or (event["outcome"] == "blocked" and event not in remote)
+                for event in remote_events
+            ), remote_events
+            view = self._isolated_view(self.client, until)
+            if (
+                protection is None
+                and view["state"]["state_name"] == "ShuttingDown"
+                and "WAITING_COMMITMENT_CONFIRMATION" in view["state"]["state_flags"]
+            ):
+                protection = (view, time.monotonic())
+            if (
+                local
+                and len(remote) == len(remote_events)
+                and view["state"]["state_name"] == "ShuttingDown"
+            ):
+                assert (
+                    "WAITING_COMMITMENT_CONFIRMATION" in view["state"]["state_flags"]
+                ), view
+                break
+            time.sleep(min(0.2, self._remaining(until)))
+        for event in local + remote:
+            assert (
+                payment["deadline"]
+                <= event["received_wall_ms"]
+                <= payment["deadline"] + 15_000
+            ), event
+        self._observe(
+            "competing_close_qualified",
+            state=view["state"],
+            local_hash=local[0]["actual_hash"],
+            local_sends=len(local),
+            remote_blocks=len(remote),
+        )
+        assert protection is not None
+        return local[0]["actual_hash"], protection
 
     def _confirm_isolated_close(self, payment):
         until = payment["deadline"] + 15
@@ -1954,9 +2064,10 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
     # TEST-MAP: LSP-TIMEOUT-07
     def test_signature_after_deadline_is_not_applied(self):
         self._arm_signature_gate()
+        funding = self._pause_isolated_miner()
         payment = self._to_checkpoint_b(self._prepare_payment())
-        funding = self._funding_outpoint(self._channel(self.client))
         expected = self._commitment_hash(self.client)
+        self._arm_competing_close(payment, funding)
         self._wait_past_deadline(payment)
         submitted_at = time.monotonic()
         assert submitted_at - payment["injected_at"] < 28, (
@@ -1965,7 +2076,14 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         body = self._submit_raw(payment["b_submission"])
         self._assert_not_applied(body)
         assert self._commitment_hash(self.client) == expected
-        _, _, observed_at = self._assert_force_close_uses(funding, expected)
+        accepted_hash, protection = self._qualify_competing_close(payment)
+        _, _, observed_at = self._assert_force_close_uses(
+            funding, expected, protection=protection
+        )
+        assert (
+            self._channel_view(self.client)["shutdown_transaction_hash"]
+            == accepted_hash
+        )
         assert observed_at - payment["injected_at"] < 30
         # The protection clears the pending request.
         deadline = time.monotonic() + 15
@@ -2482,6 +2600,7 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
     # TEST-MAP: LSP-TIMEOUT-11
     def test_no_preimage_outcome_after_close(self):
         self._arm_signature_gate()
+        isolated_funding = self._pause_isolated_miner()
         balance_before = int(self._channel(self.client)["local_balance"], 16)
         # TLC-A: its whole exchange is applied, so the hold invoice becomes Received.
         first = self._prepare_payment(lifetime_seconds=60)
@@ -2494,6 +2613,7 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
             first["expiry"] - second["expiry"] > 5_000
         ), "TLC-A must remain outside ordinary expiry handling until TLC-B protects the channel"
         funding = self._funding_outpoint(self._channel(self.client))
+        assert funding == isolated_funding
         expected = self._commitment_hash(self.client)
         records = self.signer_control(self.tenant, "records")
         signed = [
@@ -2512,8 +2632,16 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
             )
             for payment in (first, second)
         ), signed
+        self._arm_competing_close(second, funding)
         self._wait_past_deadline(second)
-        self._assert_force_close_uses(funding, expected)
+        accepted_hash, protection = self._qualify_competing_close(second)
+        self._assert_force_close_uses(funding, expected, protection=protection)
+        assert (
+            self._channel_view(self.client)["shutdown_transaction_hash"]
+            == accepted_hash
+        )
+        # Resume normal chain progress during the invoice's post-expiry window.
+        self.node.start_miner()
         assert self._invoice_status(first["hash"]) == "Received"
         assert self._invoice_status(first["hash"]) != "Paid"
         assert self._invoice_status(second["hash"]) != "Paid"

@@ -26,7 +26,7 @@ from test_cases.fiber.devnet.lsp._signing_environment import SigningEnvironment
 from test_cases.fiber.devnet.lsp._funding_transaction import raw_transaction_hash
 
 PROJECT_ROOT = Path(get_project_root()).resolve()
-DEFAULT_REVISION = "cf8a56f96f6bae25d128524e47321a9d1472705b"
+DEFAULT_REVISION = "c04dc087f2b9d65075079077b8d0b73a44c87c3b"
 REVISION = os.environ.get("LSP_TEST_REVISION", DEFAULT_REVISION)
 assert len(REVISION) == 40 and all(
     c in "0123456789abcdef" for c in REVISION

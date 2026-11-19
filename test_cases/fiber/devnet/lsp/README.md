@@ -2,7 +2,7 @@
 
 ## PR #1623 最新提交适配（2026-11-19）
 
-本地普通 LSP 入口、FNN/SDK 构建及 Delivery wrapper 的默认提交已统一为 `cf8a56f96f6bae25d128524e47321a9d1472705b`。手动 CI 留空 `fiber_commit` 时仍在启动时解析 PR 的当前 head，并将解析得到的**同一个完整 SHA**交给一次构建和八个独立 runner；填写 commit 时全轮固定该提交。各组使用独立端口与数据目录，组内仍串行。下文 `76307312` 的执行结果、2-worker 资格与命令保留为历史记录，不能作为新版通过证据。
+本地普通 LSP 入口、FNN/SDK 构建及 Delivery wrapper 的默认提交已统一为 `c04dc087f2b9d65075079077b8d0b73a44c87c3b`。手动 CI 留空 `fiber_commit` 时仍在启动时解析 PR 的当前 head，并将解析得到的**同一个完整 SHA**交给一次构建和八个独立 runner；填写 commit 时全轮固定该提交。各组使用独立端口与数据目录，组内仍串行。下文 `76307312` 的执行结果、2-worker 资格与命令保留为历史记录，不能作为新版通过证据。
 
 新版开通流程要求 SDK 完成初始承诺验证后才提交钱包签名。待开签名类用例在各自结束拦截、完成相应签名或重启 SDK 后提交钱包；正常预备通道的用例在准备阶段完成该步骤。旧版路径仍由 bundle 的构建特征区分。退款长用例继续在独立夜跑目录，默认不执行。
 
@@ -16,7 +16,7 @@
 
 个人 fork 的 **Fiber LSP 手动回归** 工作流通过 `workflow_dispatch` 启动。`fiber_commit` 留空时，启动时从 PR #1623 解析一次最新 head；填写 7～40 位十六进制 commit 时解析为完整 SHA。整轮固定 PR 实际 head 或指定提交。测试工程自身也固定为入口所引用的已审提交，两个提交均进入计划、日志和报告。[个人 fork 的手动入口](https://github.com/sunchengzhu/fiber-py-integration-test/actions/workflows/fiber-lsp-manual.yml)
 
-本批测试工程改动尚在 `codex/lsp-latest-cf8a56f` 分支时，手动运行须在 Actions 页面选择该分支，或用 `gh workflow run fiber-lsp-manual.yml --repo sunchengzhu/fiber-py-integration-test --ref codex/lsp-latest-cf8a56f`。默认 `main` 的同名入口在分支合并前仍可能使用旧测试工程提交。
+本批测试工程改动尚在 `codex/lsp-pr1623-latest` 分支时，手动运行须在 Actions 页面选择该分支，或用 `gh workflow run fiber-lsp-manual.yml --repo sunchengzhu/fiber-py-integration-test --ref codex/lsp-pr1623-latest`。默认 `main` 的同名入口在分支合并前仍可能使用旧测试工程提交。
 
 入口调用 `.github/workflows/lsp-ci.yml`。这个实现通过 `workflow_call` 运行，按入口指定的完整 SHA 从个人 fork 检出测试工程。产品构建来自同一干净 checkout，生成 FNN、SDK、测试 driver、Delivery wrapper，并尝试构建无 LSP feature 二进制；成功产物传递前后核对 manifest/SHA。运行产物以 Actions artifact 保存。
 
@@ -44,7 +44,7 @@ CI 通过专用 `--retain-runtime` 在 pytest 子进程内保留本批 `tmp/lsp-
 
 编译使用一份 Cargo 缓存、串行构建和单独声明的 12 GiB 最大增长预算，准入预留 2 GiB、始终保留 8 GiB 空闲；每个测试组保留默认 2 GiB 增长预算及 8 GiB 下限，导出原始状态也计入本组空间预算。构建总预算 170 分钟、测试组总预算 150 分钟，均低于对应 job 的 180 分钟上限，为资源回收和证据上传留余量。空间或时限触线先收束自有进程，再记录失败及可取得的证据。没有清理宿主旧缓存、覆盖旧 bundle 或自动重试补绿。原始数据归档失败、artifact 上传失败也不能使整体结果显示完成通过。
 
-## 常用串行回归入口（默认 cf8a56f9）
+## 常用串行回归入口（默认 c04dc087）
 
 在已准备好本节下方所列输入、启用项目 Python 环境的测试工作区运行 `make lsp_test`。入口为 `scripts/run_lsp_regression.py`，不修改全仓 `make fiber_test` 或 CI 的范围，也不运行 `lsp_nightly/`。
 
@@ -65,7 +65,7 @@ make lsp_test LSP_ARGS='--delivery-node /absolute/fixed-bundle/lsp-delivery-node
 
 传给底层框架的运行目录使用 `tmp/lsp-serial-<UUID 十六进制>`；签名复用生命周期使用单独的 `tmp/lsp-signing-<UUID 十六进制>`，不拼接证据目录的文件名，避免空格和 shell 特殊字符进入旧框架的命令路径；同名证据目录或再次分配也不会复用运行目录名。用户指定的证据/钱包路径保持原样，命令记录保留它们与运行目录的对应关系。
 
-本地入口默认完整 SHA `cf8a56f96f6bae25d128524e47321a9d1472705b`；可用 `--revision <完整 SHA>` 显式选择，并向全部子进程设置相同的版本及复验声明，bundle 默认目录随 SHA 派生。显式选择不代表未来提交已通过资格，仍需核对构建清单、原生行为与结果，不能仅删除版本门禁。入口重置继承的 LSP 模式、预算和输出变量及 pytest 附加参数，防止共享开关或 `-n` 污染后续任务。具体用例继续执行已有 bundle/二进制/测试适配器资格及资金、费用、历史、租户隔离和稳定时长断言，没有缩短观察窗口或放宽判据。仅付款查询共享组将完成采样间的轮询空档从 1 秒缩短为 0.2 秒，为累积 SDK records 查询留出余量；最大完整采样间隔仍为 2 秒，终态稳定观察仍至少 5 秒、至少 3 个完整样本。独立模式和 PAYMENT-05 的原 1 秒轮询保持。运行前后检查至少 8 GiB 空间和常用测试端口；Delivery 正常资格必须先通过，随后才执行其故障方法。
+本地入口默认完整 SHA `c04dc087f2b9d65075079077b8d0b73a44c87c3b`；可用 `--revision <完整 SHA>` 显式选择，并向全部子进程设置相同的版本及复验声明，bundle 默认目录随 SHA 派生。显式选择不代表未来提交已通过资格，仍需核对构建清单、原生行为与结果，不能仅删除版本门禁。入口重置继承的 LSP 模式、预算和输出变量及 pytest 附加参数，防止共享开关或 `-n` 污染后续任务。具体用例继续执行已有 bundle/二进制/测试适配器资格及资金、费用、历史、租户隔离和稳定时长断言，没有缩短观察窗口或放宽判据。仅付款查询共享组将完成采样间的轮询空档从 1 秒缩短为 0.2 秒，为累积 SDK records 查询留出余量；最大完整采样间隔仍为 2 秒，终态稳定观察仍至少 5 秒、至少 3 个完整样本。独立模式和 PAYMENT-05 的原 1 秒轮询保持。运行前后检查至少 8 GiB 空间和常用测试端口；Delivery 正常资格必须先通过，随后才执行其故障方法。
 
 每个任务有独立钱包、原生 JUnit/stdout、命令/模式和结果记录；native teardown 前额外保存日志及实际 runtime 路径。查询/取消组使用 Hosted owner 的最终归档；签名/订阅组保留逐方法诊断副本，全部 SDK/FNN 退出后另存最终副本并逐文件核验 SHA。CKB 原库与运行目录保留，不能把 FNN 最终副本称作完整 CKB 数据库备份。批次 `junit.xml` 只合并原生报告，`summary.json` 区分失败、错误、跳过、未运行和未启动的方法；已知产品失败也保留非零退出，不静默豁免。原始证据不自动删除或压缩。
 

@@ -706,7 +706,9 @@ time.sleep(30)
         ),
         ("56c761c45c271c086b05c8d5ea3e033448f5fdf8", None, False),
         ("76307312e8de518c9a32074e6d16867c04de4f86", None, False),
-        ("cf8a56f96f6bae25d128524e47321a9d1472705b", None, True),
+        ("cf8a56f96f6bae25d128524e47321a9d1472705b", None, False),
+        ("43271bb059df0ed525dfe40753a08a7cf9a2d2f8", None, False),
+        ("c04dc087f2b9d65075079077b8d0b73a44c87c3b", None, True),
         (
             "76307312e8de518c9a32074e6d16867c04de4f86",
             "76307312e8de518c9a32074e6d16867c04de4f86",
