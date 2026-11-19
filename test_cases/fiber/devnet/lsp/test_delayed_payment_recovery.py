@@ -205,12 +205,19 @@ class _DelayedPaymentBase(ChannelSigningTestBase):
                     timeout=2,
                 ).strip()
                 assert "ckb run" in self.ckb_process_identity, self.ckb_process_identity
-            self.old_streams = self.subscription_proxy.connections()
-            self.allowed_streams = list(self.old_streams)
-            assert self.old_streams and all(
-                s.downstream.state is State.OPEN and s.upstream.state is State.OPEN
-                for s in self.old_streams
-            )
+            self.allowed_streams = self.subscription_proxy.connections()
+            self.old_streams = []
+            for stream in self.allowed_streams:
+                if stream.ended.is_set():
+                    assert (
+                        stream.downstream.state is stream.upstream.state is State.CLOSED
+                    )
+                else:
+                    assert (
+                        stream.downstream.state is stream.upstream.state is State.OPEN
+                    )
+                    self.old_streams.append(stream)
+            assert self.old_streams, "SDK has no live subscription after preparation"
             while self.gate.audit_snapshot()["active"]:
                 self._pause(self.preparation_until, 0.05)
             assert (
@@ -729,9 +736,16 @@ class _DelayedPaymentBase(ChannelSigningTestBase):
                 for i, line in enumerate(lines)
                 if "send commitment signed: CommitmentSigned" in line
             ]
-            assert len(waits) == len(sends) == 1 and waits[0] < sends[0], lines
+            assert len(waits) == 1, lines
+            if sends:
+                assert len(sends) == 1 and waits[0] < sends[0], lines
+            else:
+                # Hosted V2 removed the send diagnostic. The checked peer
+                # request, partial signature and withheld local submission above
+                # still establish which commitment reached this checkpoint.
+                assert self.hosted_v2, lines
             assert not any(
-                "set_waiting_ack(false)" in line for line in lines[sends[0] + 1 :]
+                "set_waiting_ack(false)" in line for line in lines[waits[0] + 1 :]
             ), lines
             assert self._signature_forwards() == self.forwarded_before
             self.request, self.submission = status, submission
@@ -984,17 +998,26 @@ class _DelayedPaymentBase(ChannelSigningTestBase):
             assert self.channel_id in identity["bound_channel_ids"]
             assert self.tenant["control_calls"] == self.saved_controls
             assert self._signing(self.tenant, until) == self.request
-            self.old_streams = [
-                c for c in self.subscription_proxy.connections() if c.started >= started
-            ]
-            # Old sessions must stay closed; only these new sessions may be open.
             self.allowed_streams = self.subscription_proxy.connections()
+            self.old_streams = []
+            # Old sessions must stay closed; only current replacement sessions
+            # may remain open. Keep closed retry history in allowed_streams.
             for stream in self.allowed_streams:
                 if stream.started < started:
                     assert stream.ended.is_set()
                     assert (
                         stream.downstream.state is stream.upstream.state is State.CLOSED
                     )
+                elif stream.ended.is_set():
+                    assert (
+                        stream.downstream.state is stream.upstream.state is State.CLOSED
+                    )
+                else:
+                    assert (
+                        stream.downstream.state is stream.upstream.state is State.OPEN
+                    )
+                    self.old_streams.append(stream)
+            assert self.old_streams, "restored SDK has no live subscription"
             sample = self._sample(until)
             self._assert_waiting(sample)
             self._funds(sample, set())
