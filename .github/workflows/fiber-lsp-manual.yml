@@ -1,0 +1,20 @@
+name: LSP 手动全量回归
+
+on:
+  workflow_dispatch:
+    inputs:
+      fiber_commit:
+        description: 留空使用 Fiber PR #1623 当前 head，或填写指定提交
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  lsp:
+    uses: ./.github/workflows/lsp-ci.yml
+    with:
+      fiber_commit: ${{ inputs.fiber_commit }}
+      integration_commit: ${{ github.sha }}

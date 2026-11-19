@@ -42,6 +42,7 @@ class TestChannelSigningIsolation(LspTestBase):
 
     def _finish_opening(self, tenant):
         tenant["gate"].apply_and_release(tenant["client"])
+        self._submit_external_funding(tenant)
         for _ in range(120):
             assert tenant["agent"].poll() is None, f"SDK {tenant['label']} exited"
             local = self._channel_state(tenant["client"], tenant["channel_id"])

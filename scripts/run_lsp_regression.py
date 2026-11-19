@@ -26,8 +26,9 @@ from scripts.lsp_parallel import validate_ports, validate_plan, wait_child, run_
 from scripts.lsp_ci_progress import DiskBudgetExceeded, disk_guard
 
 SUITE = "test_cases/fiber/devnet/lsp"
-REVISION = "76307312e8de518c9a32074e6d16867c04de4f86"
+REVISION = "cf8a56f96f6bae25d128524e47321a9d1472705b"
 DEFAULT_REVISION = REVISION
+TWO_WORKER_PILOT_REVISION = "76307312e8de518c9a32074e6d16867c04de4f86"
 INVOICE = SUITE + "/test_tenant_boundaries.py::TestTenantQueryIsolation::"
 PAYMENT = SUITE + "/test_tenant_payment_queries.py::TestTenantPaymentQueries::"
 GROUPS = {
@@ -597,10 +598,8 @@ def main():
         c not in "0123456789abcdef" for c in args.revision
     ):
         parser.error("--revision must be a full lowercase commit SHA")
-    if args.workers == 2 and args.revision != DEFAULT_REVISION:
-        parser.error(
-            "2-worker pilot is qualified only for the default 76307312 revision"
-        )
+    if args.workers == 2 and args.revision != TWO_WORKER_PILOT_REVISION:
+        parser.error("2-worker pilot is qualified only for the fixed 76307312 revision")
     if args.workers == 2 and args.retain_runtime:
         parser.error("--retain-runtime currently requires serial workers=1")
     REVISION = args.revision

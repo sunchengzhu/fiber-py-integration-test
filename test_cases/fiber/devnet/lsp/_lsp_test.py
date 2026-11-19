@@ -23,9 +23,10 @@ from test_cases.fiber.devnet.lsp._signer_gate import SignatureGate
 from test_cases.fiber.devnet.lsp._retry_signer_gate import RetrySignatureGate
 from test_cases.fiber.devnet.lsp._subscription_observer import SubscriptionProxy
 from test_cases.fiber.devnet.lsp._signing_environment import SigningEnvironment
+from test_cases.fiber.devnet.lsp._funding_transaction import raw_transaction_hash
 
 PROJECT_ROOT = Path(get_project_root()).resolve()
-DEFAULT_REVISION = "76307312e8de518c9a32074e6d16867c04de4f86"
+DEFAULT_REVISION = "cf8a56f96f6bae25d128524e47321a9d1472705b"
 REVISION = os.environ.get("LSP_TEST_REVISION", DEFAULT_REVISION)
 assert len(REVISION) == 40 and all(
     c in "0123456789abcdef" for c in REVISION
@@ -419,6 +420,7 @@ class LspTestBase(SigningEnvironment, FiberTest):
         require_runtime_inputs()
         manifest = validate_bundle()
         cls.bundle_manifest = manifest
+        cls.hosted_v2 = "hosted-v2" in manifest.get("driver_build_command", [])
         cls.bundle_manifest_sha256 = sha256_file(BUNDLE / BUNDLE_MANIFEST)
         print(
             f"LSP integration binaries: {manifest['fnn_version']}, "
@@ -768,6 +770,63 @@ class LspTestBase(SigningEnvironment, FiberTest):
             f"setup={time.monotonic() - started:.2f}s"
         )
 
+    def _submit_external_funding(self, tenant):
+        if tenant.get("funding_submitted"):
+            return
+        if self.hosted_v2:
+            # A restarted SDK may not have rebound its control socket yet.
+            control_due = time.monotonic() + 15
+            while True:
+                assert tenant["agent"].poll() is None, "SDK exited during opening"
+                try:
+                    verified = self.signer_control(tenant, "wait-opening-commitment")
+                    break
+                except ConnectionRefusedError:
+                    if time.monotonic() >= control_due:
+                        raise
+                    time.sleep(0.2)
+            assert verified == {"verified": True}
+            # The SDK's recovery records can be complete before the node has
+            # accepted the last held signing result. Observe that acceptance
+            # before asking the wallet to sign its funding inputs.
+            due = time.monotonic() + 40
+            while time.monotonic() < due:
+                assert tenant["agent"].poll() is None, "SDK exited during opening"
+                status = tenant["client"].call(
+                    "get_channel_signing_status",
+                    [{"channel_id": tenant["channel_id"]}],
+                )["status"]
+                if status["type"] == "NoSignatureRequired":
+                    break
+                time.sleep(0.2)
+            else:
+                raise AssertionError(
+                    f"initial channel signing did not finish before wallet funding: {status}"
+                )
+        signed = self.fiber2.client.call(
+            "sign_external_funding_tx",
+            [
+                {
+                    "unsigned_funding_tx": tenant["opened"]["unsigned_funding_tx"],
+                    "private_key": tenant["private_key"],
+                }
+            ],
+        )
+        funding = tenant["client"].call(
+            "submit_signed_funding_tx",
+            [
+                {
+                    "channel_id": tenant["channel_id"],
+                    "signed_funding_tx": signed["signed_funding_tx"],
+                }
+            ],
+        )
+        expected = tenant.get("funding_tx_hash")
+        if expected is not None:
+            assert funding["funding_tx_hash"] == expected, funding
+        tenant["funding_tx_hash"] = funding["funding_tx_hash"]
+        tenant["funding_submitted"] = True
+
     def setUp(self):
         started = time.monotonic()
         self.public_key = self.fiber1.get_pubkey()
@@ -791,7 +850,7 @@ class LspTestBase(SigningEnvironment, FiberTest):
             status_file = directory / "status.json"
             gate = self.gate_class(self.fiber1.client.url)
             self.addCleanup(gate.close)
-            if self.complete_opening_before_wallet:
+            if self.hosted_v2 and self.complete_opening_before_wallet:
                 gate.release()
             subscription_proxy = SubscriptionProxy(self.ws_url)
             self.addCleanup(subscription_proxy.close)
@@ -929,27 +988,17 @@ class LspTestBase(SigningEnvironment, FiberTest):
             else:
                 assert False, f"SDK {label} did not bind channel {channel_id}"
             if self.submit_external_funding:
-                signed = self.fiber2.client.call(
-                    "sign_external_funding_tx",
-                    [
-                        {
-                            "unsigned_funding_tx": opened["unsigned_funding_tx"],
-                            "private_key": private_key,
-                        }
-                    ],
-                )
-                funding = client.call(
-                    "submit_signed_funding_tx",
-                    [
-                        {
-                            "channel_id": channel_id,
-                            "signed_funding_tx": signed["signed_funding_tx"],
-                        }
-                    ],
-                )
-                tenant["funding_tx_hash"] = funding["funding_tx_hash"]
+                if self.hosted_v2 and not self.complete_opening_before_wallet:
+                    # Record the proposal ID while wallet inputs remain unsigned.
+                    tenant["funding_tx_hash"] = raw_transaction_hash(
+                        opened["unsigned_funding_tx"]
+                    )
+                else:
+                    self._submit_external_funding(tenant)
             self.tenants.append(tenant)
 
+        if self.hosted_v2 and self.complete_opening_before_wallet:
+            return
         if not self.submit_external_funding:
             # The wallet still owes its funding signature; no channel signature exists yet.
             return
@@ -1156,6 +1205,7 @@ class ChannelSigningTestBase(LspTestBase):
 
     def _finish_opening(self):
         self.gate.release()
+        self._submit_external_funding(self.tenant)
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
             assert self.tenant["agent"].poll() is None

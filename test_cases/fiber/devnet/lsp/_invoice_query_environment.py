@@ -5,11 +5,15 @@ import os
 
 from framework.util import get_project_root
 from test_cases.fiber.devnet.lsp._hosted_tenant_fixture import HostedTenantFixture
-from test_cases.fiber.devnet.lsp._lsp_test import REVISION, RETEST_REVISION
+from test_cases.fiber.devnet.lsp._lsp_test import (
+    DEFAULT_REVISION,
+    REVISION,
+    RETEST_REVISION,
+)
 from test_cases.fiber.devnet.lsp._query_environment import HostedEnvironmentReuse
 from test_cases.fiber.devnet.lsp.test_delayed_payment_recovery import _number
 
-FIXED_INVOICE_REVISION = "76307312e8de518c9a32074e6d16867c04de4f86"
+FIXED_INVOICE_REVISION = DEFAULT_REVISION
 
 INVOICE_QUERY_METHODS = {
     "test_default_namespace_invoice_query_is_isolated": 2,

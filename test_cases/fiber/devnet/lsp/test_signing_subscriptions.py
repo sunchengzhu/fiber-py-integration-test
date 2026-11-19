@@ -151,6 +151,7 @@ class SubscriptionTestBase(ChannelSigningTestBase):
                     env={**os.environ, "LSP_NODE_ID": str(self.public_key)},
                 )
                 self.addCleanup(stop_agent, tenant["agent"])
+            self._submit_external_funding(tenant)
             deadline = time.monotonic() + 120
             while time.monotonic() < deadline:
                 assert tenant["agent"].poll() is None, self._agent_log(tenant)[-1500:]

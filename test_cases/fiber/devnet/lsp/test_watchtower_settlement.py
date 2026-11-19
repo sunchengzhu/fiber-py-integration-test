@@ -50,6 +50,7 @@ class WatchtowerBudgetExpired(BaseException):
 
 
 class _WatchtowerBase(ChannelSigningTestBase):
+    complete_opening_before_wallet = True
     tenant_labels = ("A", "B")
     agent_extra_args = ("--ack-held-events",)
     tenant_rpc_timeout = 10
@@ -206,7 +207,8 @@ class _WatchtowerBase(ChannelSigningTestBase):
                     tenant["gate"],
                 )
                 self.gate.release()
-                self._submit(self.gate.submission)
+                if not self.hosted_v2:
+                    self._submit(self.gate.submission)
                 self._finish_opening()
                 tenant["baseline"] = self._channel(tenant["client"])
                 assert not tenant["baseline"]["pending_tlcs"]

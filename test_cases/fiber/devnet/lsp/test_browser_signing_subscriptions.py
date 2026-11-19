@@ -327,6 +327,8 @@ class _BrowserSubscriptionBase(SubscriptionTestBase):
                     env={**os.environ, "LSP_NODE_ID": str(self.public_key)},
                 )
                 self.addCleanup(stop_agent, tenant["agent"])
+            for tenant in self.tenants:
+                self._submit_external_funding(tenant)
             while True:
                 ready = True
                 snapshots = []

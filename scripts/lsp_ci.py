@@ -241,6 +241,27 @@ def run_bucket(plan_path, bucket_id, output):
             "test_inputs": inputs_before,
         },
     )
+    nolsp = ROOT / "download/fiber" / f"nolsp-{revision[:7]}/fnn"
+    if bucket_id == "feature-off" and not nolsp.is_file():
+        value = read(output / "job.json")
+        inputs_after = input_fingerprints()
+        drift = sorted(
+            path
+            for path in inputs_before.keys() | inputs_after.keys()
+            if inputs_before.get(path) != inputs_after.get(path)
+        )
+        value.update(
+            exit_code=2,
+            finished_at=time.time(),
+            inputs_unchanged=not drift,
+            source_drift=drift,
+            build_unavailable=(
+                "The selected Fiber commit did not produce a no-LSP binary; "
+                "see the build artifact's nolsp-build.log and nolsp-status.json"
+            ),
+        )
+        write(output / "job.json", value)
+        return 2
     command = [
         sys.executable,
         str(ROOT / "scripts/run_lsp_regression.py"),
@@ -258,10 +279,10 @@ def run_bucket(plan_path, bucket_id, output):
         str(output / "entry"),
         "--delivery-node",
         str(ROOT / "download/fiber" / f"delivery-{revision[:7]}/lsp-delivery-node"),
-        "--nolsp-fnn",
-        str(ROOT / "download/fiber" / f"nolsp-{revision[:7]}/fnn"),
-        *bucket["nodeids"],
     ]
+    if bucket_id == "feature-off":
+        command.extend(("--nolsp-fnn", str(nolsp)))
+    command.extend(bucket["nodeids"])
     completed = subprocess.run(command, cwd=ROOT)
     value = read(output / "job.json")
     inputs_after = input_fingerprints()
@@ -419,6 +440,11 @@ def results(plan_path, source):
             problems.append(f"{bucket['label']}: 测试源码在执行期间变化，结果不予确认")
             for n in bucket["nodeids"]:
                 rows[n]["status"] = "incomplete"
+            continue
+        if job.get("build_unavailable"):
+            problems.append(f"{bucket['label']}: {job['build_unavailable']}")
+            for n in bucket["nodeids"]:
+                rows[n]["detail"] = job["build_unavailable"]
             continue
         summary_path = directory / "entry/summary.json"
         if not summary_path.is_file():

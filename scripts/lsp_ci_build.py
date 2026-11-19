@@ -170,46 +170,61 @@ def build(source, revision, target, output):
         env,
         guard,
     )
-    execute(
-        [
-            "cargo",
-            "build",
-            "--locked",
-            "-p",
-            "fiber-bin",
-            "--no-default-features",
-            "--features",
-            "fnn/rocksdb,watchtower",
-        ],
-        source,
-        output / "nolsp-build.log",
-        env,
-        guard,
-    )
-    nolsp.mkdir()
-    shutil.copy2(target / "debug/fnn", nolsp / "fnn")
-    version = subprocess.check_output(
-        [str(nolsp / "fnn"), "--version"], text=True
-    ).strip()
-    if revision[:7] not in version or "dirty" in version:
-        raise ValueError("no-LSP binary revision mismatch")
-    write(
-        nolsp / "build.json",
-        {
-            "revision": revision,
-            "features": ["fnn/rocksdb", "watchtower"],
-            "sha256": {"fnn": sha(nolsp / "fnn")},
-            "fnn_version": version,
-        },
-    )
+    nolsp_available = False
+    try:
+        execute(
+            [
+                "cargo",
+                "build",
+                "--locked",
+                "-p",
+                "fiber-bin",
+                "--no-default-features",
+                "--features",
+                "fnn/rocksdb,watchtower",
+            ],
+            source,
+            output / "nolsp-build.log",
+            env,
+            guard,
+        )
+    except RuntimeError as error:
+        # An optional product feature combination may fail to compile. Keep
+        # its exact build log and run the independent LSP groups anyway.
+        if not str(error).startswith("build command failed: exit "):
+            raise
+        write(
+            output / "nolsp-status.json",
+            {"revision": revision, "available": False, "error": str(error)},
+        )
+    else:
+        nolsp.mkdir()
+        shutil.copy2(target / "debug/fnn", nolsp / "fnn")
+        version = subprocess.check_output(
+            [str(nolsp / "fnn"), "--version"], text=True
+        ).strip()
+        if revision[:7] not in version or "dirty" in version:
+            raise ValueError("no-LSP binary revision mismatch")
+        write(
+            nolsp / "build.json",
+            {
+                "revision": revision,
+                "features": ["fnn/rocksdb", "watchtower"],
+                "sha256": {"fnn": sha(nolsp / "fnn")},
+                "fnn_version": version,
+            },
+        )
+        nolsp_available = True
+        write(output / "nolsp-status.json", {"revision": revision, "available": True})
     paths = [
         ROOT / "download/0.202.0/ckb",
         ROOT / "download/0.202.0/ckb-cli",
         ROOT / "source/ckb-cli",
         base,
         delivery,
-        nolsp,
     ]
+    if nolsp_available:
+        paths.append(nolsp)
     files = [
         p
         for path in paths
@@ -217,7 +232,10 @@ def build(source, revision, target, output):
         if p.is_file()
     ]
     manifest = {str(p.relative_to(ROOT)): sha(p) for p in files}
-    write(output / "runtime-manifest.json", {"revision": revision, "files": manifest})
+    write(
+        output / "runtime-manifest.json",
+        {"revision": revision, "files": manifest, "nolsp_available": nolsp_available},
+    )
     with tarfile.open(output / "runtime.tar.gz", "w:gz") as archive:
         for p in files:
             guard()

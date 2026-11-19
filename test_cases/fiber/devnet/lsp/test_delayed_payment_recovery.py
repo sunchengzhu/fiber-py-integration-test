@@ -41,6 +41,7 @@ def _outpoint(value):
 
 
 class _DelayedPaymentBase(ChannelSigningTestBase):
+    complete_opening_before_wallet = True
     agent_extra_args = ("--ack-held-events",)
     tenant_rpc_timeout = 2
 
@@ -122,13 +123,14 @@ class _DelayedPaymentBase(ChannelSigningTestBase):
                 tenant["client"].url = tenant["gate"].url
                 tenant["gate"].forward_timeout = 2
                 tenant["gate"].release()
-                submitted = self._rpc(
-                    tenant["client"],
-                    "submit_channel_signature",
-                    [tenant["gate"].submission],
-                    self.preparation_until,
-                )
-                assert submitted["type"] == "Applied", submitted
+                if not self.hosted_v2:
+                    submitted = self._rpc(
+                        tenant["client"],
+                        "submit_channel_signature",
+                        [tenant["gate"].submission],
+                        self.preparation_until,
+                    )
+                    assert submitted["type"] == "Applied", submitted
             while True:
                 channels = self._views(self.preparation_until)
                 ready = all(

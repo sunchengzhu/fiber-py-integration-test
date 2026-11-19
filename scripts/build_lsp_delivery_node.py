@@ -11,7 +11,7 @@ import subprocess
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
-REVISION = "76307312e8de518c9a32074e6d16867c04de4f86"
+REVISION = "cf8a56f96f6bae25d128524e47321a9d1472705b"
 
 
 def digest(path):
@@ -69,6 +69,7 @@ def main():
     version = subprocess.check_output([base / "fnn", "--version"], text=True).strip()
     assert version == base_manifest["fnn_version"] and "dirty" not in version
     assert args.revision[:7] in version
+    hosted_v2 = "hosted-v2" in base_manifest.get("driver_build_command", [])
     upstream_main = source / "crates/fiber-bin/src/main.rs"
     upstream_hash = digest(upstream_main)
     output.mkdir(parents=True)
@@ -98,7 +99,7 @@ def main():
     (build / "Cargo.toml").write_text(
         '[package]\nname = "lsp-delivery-node"\nversion = "0.1.0"\nedition = "2021"\n'
         '[workspace]\n[[bin]]\nname = "lsp-delivery-node"\npath = "_delivery_node.rs"\n'
-        "[features]" + dependencies
+        "[features]\nhosted-v2 = []\n" + dependencies.lstrip("\n")
     )
     adapter_sources = sorted(suite.glob("_delivery*.rs"))
     assert suite / "_delivery_node.rs" in adapter_sources
@@ -124,7 +125,7 @@ def main():
             "--manifest-path",
             str(build / "Cargo.toml"),
             "--features",
-            "debug-add-tlc",
+            "debug-add-tlc,hosted-v2" if hosted_v2 else "debug-add-tlc",
         ],
         env=env,
         cwd=source,
@@ -146,7 +147,7 @@ def main():
         "--manifest-path",
         str(build / "Cargo.toml"),
         "--features",
-        "debug-add-tlc",
+        "debug-add-tlc,hosted-v2" if hosted_v2 else "debug-add-tlc",
     ]
     subprocess.run(command, env=env, cwd=source, check=True)
     product_clean(source, args.revision)

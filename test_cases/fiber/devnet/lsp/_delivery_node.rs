@@ -28,6 +28,9 @@ mod upstream {
             Box::new(cli_progress),
         )
         .map_err(|e| ExitMessage(e.to_string()))?;
+        #[cfg(feature = "hosted-v2")]
+        let port = Arc::new(fnn::store::store_impl::StoreChangePort::default());
+        #[cfg(not(feature = "hosted-v2"))]
         let port = Arc::new(OutputPort::default());
         let changes = port.clone();
         store.set_watcher(Arc::new(move |change| {
@@ -389,6 +392,9 @@ fn snapshot(store: &Store) -> Result<Value, String> {
         .get_all_payment_sessions()
         .into_iter()
         .map(|session| {
+            #[cfg(feature = "hosted-v2")]
+            let attempts = store.get_attempts(session.session_key());
+            #[cfg(not(feature = "hosted-v2"))]
             let attempts = store.get_attempts(session.payment_hash());
             let previous_keys = session
                 .request

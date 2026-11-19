@@ -12,10 +12,15 @@ import signal
 import subprocess
 import time
 
-REVISION = "76307312e8de518c9a32074e6d16867c04de4f86"
-HOSTED_V2_REVISION = "505c48fbe01fe22504f99bde085d8ebda2c53018"
+REVISION = "cf8a56f96f6bae25d128524e47321a9d1472705b"
 ROOT = Path(__file__).resolve().parents[1]
 F2_REVISION = "56c761c45c271c086b05c8d5ea3e033448f5fdf8"
+
+
+def uses_hosted_v2(source):
+    """Select the SDK adapter for the opening protocol in this checkout."""
+    agent = source / "tests/fiber-lsp-sdk-agent/src/agent.rs"
+    return "pub async fn wait_for_opening_commitment" in agent.read_text()
 
 
 def build_refund_f2(args):
@@ -364,6 +369,7 @@ def main():
     if revision != args.revision:
         parser.error(f"expected Fiber {args.revision}, got {revision}")
     subprocess.run(["git", "diff", "--exit-code", "HEAD", "--"], cwd=source, check=True)
+    hosted_v2 = uses_hosted_v2(source)
     target = (args.target_dir or source / "target").resolve()
     env = dict(
         os.environ,
@@ -488,7 +494,7 @@ def main():
             "--manifest-path",
             str(driver_build / "Cargo.toml"),
         ]
-        if revision == HOSTED_V2_REVISION:
+        if hosted_v2:
             driver_command.extend(("--features", "hosted-v2"))
         subprocess.run(
             driver_command,
@@ -563,7 +569,7 @@ def main():
                 (driver_build / "Cargo.lock").read_bytes()
             ).hexdigest(),
         }
-        if revision == HOSTED_V2_REVISION:
+        if hosted_v2:
             driver_manifest["driver_build_command"] = driver_command
     manifest = {
         "revision": args.revision,

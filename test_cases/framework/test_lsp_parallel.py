@@ -484,7 +484,9 @@ def test_default_cli_is_serial_and_unqualified_parallel_rejected(tmp_path, monke
         "argv",
         ["runner", "--workers", "2", "--plan-only", "--output", str(tmp_path / "bad")],
     )
-    assert runner.main() != 0 and (tmp_path / "bad/batch-error.json").exists()
+    with pytest.raises(SystemExit, match="2"):
+        runner.main()
+    assert not (tmp_path / "bad").exists()
 
 
 def test_sigterm_cancels_both_workers_and_preserves_native_results(tmp_path):
@@ -518,7 +520,9 @@ sys.exit(r.main())
 ''')
     bundle = tmp_path / "bundle"
     bundle.mkdir()
-    (bundle / "build.json").write_text(json.dumps({"revision": runner.REVISION}))
+    (bundle / "build.json").write_text(
+        json.dumps({"revision": runner.TWO_WORKER_PILOT_REVISION})
+    )
     env = {**os.environ, "PYTHONPATH": str(runner.ROOT)}
     with (tmp_path / "controller.log").open("w") as log:
         process = subprocess.Popen(
@@ -527,6 +531,8 @@ sys.exit(r.main())
                 str(controller),
                 "--workers",
                 "2",
+                "--revision",
+                runner.TWO_WORKER_PILOT_REVISION,
                 "--output",
                 str(output),
                 "--bundle",
