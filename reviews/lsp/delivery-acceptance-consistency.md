@@ -1,5 +1,15 @@
 # Gate2：Hosted delivery 接纳一致性
 
+## 导读
+
+接纳请求可能在调用方等待期间完成持久化并继续付款。本评审检查原上游 TLC 与下游付款是否一致，避免上游失败却向租户付款。`43271bb` 将产品等待接纳回复的上限从 5 秒改为 15 秒，本轮在 `c04dc087` 和 `03d966f` 复核了该期限；因此 01/02 的故障观察也必须跨过真实 15 秒。资金守恒和最多一次有效付款的判据沿用已确认版本。受控代理仍用于稳定取得接纳前/接纳后边界，不据此推断线上发生频率。
+
+## 本轮判据
+
+- 已确认 [01/02 两行](#用例)使用新版真实接纳期限 15 秒。逐 K 的资金与结算判据沿用已确认版本。
+
+`c04dc087` 和 `03d966f` 分别使用同一版本的 FNN、SDK 和测试 wrapper 实跑，正常付款对照与 01/02 均通过。真实 [LspDeliveryPort](https://github.com/nervosnetwork/fiber/blob/c04dc087f2b9d65075079077b8d0b73a44c87c3b/crates/fiber-lib/src/lsp/port.rs#L18-L52) 发起接纳调用，测试代理只控制原请求或回复的转交。用同一原 K 的 reply port 声明、关闭状态及 NetworkActor 的超时日志证明期限，测试采集最多等 20 秒。[上一轮 c04 CI](https://github.com/sunchengzhu/fiber-py-integration-test/actions/runs/44545282498) 仍用旧代理发出 5 秒调用；该结果和早期 843 的 5 秒记录均保留为历史证据。
+
 2026-11-10 维护复验：产品固定 `76307312e8de518c9a32074e6d16867c04de4f86`，下方已确认用例行、优先级和业务判据不变；843 的原始依据保留为历史。当前 `service.rs` 在 existing-key 检查前，先要求 `next_node_id` 等于发票所属租户公钥。因此 06 的“B 合法 hash/目标”自动化同时使用 B hash 和真实 T–B 通道对端公钥，保留原 incoming key 及其余请求字段；旧的仅改 hash 输入会返回 NotHosted，不能计为 06 的冲突验证。
 
 本轮另修复证据采集顺序：旧消费者把较新的直接快照和延后读取的旧周期快照混合，可能把 TLC Fulfill 误判为回退。测试 wrapper 现在只串行化“快照采集→日志发布”，不修改产品 actor 或存储写入；直接响应前先落同一条带连续序号的事件，Python 只消费这个有序流，并验证直接响应与日志事实完全相同。真实 TLC 完成回退、下游终态回退、历史丢失仍非零失败；不通过忽略这些回退来修测试。离线红测 8 failed / 8 passed，最终绿测 17 passed；新同源 wrapper 的 D2 真实资格及同组 8 个方法已复验：7 passed；仅 DELIVERY-02 按原断言失败（原 K failed、下游 paid）。04 和 06 的修复后真实复验通过，全部声明输入不变。原始 D1、构建失败与 D2 回执均保留于本地 `local-evidence/lsp-763-full-regression-20261109/`，不把离线结果转作业务通过。
@@ -32,7 +42,7 @@ python scripts/run_lsp_delivery_batch.py --source <干净843源码> \
 ## Spec
 
 ### SPEC-01：调用超时不能产生无对应上游收入的下游支出
-Condition: 原 K 的接纳请求在服务接纳前被延迟，或真实服务已持久化且返回 Buffered 但原调用方没有收到回复，调用方真实跨过 5 秒超时。
+Condition: 原 K 的接纳请求在服务接纳前被延迟，或真实服务已持久化且返回 Buffered 但原调用方没有收到回复；固定 43271bb 时，调用方真实跨过 15 秒超时。历史 843 的超时为 5 秒。
 Expected: 恢复后原 K 要么上下游一致成功且只支付一次，要么安全失败且不发生有效下游支出；原 K 已不可逆失败而其下游成功属于失败，不能用后续新 K 的成功抵消。待确认：采用本批“恢复 120s + 稳定 30s”的有界验收窗口；这是测试上限，不是已发布的产品恢复 SLA，也不指定产品必须新增哪一种查询/撤销 API。
 Observable: 捕获/转发/持久化/Buffered/原调用超时的单调时序，原 K 上游 TLC remove/兑现证据、下游 session 的 previous_tlcs 绑定、delivery、真实签名、余额与锁定额。
 Basis: 已确认 Gate1 SPEC-02；[调用超时及错误路径](https://github.com/nervosnetwork/fiber/blob/84333eea8488a8afc7e4474aa4bbd0e7e973cee9/crates/fiber-lib/src/fiber/network.rs#L5312)、[接纳先于回复](https://github.com/nervosnetwork/fiber/blob/84333eea8488a8afc7e4474aa4bbd0e7e973cee9/crates/fiber-lib/src/lsp/service.rs#L519)、[dispatch 前检查上游](https://github.com/nervosnetwork/fiber/blob/84333eea8488a8afc7e4474aa4bbd0e7e973cee9/crates/fiber-lib/src/lsp/service.rs#L866)、[settle 跳过非 Pending 上游](https://github.com/nervosnetwork/fiber/blob/84333eea8488a8afc7e4474aa4bbd0e7e973cee9/crates/fiber-lib/src/fiber/network.rs#L8842)。安全断言沿用已确认范围，恢复时限为本次提案。
@@ -67,7 +77,7 @@ Testing: required
 
 <!-- TEST-TREE-BEGIN -->
 - 接纳结果不确定时的资金一致性
-  - 接纳前真正跨过 actor 5 秒再放行：LSP-DELIVERY-01 [primary] -> SPEC-01
+  - 接纳前真正跨过当前产品的 actor 15 秒超时再放行：LSP-DELIVERY-01 [primary] -> SPEC-01
   - 真实接纳后扣留 actor 回复直到原调用超时：LSP-DELIVERY-02 [primary] -> SPEC-01
 - 同一次 incoming 的原样重投
   - InFlight 重投后原付款只完成一次：LSP-DELIVERY-03 [primary] -> SPEC-02
@@ -85,8 +95,8 @@ Testing: required
 <!-- TEST-CASES-BEGIN -->
 | 用例 | 场景 | 预期结果 | 防止的问题 | 优先级 |
 | --- | --- | --- | --- | --- |
-| `LSP-DELIVERY-01` | - [x] 捕获 P→T→A 的真实原 K，请求尚未交给接纳服务；证明原调用 5 秒超时后，仅放行该原请求一次 | 原 K 最终上下游一致成功且仅付一次，或无下游支出的安全失败；原 K 失败后不得由其下游向 A 支付；记录后续新 K，逐执行与总账均一致 | 排队请求在调用方失败后继续支出，或新尝试成功掩盖原执行损失 | P0 |
-| `LSP-DELIVERY-02` | - [x] 原 K 已真实持久化、服务返回 Buffered 并安排恢复；代理不传回该回复，保留原 reply port 至原调用真实 5 秒超时，随后解除故障 | 按原 K 查清已接纳事实，原执行上下游结果一致且最多一次有效付款；成功有对应上游收入，失败无下游支出，不能仅凭回复超时判业务失败或通过 | 已接纳工作继续付款而上游已经失败，或恢复重复付款 | P0 |
+| `LSP-DELIVERY-01` | - [x] 捕获 P→T→A 的真实原 K，请求尚未交给接纳服务；证明原调用在当前产品的 15 秒期限后真实超时，再仅放行该原请求一次 | 原 K 最终上下游一致成功且仅付一次，或无下游支出的安全失败；原 K 失败后不得由其下游向 A 支付；记录后续新 K，逐执行与总账均一致 | 排队请求在调用方失败后继续支出，或新尝试成功掩盖原执行损失 | P0 |
+| `LSP-DELIVERY-02` | - [x] 原 K 已真实持久化、服务返回 Buffered 并安排恢复；代理不传回该回复，保留原 reply port 至当前产品 15 秒期限后真实超时，随后解除故障 | 按原 K 查清已接纳事实，原执行上下游结果一致且最多一次有效付款；成功有对应上游收入，失败无下游支出，不能仅凭回复超时判业务失败或通过 | 已接纳工作继续付款而上游已经失败，或恢复重复付款 | P0 |
 | `LSP-DELIVERY-03` | - [x] A 原 K 真实 InFlight，暂扣目标签名固定状态；将捕获的完整原请求按同 K 重投一次，再放行原签名 | 重投被接纳为原执行，暂停窗口原记录和资金不变，不新增 dispatch；恢复后仅原付款成功一次，双段余额、实际费用和零 TLC 锁定额一致 | 同 key 重投生成第二次付款或延长原 delivery 生命周期 | P0 |
 | `LSP-DELIVERY-04` | - [x] 原 K 已正常 Succeeded、上下游结算且无锁定，原 hint 仍有效；完整原请求按同 K 重投一次 | 返回原接纳结果，原 Succeeded 记录、dispatch 次数和余额保持不变；连续 30 秒没有新 TLC、签名工作或有效付款 | 已完成执行被重放后复活或重复扣款 | P0 |
 | `LSP-DELIVERY-05` | - [x] A 原 K 真实 InFlight 并暂扣签名；保持原 invoice/hash/key，仅把 amount_to_forward 从 M 改为 M+1 重投一次，再放行原签名 | 同一 incoming TLC 的 replay 冲突在 existing-key 检查拒绝（already exists with different data），不 dispatch、原记录和暂停窗口资金不变；金额字段校验另用不同 TLC/key 覆盖；放行后仅原 M 结算一次，最终费用与余额正确 | 同 key 改金额被当新执行或二次付款，或把 replay 冲突误当金额校验覆盖 | P1 |
@@ -124,11 +134,11 @@ dev RPC 的 `add_tlc` 不构造本路径的 trampoline onion/previous_tlc，也�
 ### 各故障的精确顺序
 
 1. **01 接纳前**：代理捕获真实 request 并持续保留原 reply port；此时按 K 无 delivery 且尚未转发。等待真实 NetworkActor 的原 `call_t!` 超时事件（关联唯一故障 K），在事件后至多 1s 发出原 request，不再等待上游完全 Removed 才挑安全分支；使用代理自己的观察 reply port 接收真实服务结果，不向已超时原调用方补造回复。必须保留“未转发 → 原调用超时 → 转发 → 服务接纳/拒绝”的顺序；网络 actor/时钟一直运行。若记录不足或放行延误，报触发未取得，不重新跑来选分支。
-2. **02 已接纳后**：代理仅替换内部 reply port，把真实 request 交给真实 service；收到真实 Buffered 后按 K 读到记录，保存该记录及 Resume 已安排的依据。原 reply port 一直保留而不回复，直到真实 5s Timeout，再丢弃。立即丢 port 可能只得到 channel closed，不能算本行；若真实服务未在调用超时前返回 Buffered，也不能算本行。service 自身恢复正常推进，不额外挡住上游检查来制造损失。
+2. **02 已接纳后**：代理仅替换内部 reply port，把真实 request 交给真实 service；收到真实 Buffered 后按 K 读到记录，保存该记录及 Resume 已安排的依据。原 reply port 一直保留而不回复，直到当前 43271bb 的真实 15s Timeout，再丢弃。立即丢 port 可能只得到 channel closed，不能算本行；若真实服务未在调用超时前返回 Buffered，也不能算本行。service 自身恢复正常推进，不额外挡住上游检查来制造损失。
 3. **03/05/06 active 重投**：先有真实 InFlight 与 pending SDK 签名的稳定检查点，固定原完整记录。通过代理控制入口将捕获 request 直接重投给真实 service 一次，保留 K 和响应。03 原样；05 仅 M→M+1；06 改为 B 真实注册发票/hash/目标且金额/资产仍合法。06 保存产品规范化后的预期目标和真实冲突错误来源，不通过调用私有 helper 或伪造登记绕过前置条件。分别读回原记录/索引/余额，再放行原 A 签名。
 4. **04 成功终态重投**：另一个新环境正常完成原付款，确认按 K 的 Succeeded 和实际资金，再原样重投一次；记录返回 Buffered 只是 service 对已有记录的接纳答复，不是又一次付款成功。
 
-原产品的 Timeout 日志不带 K，资格阶段必须建立唯一在途故障 K 与代理事件、原 reply port 的 5s timeout/持续持有/关闭变化、真实 NetworkActor Timeout 日志及 actor 存活的对应关系。port 关闭单独不能区分超时与调用任务退出；并发调用造成无法关联时停止为资格失败。02 读回记录时 Resume 可能已经推进状态，允许 Deferred 或可验证的合法后继状态，不能为保留 Deferred 而挡住真实恢复。
+原产品的 Timeout 日志不带 K，资格阶段必须建立唯一在途故障 K 与代理事件、原 reply port 的当前 15s timeout/持续持有/关闭变化、真实 NetworkActor Timeout 日志及 actor 存活的对应关系。port 关闭单独不能区分超时与调用任务退出；并发调用造成无法关联时停止为资格失败。02 读回记录时 Resume 可能已经推进状态，允许 Deferred 或可验证的合法后继状态，不能为保留 Deferred 而挡住真实恢复。
 
 上述同 K 内部重投验证服务的防御行为，不宣称是外部用户可直接调用的 RPC，也不声称真实 P2P 必然产生这种冲突。正常对照必须证明真实发票路径确实进入 Accept 而非 NotHosted。资格自检检查代理一次性命中、非目标透传、原 port 生命周期、按 K 读取及退出清理；随后一次无故障真实 P→T→A 控制付款核对完整资金。出现 FakeRuntimeFactory/NoopNetworkActor、只能借测试模块 mock chain、需要复制支付业务或新产品钩子时立即停为测试代码缺口，不扩大适配。
 
@@ -155,7 +165,7 @@ dev RPC 的 `add_tlc` 不构造本路径的 trampoline onion/previous_tlc，也�
 | 阶段 | 硬上限 | 内容与失败处理 |
 | --- | --- | --- |
 | 独立产物及资格 | 60 分钟 | 预检 5 分钟、匹配产物/薄包装构建 30 分钟、代理自检 5 分钟、真实无故障控制付款和安装屏障/存储/清理资格 20 分钟；任一失败即停，原 main/产品库/产物/合约哈希均留证，不能用旧版本替代 |
-| 正式六行 | 每行 8 分钟，共最多 48 分钟 | 每行环境/通道与检查点≤240s；一次故障/重投控制≤10s（原 caller Timeout 必须真实观察）；解除后终态≤120s；稳定观察30s；保留并清理≤60s，共460s，余20s只作调度余量。各子截止不重置，不借用后行预算 |
+| 正式六行 | 每行 8 分钟，共最多 48 分钟 | 每行环境/通道与检查点≤240s；01/02 故障控制≤20s（必须观察 15s 原 caller Timeout），其余重投控制≤10s；解除后终态≤120s；稳定观察30s；保留并清理≤60s，01/02 共470s、余10s调度余量。各子截止不重置，不借用后行预算 |
 | 收尾、映射与复核材料 | 12 分钟 | 保存每行版本/请求/完整记录/时序/余额/签名/日志/退出码，核对仅本批进程与端口已结束；更新现有 LSP 运行说明、行旁 TEST-MAP 与复选框。失败行证据先保存再清理，未运行项明确列出 |
 
 正式顺序建议 **01 → 02 → 03 → 04 → 05 → 06**，每行新环境、单次故障；若 01/02 暴露产品失败或无法取得触发资格，03～06 不自动换路继续。正常资格付款已覆盖本适配器的连接/签名/支付主路径；本轮不另跑旧版延迟签名长等待套件，也不把该正常控制付款记为新 Case 通过。重复稳定性或失败修复后的新批次需要另行授权，不能为取得某个竞态分支反复重跑。

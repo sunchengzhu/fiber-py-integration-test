@@ -23,6 +23,14 @@ if str(ROOT) not in sys.path:
 from scripts import run_lsp_regression as runner
 
 SUITE = runner.SUITE
+# Compile and run these separately against the revision being considered for merge.
+EXCLUDED_NODEIDS = {
+    f"{SUITE}/test_lsp_feature_off.py::TestLspFeatureOff::{method}"
+    for method in (
+        "test_without_lsp_feature_starts_ordinary_node",
+        "test_lsp_config_is_rejected_before_rpc",
+    )
+}
 CATEGORIES = {
     "query": (
         "查询与租户隔离",
@@ -59,7 +67,6 @@ CATEGORIES = {
         "Delivery 接纳与重启",
         ("test_delivery_acceptance.py", "test_delivery_fnn_restart.py"),
     ),
-    "feature-off": ("关闭 LSP feature", ("test_lsp_feature_off.py",)),
 }
 LABELS = {
     "passed": "通过",
@@ -194,7 +201,8 @@ def plan(revision, output):
         str(native),
     ]
     subprocess.run(command, cwd=ROOT, check=True)
-    nodeids = read(native / "plan.json")["nodeids"]
+    collected = read(native / "plan.json")["nodeids"]
+    nodeids = [n for n in collected if n not in EXCLUDED_NODEIDS]
     buckets = partition(nodeids)
     result = {
         "revision": revision,
@@ -203,6 +211,9 @@ def plan(revision, output):
         ).strip(),
         "buckets": buckets,
         "cases": [{"nodeid": n, **metadata(n)} for n in nodeids],
+        "excluded_cases": [
+            {"nodeid": n, **metadata(n)} for n in collected if n in EXCLUDED_NODEIDS
+        ],
     }
     write(output / "plan.json", result)
     matrix = {
@@ -218,6 +229,8 @@ def plan(revision, output):
 
 
 def run_bucket(plan_path, bucket_id, output):
+    if bucket_id not in CATEGORIES:
+        raise ValueError(f"unknown or excluded CI bucket: {bucket_id}")
     planned = read(plan_path)
     bucket = next(b for b in planned["buckets"] if b["id"] == bucket_id)
     revision = full_sha(planned["revision"])
@@ -241,27 +254,6 @@ def run_bucket(plan_path, bucket_id, output):
             "test_inputs": inputs_before,
         },
     )
-    nolsp = ROOT / "download/fiber" / f"nolsp-{revision[:7]}/fnn"
-    if bucket_id == "feature-off" and not nolsp.is_file():
-        value = read(output / "job.json")
-        inputs_after = input_fingerprints()
-        drift = sorted(
-            path
-            for path in inputs_before.keys() | inputs_after.keys()
-            if inputs_before.get(path) != inputs_after.get(path)
-        )
-        value.update(
-            exit_code=2,
-            finished_at=time.time(),
-            inputs_unchanged=not drift,
-            source_drift=drift,
-            build_unavailable=(
-                "The selected Fiber commit did not produce a no-LSP binary; "
-                "see the build artifact's nolsp-build.log and nolsp-status.json"
-            ),
-        )
-        write(output / "job.json", value)
-        return 2
     command = [
         sys.executable,
         str(ROOT / "scripts/run_lsp_regression.py"),
@@ -280,8 +272,6 @@ def run_bucket(plan_path, bucket_id, output):
         "--delivery-node",
         str(ROOT / "download/fiber" / f"delivery-{revision[:7]}/lsp-delivery-node"),
     ]
-    if bucket_id == "feature-off":
-        command.extend(("--nolsp-fnn", str(nolsp)))
     command.extend(bucket["nodeids"])
     completed = subprocess.run(command, cwd=ROOT)
     value = read(output / "job.json")
@@ -605,6 +595,14 @@ def render_report(plan_path, source, output):
                 f"CI {stage} 阶段: {status}（包括断言、基础设施或上传失败）"
             )
     bad = bool(problems) or not rows or set(counts) != {"passed"}
+    excluded_cases = planned.get("excluded_cases", [])
+    excluded_note = (
+        "合入前单独验证 "
+        + "、".join(row["case"] or row["nodeid"] for row in excluded_cases)
+        + "。"
+        if excluded_cases
+        else ""
+    )
     write(
         output / "report.json",
         {
@@ -613,6 +611,7 @@ def render_report(plan_path, source, output):
             "counts": counts,
             "problems": problems,
             "cases": rows,
+            "excluded_cases": excluded_cases,
             "complete": not bad,
             "stages": stages,
         },
@@ -636,10 +635,11 @@ def render_report(plan_path, source, output):
         f'<option value="{k}">{v}</option>' for k, v in LABELS.items()
     )
     planned_count = str(len(rows)) if rows else "未取得"
+    excluded_html = f"<p>{esc(excluded_note)}</p>" if excluded_note else ""
     page = f"""<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Fiber LSP 测试结果</title><style>
 body{{font:15px system-ui,sans-serif;background:#f4f6fa;color:#182639;max-width:1200px;margin:30px auto;padding:0 22px}}h1{{font-size:27px}}.cards{{display:flex;gap:12px;flex-wrap:wrap}}.card{{background:white;border:1px solid #d8e0ec;border-top:4px solid currentColor;border-radius:8px;padding:14px 22px;min-width:100px}}.card b{{display:block;font-size:30px}}.passed{{color:#17683b}}.failure,.error{{color:#ad2525}}.skipped{{color:#8e6200}}.not_run{{color:#657184}}.incomplete{{color:#7143a5}}table{{border-collapse:collapse;width:100%;background:white;margin-top:18px}}th,td{{border:1px solid #d8e0ec;padding:12px;text-align:left;vertical-align:top}}th{{background:#e9eff7}}td:first-child{{min-width:95px;font-weight:650}}input,select{{padding:9px;border:1px solid #aebbd0;border-radius:5px;margin:18px 8px 0 0}}input{{width:48%}}code,pre{{overflow-wrap:anywhere;white-space:pre-wrap;font-size:12px}}.notice{{background:#fff5db;padding:12px;border-radius:6px}}summary{{cursor:pointer;margin-top:8px;color:#365c8d}}small{{color:#526379}}</style>
 <h1>Fiber LSP 测试结果</h1><p>产品提交 <code>{esc(planned["revision"])}</code><br>测试提交 <code>{esc(planned["integration_commit"])}</code></p><p>计划 {planned_count} 条 · 原生报告 {sum(counts[k] for k in ('passed','failure','error','skipped'))} 条</p><progress aria-label="原生报告进度" style="width:100%;height:20px;margin-bottom:16px" max="{max(1,len(rows))}" value="{sum(counts[k] for k in ('passed','failure','error','skipped'))}"></progress><div class="cards">{cards}</div>
-<p class="notice">这是执行结束后的快照。运行中请看 Actions 测试组状态及日志中的 [LSP] 逐条进度。进度事件不作为通过依据；未启动与已开始但缺少原生结果分别展示。详细日志和原始状态位于本轮各组证据 artifact。</p><ul>{issues}</ul><select id="status">{options}</select><input id="search" placeholder="搜索用例、场景 ID 或测试组" aria-label="搜索测试"><table><thead><tr><th>状态</th><th>测试组</th><th>用例</th></tr></thead><tbody>{''.join(table)}</tbody></table><small>通过/失败/错误/跳过来自原生 JUnit；缺失、重复或不匹配结果不会补成通过。历史失败不会自动豁免。</small><script>
+{excluded_html}<p class="notice">这是执行结束后的快照。运行中请看 Actions 测试组状态及日志中的 [LSP] 逐条进度。进度事件不作为通过依据；未启动与已开始但缺少原生结果分别展示。详细日志和原始状态位于本轮各组证据 artifact。</p><ul>{issues}</ul><select id="status">{options}</select><input id="search" placeholder="搜索用例、场景 ID 或测试组" aria-label="搜索测试"><table><thead><tr><th>状态</th><th>测试组</th><th>用例</th></tr></thead><tbody>{''.join(table)}</tbody></table><small>通过/失败/错误/跳过来自原生 JUnit；缺失、重复或不匹配结果不会补成通过。历史失败不会自动豁免。</small><script>
 function filter(){{const s=document.getElementById('status').value,q=document.getElementById('search').value.toLowerCase();for(const r of document.querySelectorAll('tbody tr'))r.hidden=(s!=='all'&&r.dataset.status!==s)||!r.textContent.toLowerCase().includes(q)}}document.getElementById('status').onchange=filter;document.getElementById('search').oninput=filter;
 </script></html>"""
     (output / "index.html").write_text(page)
@@ -654,6 +654,8 @@ function filter(){{const s=document.getElementById('status').value,q=document.ge
         + " | ".join(str(counts[k]) for k in LABELS)
         + " |\n\n完整筛选表见 **lsp-report** artifact 内 `index.html`（下载后打开）；各组日志/数据库见 **lsp-evidence-组名**。\n\n"
     )
+    if excluded_note:
+        summary += excluded_note + "\n\n"
     unfinished = [r for r in rows if r["status"] != "passed"]
     if unfinished:
         summary += "| 状态 | 测试组 | 用例 |\n| --- | --- | --- |\n" + "".join(

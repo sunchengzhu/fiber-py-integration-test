@@ -239,7 +239,7 @@ impl Actor for Proxy {
 #[derive(Debug)]
 struct HostedPortProxy {
     real: Arc<LspDeliveryPort>,
-    proxy: ActorRef<LspServiceMessage>,
+    acceptance: Arc<LspDeliveryPort>,
 }
 
 #[async_trait::async_trait]
@@ -248,12 +248,9 @@ impl HostedDeliveryPort for HostedPortProxy {
         &self,
         request: TrampolineForwardingRequest,
     ) -> Result<DeliveryDecision, String> {
-        ractor::call_t!(
-            self.proxy,
-            |reply| LspServiceMessage::AcceptTrampolineDelivery(request, reply),
-            5_000
-        )
-        .map_err(|error| format!("delivery proxy unavailable: {error}"))?
+        // Keep the production caller and its deadline. Only the acceptance
+        // request/reply path behind the port is intercepted by the test actor.
+        self.acceptance.accept_trampoline_delivery(request).await
     }
 
     async fn decide_payment_outcome(
@@ -570,12 +567,11 @@ async fn control(
     let (proxy, _) = Actor::spawn(Some("delivery test proxy".into()), Proxy, real.clone())
         .await
         .map_err(|e| e.to_string())?;
-    let real_port = LspDeliveryPort::new(real.clone());
-    STATE.get().unwrap().lock().unwrap().real = Some(real);
     let delivery_port = Arc::new(HostedPortProxy {
-        real: real_port,
-        proxy: proxy.clone(),
+        real: LspDeliveryPort::new(real.clone()),
+        acceptance: LspDeliveryPort::new(proxy),
     });
+    STATE.get().unwrap().lock().unwrap().real = Some(real);
     network
         .send_message(NetworkActorMessage::new_command(
             PublicNetworkCommand::SetDeliveryPort(delivery_port),

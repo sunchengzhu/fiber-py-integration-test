@@ -150,3 +150,45 @@ def test_direct_response_with_same_sequence_cannot_change_logged_facts(tmp_path)
     case = observer(tmp_path, [([logged], response)])
     with pytest.raises(AssertionError, match="direct snapshot differs"):
         case._snapshot_delivery(1000)
+
+
+@pytest.mark.parametrize(
+    ("revision", "duration"),
+    [
+        ("76307312e8de518c9a32074e6d16867c04de4f86", 5_000),
+        ("c04dc087f2b9d65075079077b8d0b73a44c87c3b", 15_000),
+    ],
+)
+def test_caller_timeout_uses_the_native_deadline_for_the_revision(revision, duration):
+    captured = {
+        "key": KEY,
+        "original_port_closed": False,
+        "timeout_ms": duration,
+        "monotonic_ms": 100,
+    }
+    timeout = {
+        "key": KEY,
+        "original_port_closed": True,
+        "log": "Hosted trampoline delivery unavailable: LSP delivery service unavailable: timeout",
+        "elapsed_ms": duration - 5,
+        "monotonic_ms": 100 + duration - 4,
+    }
+    delivery._assert_native_caller_timeout(captured, timeout, revision)
+
+    if duration == 5_000:
+        with pytest.raises(AssertionError):
+            delivery._assert_native_caller_timeout(
+                captured, timeout, "c04dc087f2b9d65075079077b8d0b73a44c87c3b"
+            )
+    else:
+        for invalid in (
+            {
+                **timeout,
+                "log": "Hosted trampoline delivery unavailable: delivery proxy unavailable: timeout",
+            },
+            {**timeout, "key": {**KEY, "incoming_tlc_id": 1}},
+            {**timeout, "original_port_closed": False},
+            {**timeout, "elapsed_ms": 4_995, "monotonic_ms": 5_096},
+        ):
+            with pytest.raises(AssertionError):
+                delivery._assert_native_caller_timeout(captured, invalid, revision)

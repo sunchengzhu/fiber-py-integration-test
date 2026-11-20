@@ -15,6 +15,45 @@ import test_cases.fiber.devnet.lsp.test_channel_signing_deadline as deadline
 from scripts import lsp_regression_runtime as runtime
 
 
+def test_safety_deadline_log_belongs_to_local_actor():
+    channel, a, t = "0xabc", "03aaaa", "03bbbb"
+
+    def record(local, remote, timestamp, *, hosted=False):
+        actor = (
+            f"HostedTenant 0x{local}"
+            if hosted
+            else f"Channel-0 Pubkey({local}) <-> Pubkey({remote})"
+        )
+        return (
+            f"  {timestamp}  WARN fnn::fiber::channel: "
+            f"Channel reached TLC on-chain safety deadline, channel_id: Hash256({channel})\n"
+            f'    in ractor::actor::Actor with id: "0.13", name: "{actor}"\n\n'
+        )
+
+    t_event = record(t, a, "2026-11-20T07:05:57.234340Z")
+    a_event = record(a, t, "2026-11-20T07:05:57.236447Z")
+    assert deadline._deadline_events_for_local_actor(t_event, channel, a, t) == []
+    matched = deadline._deadline_events_for_local_actor(
+        t_event + a_event, channel, a, t
+    )
+    assert len(matched) == 1
+    assert matched[0]["record"].strip() == a_event.strip()
+    # A missing blank separator must not merge T's event with A's actor span.
+    adjacent = t_event.rstrip() + "\n" + a_event
+    assert len(deadline._deadline_events_for_local_actor(adjacent, channel, a, t)) == 1
+    hosted_a = record(a, t, "2026-11-20T07:05:57.236447Z", hosted=True)
+    hosted_t = record(t, a, "2026-11-20T07:05:57.234340Z", hosted=True)
+    assert deadline._deadline_events_for_local_actor(hosted_t, channel, a, t) == []
+    assert (
+        len(
+            deadline._deadline_events_for_local_actor(
+                hosted_t + hosted_a, channel, a, t
+            )
+        )
+        == 1
+    )
+
+
 def test_signing_sdk_directory_is_fresh_only_in_shared_mode(tmp_path):
     obj = SimpleNamespace(
         _node_mode="independent", fiber1=SimpleNamespace(tmp_path=str(tmp_path))

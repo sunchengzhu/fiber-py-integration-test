@@ -100,6 +100,30 @@ def test_partition_preserves_complete_shared_groups_and_rejects_unknown_cases():
         ci.partition([selected[0].replace("/lsp/", "/lsp_nightly/")])
 
 
+def test_ci_plan_keeps_feature_cases_outside_runnable_buckets(tmp_path, monkeypatch):
+    ordinary = nodes(2)
+    feature = sorted(ci.EXCLUDED_NODEIDS)
+    collected = [ordinary[0], *feature, ordinary[1]]
+
+    def fake_collect(command, *, cwd, check):
+        assert cwd == ci.ROOT and check and "--plan-only" in command
+        ci.write(Path(command[-1]) / "plan.json", {"nodeids": collected})
+
+    monkeypatch.setattr(ci.subprocess, "run", fake_collect)
+    monkeypatch.setattr(ci.subprocess, "check_output", lambda *a, **kw: INTEGRATION)
+    output = tmp_path / "plan"
+    plan = ci.plan(REVISION, output)
+
+    assert plan == ci.read(output / "plan.json")
+    assert [case["nodeid"] for case in plan["cases"]] == ordinary
+    assert [bucket["nodeids"] for bucket in plan["buckets"]] == [ordinary]
+    assert {case["case"] for case in plan["excluded_cases"]} == {
+        "LSP-FEATURE-01",
+        "LSP-FEATURE-02",
+    }
+    assert [case["nodeid"] for case in plan["excluded_cases"]] == feature
+
+
 def fixture_plan(tmp_path, count=4):
     selected = nodes(count)
     plan = {
@@ -290,6 +314,27 @@ def test_all_native_passes_complete_and_summary_is_written(tmp_path, monkeypatch
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
     assert ci.render_report(path, tmp_path / "results", tmp_path / "report") == 0
     assert ci.read(tmp_path / "report/report.json")["complete"] and summary.is_file()
+
+
+def test_report_shows_premerge_cases_outside_ci_counts(tmp_path):
+    path, directory, selected = fixture_plan(tmp_path, 1)
+    plan = ci.read(path)
+    plan["excluded_cases"] = [
+        {"nodeid": nodeid, **ci.metadata(nodeid)}
+        for nodeid in sorted(ci.EXCLUDED_NODEIDS)
+    ]
+    ci.write(path, plan)
+    native_job(directory, selected, ["passed"])
+    report = tmp_path / "report"
+
+    assert ci.render_report(path, tmp_path / "results", report) == 0
+    result = ci.read(report / "report.json")
+    assert result["counts"] == {"passed": 1}
+    assert result["excluded_cases"] == plan["excluded_cases"]
+    for filename in ("index.html", "summary.md"):
+        rendered = (report / filename).read_text()
+        assert "合入前单独验证" in rendered
+        assert "LSP-FEATURE-01" in rendered and "LSP-FEATURE-02" in rendered
 
 
 def test_missing_plan_is_explicitly_unknown_and_nonzero(tmp_path):
@@ -658,29 +703,18 @@ def test_native_success_does_not_override_test_source_drift(tmp_path, monkeypatc
     assert not d["inputs_unchanged"] and d["source_drift"] == ["test.py"]
 
 
-def test_missing_same_revision_nolsp_build_keeps_other_groups_runnable(
-    tmp_path, monkeypatch
-):
-    plan_path, _, selected = fixture_plan(tmp_path, 2)
+def test_legacy_feature_bucket_cannot_be_dispatched(tmp_path, monkeypatch):
+    plan_path, _, _ = fixture_plan(tmp_path, 2)
     plan = ci.read(plan_path)
-    plan["buckets"][0].update(id="feature-off", label="关闭 LSP feature")
+    plan["buckets"][0]["id"] = "feature-off"
     ci.write(plan_path, plan)
-    monkeypatch.setattr(ci.subprocess, "check_output", lambda *a, **kw: INTEGRATION)
     monkeypatch.setattr(
         ci.subprocess,
         "run",
-        lambda *a, **kw: pytest.fail("missing optional binary must not start pytest"),
+        lambda *a, **kw: pytest.fail("an excluded bucket must not start pytest"),
     )
-    monkeypatch.setattr(ci, "input_fingerprints", lambda: {"test.py": "stable"})
-    output = tmp_path / "results/feature-off"
-    assert ci.run_bucket(plan_path, "feature-off", output) == 2
-    job = ci.read(output / "job.json")
-    assert job["nodeids"] == selected and job["inputs_unchanged"]
-    assert "no-LSP binary" in job["build_unavailable"]
-    _, rows, problems, _, counts = ci.results(plan_path, tmp_path / "results")
-    assert counts == {"not_run": 2}
-    assert all(r["detail"] == job["build_unavailable"] for r in rows)
-    assert any("no-LSP binary" in problem for problem in problems)
+    with pytest.raises(ValueError, match="excluded CI bucket"):
+        ci.run_bucket(plan_path, "feature-off", tmp_path / "results/feature-off")
 
 
 def test_batch_deadline_does_not_start_next_job_and_retains_unstarted_plan(
@@ -713,12 +747,9 @@ def test_batch_deadline_does_not_start_next_job_and_retains_unstarted_plan(
     assert ci.read(out / "summary.json")["unstarted_methods"] == nodes(1)
 
 
-@pytest.mark.parametrize(
-    "fetch_failure,nolsp_failure",
-    [(False, False), (True, False), (False, True)],
-)
+@pytest.mark.parametrize("fetch_failure", [False, True])
 def test_cold_build_fetches_locked_dependencies_before_offline_delivery(
-    tmp_path, monkeypatch, fetch_failure, nolsp_failure
+    tmp_path, monkeypatch, fetch_failure
 ):
     root, source, target = (tmp_path / n for n in ("workspace", "product", "target"))
     root.mkdir()
@@ -737,8 +768,7 @@ def test_cold_build_fetches_locked_dependencies_before_offline_delivery(
             return REVISION + "\n"
         if command[:2] == ["git", "status"]:
             return ""
-        assert command[-1] == "--version"
-        return "Fiber (" + REVISION[:7] + ")"
+        raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(builder.subprocess, "check_output", identity)
 
@@ -778,12 +808,7 @@ def test_cold_build_fetches_locked_dependencies_before_offline_delivery(
                 raise RuntimeError("bincode missing; --offline was specified")
             put("download/fiber/delivery-" + REVISION[:7] + "/lsp-delivery-node")
         else:
-            assert command[:2] == ["cargo", "build"] and "--locked" in command
-            stages.append("nolsp")
-            if nolsp_failure:
-                raise RuntimeError("build command failed: exit 101")
-            (target / "debug").mkdir(parents=True)
-            (target / "debug/fnn").write_bytes(b"synthetic fnn")
+            raise AssertionError(f"unexpected build step: {command}")
 
     monkeypatch.setattr(builder, "execute", execute)
     output = root / "output"
@@ -794,15 +819,10 @@ def test_cold_build_fetches_locked_dependencies_before_offline_delivery(
         assert not (output / "runtime.tar.gz").exists()
     else:
         builder.build(source, REVISION, target, output)
-        assert stages == ["ckb", "base", "fetch", "delivery", "nolsp"]
+        assert stages == ["ckb", "base", "fetch", "delivery"]
         runtime = ci.read(output / "runtime-manifest.json")
         assert runtime["revision"] == REVISION
-        assert runtime["nolsp_available"] is not nolsp_failure
-        status = ci.read(output / "nolsp-status.json")
-        assert status["available"] is not nolsp_failure
-        if nolsp_failure:
-            assert status["error"] == "build command failed: exit 101"
-            assert not any("/nolsp-" in path for path in runtime["files"])
+        assert not any("/nolsp-" in path for path in runtime["files"])
         assert (output / "runtime.tar.gz").is_file()
     assert lock.read_bytes() == original_lock
 

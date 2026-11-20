@@ -25,6 +25,38 @@ from test_cases.fiber.devnet.lsp.test_delayed_payment_recovery import (
     _outpoint,
 )
 
+_REVIEWED_CALLER_TIMEOUT_MS = {
+    "76307312e8de518c9a32074e6d16867c04de4f86": 5_000,
+    "505c48fbe01fe22504f99bde085d8ebda2c53018": 5_000,
+    "cf8a56f96f6bae25d128524e47321a9d1472705b": 5_000,
+    "43271bb059df0ed525dfe40753a08a7cf9a2d2f8": 15_000,
+    "c04dc087f2b9d65075079077b8d0b73a44c87c3b": 15_000,
+    "6778057b15f1742a09933726cd14d3fc0a636748": 15_000,
+    "03d966f6cbd3e7beb6162031bf8ad58ee80cb52e": 15_000,
+    "f7510ea1da82e6075499cb88c370b8446a79226c": 15_000,
+}
+_NATIVE_CALLER_TIMEOUT_LOG = (
+    "Hosted trampoline delivery unavailable: LSP delivery service unavailable: timeout"
+)
+
+
+def _assert_native_caller_timeout(capture, timeout, revision):
+    assert capture["key"] == timeout["key"], (capture, timeout)
+    assert capture["original_port_closed"] is False, capture
+    assert timeout["original_port_closed"] is True, timeout
+    assert timeout["log"] == _NATIVE_CALLER_TIMEOUT_LOG, timeout
+    limit = capture["timeout_ms"]
+    assert type(limit) is int and 0 < limit <= 15_000, capture
+    expected = _REVIEWED_CALLER_TIMEOUT_MS.get(revision)
+    assert expected is None or limit == expected, (expected, capture)
+    # The proxy receives the message just after the production call starts.
+    assert limit - 500 <= timeout["elapsed_ms"] <= limit + 1_000, timeout
+    assert (
+        0
+        <= timeout["monotonic_ms"] - capture["monotonic_ms"] - timeout["elapsed_ms"]
+        <= 100
+    ), (capture, timeout)
+
 
 class _DeliveryBase(_DelayedPaymentBase):
     tenant_labels = ("A",)
@@ -867,7 +899,7 @@ class _DeliveryBase(_DelayedPaymentBase):
         )
 
     def _timeout_fault(self, mode):
-        fault_until = time.monotonic() + 10
+        fault_until = min(self.payments["A"]["sent"] + 20, self.business_until)
         while True:
             events = self._events()
             timeout = [e for e in events if e["event"] == "caller_timeout"]
@@ -877,13 +909,12 @@ class _DeliveryBase(_DelayedPaymentBase):
                 break
             self._pause(fault_until, 0.02)
         assert len(timeout) == 1, timeout
-        log = self._log_since_send()
-        assert (
-            "Hosted trampoline delivery unavailable" in log and "timeout" in log
-        ) or "Failed to consult LSP delivery service: timeout" in log, log
         snapshot = self._snapshot_delivery(fault_until)
-        captures = snapshot["captures"]
-        original = captures[0]
+        original = snapshot["captures"][0]
+        assert original["mode"] == mode, original
+        assert (
+            original["request"]["payment_hash"] == self.payments["A"]["hash"]
+        ), original
         self.original_key = original["key"]
         relevant = [e for e in events if e.get("key") == self.original_key]
         assert not any(
@@ -895,29 +926,41 @@ class _DeliveryBase(_DelayedPaymentBase):
         self._record("timeout_qualification", events=relevant, snapshot=snapshot)
         captured = [e for e in relevant if e["event"] == "captured"]
         forwarded = [e for e in relevant if e["event"] == "forwarded"]
-        assert len(captured) == len(forwarded) == 1
-        assert captured[0]["timeout_ms"] == 5000, captured
-        # Capture occurs after the NetworkActor began call_t!, so its elapsed
-        # interval can be slightly shorter than the caller's real five seconds.
-        assert 4500 <= timeout[0]["elapsed_ms"] <= 6000, timeout
-        assert timeout[0]["original_port_closed"], timeout
+        assert len(captured) == len(forwarded) == 1, relevant
+        captured, forwarded, timeout = captured[0], forwarded[0], timeout[0]
+        assert captured["mode"] == mode, captured
+        assert (
+            captured["request"] == forwarded["request"] == original["request"]
+        ), relevant
+        assert not [
+            e
+            for e in events
+            if e["event"] == "captured"
+            and e["key"] != self.original_key
+            and e["monotonic_ms"] <= timeout["monotonic_ms"]
+        ], events
+        _assert_native_caller_timeout(captured, timeout, REVISION)
+        log = self._log_since_send()
+        assert _NATIVE_CALLER_TIMEOUT_LOG in log, log
         if mode == "delay_accept":
             assert (
-                captured[0]["monotonic_ms"]
-                < timeout[0]["monotonic_ms"]
-                <= forwarded[0]["monotonic_ms"]
+                captured["monotonic_ms"]
+                < timeout["monotonic_ms"]
+                <= forwarded["monotonic_ms"]
             )
-            assert forwarded[0]["monotonic_ms"] - timeout[0]["monotonic_ms"] <= 1000
-            assert captured[0]["delivery"] is None, captured
-            assert captured[0]["store_error"] is None, captured
+            assert forwarded["monotonic_ms"] - timeout["monotonic_ms"] <= 1000
+            assert captured["delivery"] is None, captured
+            assert captured["store_error"] is None, captured
         else:
             buffered = [e for e in relevant if e["event"] == "buffered"]
             assert len(buffered) == 1 and buffered[0]["delivery"] is not None
-            assert not buffered[0]["original_port_closed"], buffered
+            assert buffered[0]["store_error"] is None, buffered
+            assert buffered[0]["original_port_closed"] is False, buffered
             assert (
-                forwarded[0]["monotonic_ms"]
+                captured["monotonic_ms"]
+                <= forwarded["monotonic_ms"]
                 < buffered[0]["monotonic_ms"]
-                < timeout[0]["monotonic_ms"]
+                < timeout["monotonic_ms"]
             )
 
     def _active_replay(self, variant, before):

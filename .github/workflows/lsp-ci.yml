@@ -21,7 +21,7 @@ env:
 
 jobs:
   plan:
-    name: ① 固定版本并生成完整用例计划
+    name: ① 固定版本并生成日常用例计划
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     outputs:
@@ -99,6 +99,7 @@ jobs:
         run: rustup show active-toolchain
         working-directory: product
       - name: 工程预检（不启动 CKB / FNN）
+        shell: bash
         run: |
           mkdir -p ci-preflight
           python -m pytest -o addopts= -p no:cacheprovider -vv --tb=short \
@@ -107,6 +108,7 @@ jobs:
             test_cases/framework/test_lsp_parallel.py \
             test_cases/framework/test_lsp_serial_runner.py \
             test_cases/framework/test_lsp_signing_environment.py \
+            test_cases/framework/test_lsp_delivery_observations.py \
             test_cases/framework/test_lsp_cancel_environment.py \
             test_cases/framework/test_lsp_query_environment.py \
             test_cases/framework/test_lsp_invoice_query_environment.py \

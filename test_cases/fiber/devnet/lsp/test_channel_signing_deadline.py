@@ -2,6 +2,7 @@
 
 import copy
 from contextlib import contextmanager
+from datetime import datetime
 import hashlib
 import json
 import os
@@ -60,6 +61,7 @@ ISOLATED_CLOSE_TESTS = {
 }
 RECOVERY_TEST = "test_checkpoint_b_loser_recovers_remote_close"
 
+DELAYED_FUNDING_TEST = "test_stale_external_funding_timer_keeps_opening_alive"
 FUNDING_SPEND_TEST = "test_opening_signature_timeout_aborts_before_broadcast"
 OPENING_REPLAY_TEST = "test_late_channel_signature_after_abort"
 FUNDING_TRACING_DEPTH = 4
@@ -82,15 +84,40 @@ def ckb_hash(preimage):
     )
 
 
-def _funding_spend_evidence_directory(method_name):
+def _funding_spend_evidence_directory(
+    method_name, *, local_root="report/lsp-funding-input-spent"
+):
     root = os.environ.get("LSP_DEADLINE_ARTIFACTS")
     if root is None:
-        local_root = Path("report/lsp-funding-input-spent")
+        local_root = Path(local_root)
         local_root.mkdir(parents=True, exist_ok=True)
         root = tempfile.mkdtemp(prefix="run-", dir=local_root)
     directory = Path(root) / method_name
     directory.mkdir(parents=True, exist_ok=False)
     return directory
+
+
+def _deadline_events_for_local_actor(text, channel_id, local_pubkey, remote_pubkey):
+    """Keep only safety events emitted by this side's channel actor."""
+    local = re.escape(local_pubkey.removeprefix("0x"))
+    remote = re.escape(remote_pubkey.removeprefix("0x"))
+    actor = re.compile(
+        r'in ractor::actor::Actor with id: "[^"]+", name: "(?:'
+        rf"HostedTenant 0x{local}|Channel-\d+ Pubkey\({local}\) <-> "
+        rf'Pubkey\({remote}\))"'
+    )
+    blocks = re.finditer(r"(?m)^  \d{4}-[^\n]+(?:\n(?!\s*$|  \d{4}-)[^\n]*)*", text)
+    events = []
+    for block in blocks:
+        record = block.group(0)
+        line = record.splitlines()[0].strip()
+        if (
+            "Channel reached TLC on-chain safety deadline" in line
+            and f"Hash256({channel_id})" in line
+            and actor.search(record)
+        ):
+            events.append({"line": line, "record": record})
+    return events
 
 
 class TestChannelSigningDeadline(ChannelSigningTestBase):
@@ -113,12 +140,11 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
     def setup_method(self, method):
         self.broadcast_gate = None
         self.funding_spend_gate = None
-        if "hosted-v2" in self.bundle_manifest.get(
-            "driver_build_command", []
-        ) and method.__name__ in {
-            FUNDING_SPEND_TEST,
-            OPENING_REPLAY_TEST,
-        }:
+        hosted_v2 = "hosted-v2" in self.bundle_manifest.get("driver_build_command", [])
+        if hosted_v2 and method.__name__ == DELAYED_FUNDING_TEST:
+            self.complete_opening_before_wallet = True
+            self.submit_external_funding = False
+        if hosted_v2 and method.__name__ in {FUNDING_SPEND_TEST, OPENING_REPLAY_TEST}:
             self.funding_spend_evidence = _funding_spend_evidence_directory(
                 method.__name__
             )
@@ -1515,6 +1541,172 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
 
     # TEST-MAP: LSP-TIMEOUT-03
     def test_stale_external_funding_timer_keeps_opening_alive(self):
+        """
+        1. A–T 完成初始承诺后停止本用例矿工，在 60 秒期限内提交钱包签名。
+        2. 确认原注资进入 CKB 交易池，保持停块至少 65 秒，双方仍有原待开通道。
+        3. 恢复挖块，确认原注资上链，双方用同一注资输出完成开通。
+        """
+        if not self.hosted_v2:
+            self._legacy_external_funding_timer_keeps_opening_alive()
+            return
+
+        # 1. 完成初始承诺、确认链尖稳定，再在 60 秒内提交原钱包签名。
+        directory = _funding_spend_evidence_directory(
+            self._testMethodName, local_root="report/lsp-delayed-funding"
+        )
+        evidence = directory / "observations.jsonl"
+
+        def record(stage, **fields):
+            with evidence.open("a") as stream:
+                stream.write(
+                    json.dumps({"stage": stage, "at": time.monotonic(), **fields})
+                    + "\n"
+                )
+
+        ckb = self.node.rpcUrl
+        local, public = self.client, self.fiber1.client
+        view = self._channel(local)
+        created_wall = int(view["created_at"], 16) / 1000
+        created = time.monotonic() + (created_wall - time.time())
+        wallet_due = (
+            created + self.fiber_config_extra["external_funding_timeout_seconds"]
+        )
+        opening_due = created + self.opening_window_seconds
+        assert self.signer_control(self.tenant, "wait-opening-commitment") == {
+            "verified": True
+        }
+        while self._isolated_status(wallet_due)["type"] != "NoSignatureRequired":
+            assert self.tenant["agent"].poll() is None and not self.gate.errors
+            time.sleep(min(0.2, self._remaining(wallet_due)))
+
+        miner = self._stop_owned_miner(min(wallet_due, time.monotonic() + 5))
+        assert miner > 0, "expected this test's background miner"
+        tip = self._isolated_rpc(ckb, "get_tip_header", [], wallet_due)
+        time.sleep(min(1, self._remaining(wallet_due)))
+        assert self._isolated_rpc(ckb, "get_tip_header", [], wallet_due) == tip
+        record("miner_paused", pid=miner, tip=tip, channel_id=self.channel_id)
+
+        unsigned = self.tenant["opened"]["unsigned_funding_tx"]
+        funding_hash = _raw_transaction_hash(unsigned)
+        original = self._isolated_rpc(
+            ckb, "get_transaction", [funding_hash], wallet_due
+        )
+        assert (
+            original is None or original["tx_status"]["status"] == "unknown"
+        ), original
+        signed = self._sign_funding_transaction(unsigned, wallet_due)
+        assert _raw_transaction_hash(signed) == funding_hash, signed
+        funded = self._isolated_rpc(
+            local,
+            "submit_signed_funding_tx",
+            [{"channel_id": self.channel_id, "signed_funding_tx": signed}],
+            wallet_due,
+        )
+        submitted = time.monotonic()
+        record(
+            "wallet_submitted",
+            created_wall=created_wall,
+            created=created,
+            submitted=submitted,
+            proposal=funding_hash,
+            reply=funded,
+        )
+        assert submitted < wallet_due, (submitted, wallet_due)
+        assert funded["funding_tx_hash"] == funding_hash, funded
+        assert funded["channel_id"] == self.channel_id, funded
+
+        # 2. 真实 CKB 接收该注资，并在 65 秒停块期间持续核对双方待开记录。
+        admission_due = min(opening_due, submitted + 15)
+        while True:
+            tx = self._isolated_rpc(
+                ckb, "get_transaction", [funding_hash], admission_due
+            )
+            status = tx["tx_status"]["status"] if tx else "unknown"
+            if status != "unknown":
+                record("funding_pool", status=status, transaction=tx)
+                assert status in {"pending", "proposed"}, tx
+                assert tx["transaction"]["hash"] == funding_hash, tx
+                break
+            time.sleep(min(0.2, self._remaining(admission_due)))
+
+        observe_until = submitted + 65
+        while True:
+            started = time.monotonic()
+            tx = self._isolated_rpc(ckb, "get_transaction", [funding_hash], opening_due)
+            channels = [
+                self._isolated_rpc(
+                    peer, "list_channels", [{"only_pending": True}], opening_due
+                )["channels"]
+                for peer in (local, public)
+            ]
+            current_tip = self._isolated_rpc(ckb, "get_tip_header", [], opening_due)
+            record(
+                "paused_sample",
+                started=started,
+                channels=channels,
+                funding=tx,
+                tip=current_tip,
+            )
+            assert current_tip == tip, (tip, current_tip)
+            assert tx and tx["tx_status"]["status"] in {"pending", "proposed"}, tx
+            for pending in channels:
+                assert [row["channel_id"] for row in pending] == [
+                    self.channel_id
+                ], pending
+                self._assert_funding_opening_pending({"channel": pending[0]})
+            assert self.tenant["agent"].poll() is None and not self.gate.errors
+            if started >= observe_until:
+                break
+            remaining_observation = max(0, observe_until - time.monotonic())
+            time.sleep(min(1, self._remaining(opening_due), remaining_observation))
+
+        # 3. 恢复挖块，核对同笔注资的真实确认和双方唯一的同一通道。
+        resumed = time.monotonic()
+        assert observe_until <= resumed < opening_due, (
+            observe_until,
+            resumed,
+            opening_due,
+        )
+        self.node.start_miner()
+        record("miner_resumed", resumed=resumed, pid=self.node.ckb_miner_pid)
+        until = min(opening_due, resumed + 60)
+        while True:
+            tx = self._isolated_rpc(ckb, "get_transaction", [funding_hash], until)
+            channels = [
+                self._isolated_rpc(
+                    peer, "list_channels", [{"include_closed": True}], until
+                )["channels"]
+                for peer in (local, public)
+            ]
+            record("resumed_sample", channels=channels, funding=tx)
+            for visible in channels:
+                assert [row["channel_id"] for row in visible] == [
+                    self.channel_id
+                ], visible
+                assert visible[0]["state"]["state_name"] != "Closed", visible
+            assert tx and tx["tx_status"]["status"] in {
+                "pending",
+                "proposed",
+                "committed",
+            }, tx
+            if tx["tx_status"]["status"] == "committed" and all(
+                visible[0]["state"]["state_name"] == "ChannelReady"
+                for visible in channels
+            ):
+                break
+            time.sleep(min(1, self._remaining(until)))
+
+        assert tx["transaction"]["hash"] == funding_hash, tx
+        funding = self._funding_outpoint(channels[0][0])
+        assert funding == self._funding_outpoint(channels[1][0]), channels
+        assert funding["tx_hash"] == funding_hash, funding
+        cell = self._isolated_rpc(ckb, "get_live_cell", [funding, False], until)
+        assert cell["status"] == "live", cell
+        assert self._isolated_status(until)["type"] == "NoSignatureRequired"
+        record("opening_ready", channel_id=self.channel_id, funding=funding)
+        print(f"delayed funding kept alive for {resumed - submitted:.2f}s: {evidence}")
+
+    def _legacy_external_funding_timer_keeps_opening_alive(self):
         view = self._channel(self.client)
         created = int(view["created_at"], 16) / 1000
         assert self._status()["type"] == "SignatureRequired"
@@ -2063,20 +2255,71 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
 
     # TEST-MAP: LSP-TIMEOUT-07
     def test_signature_after_deadline_is_not_applied(self):
+        """
+        1. 在检查点 B 保存本通道的原撤销签名，等待其越过安全截止。
+        2. 原样提交签名并核对拒绝原因和同通道安全保护证据。
+        3. 确认 A 的原承诺上链，承诺没有推进，待签状态被清除。
+        """
+        # 1. 等待原撤销签名越过安全截止。
         self._arm_signature_gate()
         funding = self._pause_isolated_miner()
         payment = self._to_checkpoint_b(self._prepare_payment())
         expected = self._commitment_hash(self.client)
         self._arm_competing_close(payment, funding)
+        log = Path(self.fiber1.tmp_path) / "node.log"
+        log_offset = log.stat().st_size
         self._wait_past_deadline(payment)
+
+        # 2. 提交原请求，只接受截止拒绝或已被截止保护清理的请求。
         submitted_at = time.monotonic()
         assert submitted_at - payment["injected_at"] < 28, (
             submitted_at - payment["injected_at"]
         )
-        body = self._submit_raw(payment["b_submission"])
-        self._assert_not_applied(body)
+        submission = payment["b_submission"]
+        assert submission["channel_id"] == self.channel_id
+        assert submission["request_id"] == payment["b_request"]["request_id"]
+        body = self._submit_raw(submission)
+        self._observe(
+            "late_signature_reply", request_id=submission["request_id"], reply=body
+        )
+        assert body.get("jsonrpc") == "2.0" and body.get("id") == 42, body
+        assert (
+            "result" not in body and body.get("error", {}).get("code") == -32000
+        ), body
+        message = body["error"]["message"].lower()
+        assert any(
+            reason in message
+            for reason in (
+                "external signature request expired at signing safety deadline",
+                "channel is not waiting for a signature",
+            )
+        ), body
         assert self._commitment_hash(self.client) == expected
         accepted_hash, protection = self._qualify_competing_close(payment)
+        with log.open("rb") as stream:
+            stream.seek(log_offset)
+            text = re.sub(r"\x1b\[[0-9;]*m", "", stream.read().decode(errors="replace"))
+        # Both peers emit the same event with the same channel ID. Attribute
+        # the event to A's actor using the two public peer identities.
+        a_view = self._channel_view(self.fiber1.client)
+        t_view = self._channel_view(self.client)
+        assert a_view is not None and t_view is not None
+        a_pubkey, t_pubkey = a_view["pubkey"], t_view["pubkey"]
+        assert a_pubkey != t_pubkey
+        deadline_events = _deadline_events_for_local_actor(
+            text, self.channel_id, a_pubkey, t_pubkey
+        )
+        assert deadline_events, "no A-actor safety deadline event for this channel"
+        observed_ms = (
+            datetime.fromisoformat(deadline_events[0]["line"].split()[0]).timestamp()
+            * 1000
+        )
+        assert (
+            payment["deadline"] <= observed_ms <= payment["deadline"] + 15_000
+        ), deadline_events
+        self._observe("late_signature_deadline", events=deadline_events)
+
+        # 3. 确认原承诺上链，且该通道没有新的待签请求。
         _, _, observed_at = self._assert_force_close_uses(
             funding, expected, protection=protection
         )
@@ -2599,14 +2842,80 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
 
     # TEST-MAP: LSP-TIMEOUT-11
     def test_no_preimage_outcome_after_close(self):
+        """
+        1. 记录 A、T 的余额和锁定额，完成第一笔 TLC 并观察发票 Received。
+        2. 第二笔 TLC 卡在待签，越过截止后确认 A 的真实承诺上链。
+        3. 持续核对双方余额、锁定的 TLC 和发票状态，直到越过发票有效期。
+        """
+        # 1. 取得两端余额基线和第一笔 TLC 的真实锁定。
         self._arm_signature_gate()
         isolated_funding = self._pause_isolated_miner()
-        balance_before = int(self._channel(self.client)["local_balance"], 16)
-        # TLC-A: its whole exchange is applied, so the hold invoice becomes Received.
+        clients = {"A": self.client, "T": self.fiber1.client}
+        balance_keys = ("local_balance", "remote_balance")
+        lock_keys = {"A": "received_tlc_balance", "T": "offered_tlc_balance"}
+        baseline = {}
+        until = time.monotonic() + 5
+        for side, client in clients.items():
+            view = self._isolated_view(client, until)
+            assert not view["pending_tlcs"], view
+            assert all(int(view[key], 16) == 0 for key in lock_keys.values()), view
+            baseline[side] = tuple(int(view[key], 16) for key in balance_keys)
+        assert baseline["A"] == baseline["T"][::-1], baseline
+        self._observe("no_preimage_baseline", balances=baseline)
+
+        def check_balances(stage, payments, *, exact_locks=False):
+            until = time.monotonic() + 5
+            views = {
+                side: self._isolated_view(client, until)
+                for side, client in clients.items()
+            }
+            invoices = {
+                payment["hash"]: self._isolated_rpc(
+                    self.client,
+                    "get_invoice",
+                    [{"payment_hash": payment["hash"]}],
+                    until,
+                )["status"]
+                for payment in payments
+            }
+            self._observe(stage, invoices=invoices, views=views)
+            assert invoices[payments[0]["hash"]] == "Received", invoices
+            assert "Paid" not in invoices.values(), invoices
+            assert all(
+                operation != "fulfill" for operation, _ in self.tenant["control_calls"]
+            )
+            expected = {payment["hash"]: payment for payment in payments}
+            for side, view in views.items():
+                assert (
+                    tuple(int(view[key], 16) for key in balance_keys) == baseline[side]
+                ), view
+                locks = {key: int(view[key], 16) for key in lock_keys.values()}
+                own_lock = locks.pop(lock_keys[side])
+                assert not any(locks.values()), view
+                seen = set()
+                for tlc in view["pending_tlcs"]:
+                    payment_hash = tlc["payment_hash"]
+                    assert payment_hash in expected and payment_hash not in seen, view
+                    payment = expected[payment_hash]
+                    assert tlc["id"] == payment["tlc_id"], (tlc, payment["tlc_id"])
+                    assert int(tlc["amount"], 16) == self.tlc_amount, tlc
+                    assert int(tlc["expiry"], 16) == payment["expiry"], tlc
+                    seen.add(payment_hash)
+                if exact_locks:
+                    assert seen == set(expected) and own_lock == self.tlc_amount * len(
+                        seen
+                    ), view
+                else:
+                    # A failed TLC can unlock independently on either side. Persisted
+                    # TLC rows may remain visible after their lock has been released.
+                    assert own_lock <= self.tlc_amount * len(seen), view
+                    assert own_lock % self.tlc_amount == 0, view
+
         first = self._prepare_payment(lifetime_seconds=60)
         self._drive_to_received(first)
-        assert self._invoice_status(first["hash"]) == "Received"
-        # TLC-B: an independent TLC provides the pending request that reaches D.
+        check_balances("no_preimage_received", (first,), exact_locks=True)
+
+        # 2. 第二笔待签触发保护，确认关闭使用含两笔 TLC 的原承诺。
         second = self._to_checkpoint_b(self._prepare_payment())
         assert second["expiry"] < first["expiry"]
         assert (
@@ -2633,6 +2942,7 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
             for payment in (first, second)
         ), signed
         self._arm_competing_close(second, funding)
+        check_balances("no_preimage_before_close", (first, second), exact_locks=True)
         self._wait_past_deadline(second)
         accepted_hash, protection = self._qualify_competing_close(second)
         self._assert_force_close_uses(funding, expected, protection=protection)
@@ -2640,20 +2950,18 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
             self._channel_view(self.client)["shutdown_transaction_hash"]
             == accepted_hash
         )
-        # Resume normal chain progress during the invoice's post-expiry window.
+        # 3. 恢复挖块并持续检查已结算余额、锁定额及发票。
         self.node.start_miner()
-        assert self._invoice_status(first["hash"]) == "Received"
-        assert self._invoice_status(first["hash"]) != "Paid"
-        assert self._invoice_status(second["hash"]) != "Paid"
-        after = self._channel_view(self.client)
-        assert int(after["local_balance"], 16) == balance_before, after
         target = first["invoice_expires_at"] + 5
-        while time.time() < target:
-            time.sleep(1)
-        assert self._invoice_status(first["hash"]) == "Received", self._invoice_status(
-            first["hash"]
-        )
-        assert (
-            int(self._channel_view(self.client)["local_balance"], 16) == balance_before
-        )
+        assert time.time() < target, "closure reached after the observation window"
+        until = time.monotonic() + max(0, target - time.time()) + 10
+        while True:
+            started = time.time()
+            check_balances("no_preimage_after_close", (first, second))
+            assert (
+                time.monotonic() < until
+            ), "post-close observation exceeded its budget"
+            if started >= target:
+                break
+            time.sleep(min(1, max(0, target - time.time())))
         print(f"no-preimage outcome kept invoice Received: {first['hash']}")
