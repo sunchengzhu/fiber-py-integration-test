@@ -394,6 +394,9 @@ fn snapshot(store: &Store) -> Result<Value, String> {
         .get_all_payment_sessions()
         .into_iter()
         .map(|session| {
+            #[cfg(feature = "merged-lsp")]
+            let attempts = store.get_attempts(session.session_key());
+            #[cfg(not(feature = "merged-lsp"))]
             let attempts = store.get_attempts(session.payment_hash());
             let previous_keys = session
                 .request

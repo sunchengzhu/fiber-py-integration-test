@@ -929,6 +929,8 @@ class LspTestBase(SigningEnvironment, FiberTest):
             else:
                 assert False, f"SDK {label} did not bind channel {channel_id}"
             if self.submit_external_funding:
+                if self.complete_opening_before_wallet:
+                    self._wait_for_opening_commitment(tenant)
                 signed = self.fiber2.client.call(
                     "sign_external_funding_tx",
                     [
@@ -951,7 +953,10 @@ class LspTestBase(SigningEnvironment, FiberTest):
             self.tenants.append(tenant)
 
         if not self.submit_external_funding:
-            # The wallet still owes its funding signature; no channel signature exists yet.
+            # The scenario controls when the wallet submits its funding signature.
+            return
+
+        if self.complete_opening_before_wallet:
             return
 
         for tenant in self.tenants:
@@ -1039,6 +1044,40 @@ class LspTestBase(SigningEnvironment, FiberTest):
         ]
         assert len(matching) == 1, f"expected channel {channel_id}, got {channels}"
         return matching[0]["state"]
+
+    def _wait_for_opening_commitment(self, tenant):
+        assert self.signer_control(tenant, "wait-opening-commitment") == {
+            "verified": True
+        }
+        required = {"OUR_COMMITMENT_SIGNED_SENT", "THEIR_COMMITMENT_SIGNED_SENT"}
+        deadline = time.monotonic() + 10
+        channel = None
+        while time.monotonic() < deadline:
+            channel = next(
+                (
+                    row
+                    for row in tenant["client"].list_channels({})["channels"]
+                    if row["channel_id"] == tenant["channel_id"]
+                ),
+                None,
+            )
+            if channel is not None:
+                state = channel["state"]
+                flags = set(state.get("state_flags", "").split("|"))
+                commitment = channel["latest_commitment_transaction_hash"]
+                if (
+                    state["state_name"] == "SigningCommitment"
+                    and required <= flags
+                    and commitment
+                ):
+                    print(
+                        f"Opening commitment verified before wallet funding: {commitment}"
+                    )
+                    return
+            time.sleep(0.2)
+        raise AssertionError(
+            f"Channel did not finish opening commitment before wallet funding: {channel}"
+        )
 
     def signer_control(self, tenant, operation, values=None):
         payload = {
