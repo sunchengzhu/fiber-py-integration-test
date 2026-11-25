@@ -179,10 +179,32 @@ fn opening() -> Result<()> {
         id.as_ref(),
     ]
     .concat();
-    let bytes = db
-        .get(&key)?
-        .context("public peer has not persisted the channel")?;
-    let state: ChannelActorData = fiber_types::deserialize(&bytes)?;
+    #[cfg(not(feature = "merged-lsp"))]
+    let state: ChannelActorData = {
+        let bytes = db
+            .get(&key)?
+            .context("public peer has not persisted the channel")?;
+        fiber_types::deserialize(&bytes)?
+    };
+    #[cfg(feature = "merged-lsp")]
+    let state: ChannelActorData = {
+        let immutable_key = [
+            &[fiber_types::schema::CHANNEL_IMMUTABLE_STATE_PREFIX],
+            id.as_ref(),
+        ]
+        .concat();
+        let mut records = db.multi_get([key, immutable_key]).into_iter();
+        let mutable = records
+            .next()
+            .context("missing mutable read result")??
+            .context("public peer has not persisted mutable channel data")?;
+        let immutable = records
+            .next()
+            .context("missing immutable read result")??
+            .context("public peer has not persisted immutable channel data")?;
+        fiber_types::channel_v2_validation::decode_channel_actor_data_parts(&id, &mutable, &immutable)
+            .map_err(|error| anyhow::anyhow!("decode persisted public peer channel: {error}"))?
+    };
     ensure!(
         state.id == id && state.is_acceptor,
         "expected public acceptor"
@@ -359,6 +381,8 @@ async fn control(
             .authorize(fiber_lsp_sdk_agent::FixtureAuthorization::Watchtower {
                 channel_id: channel,
                 destination: serde_json::from_value(value["destination"].clone())?,
+                #[cfg(feature = "merged-lsp")]
+                fee_sponsor_lock: None,
                 max_fee: value["max_fee"].as_u64().context("fee cap")?,
             })
             .await?;
