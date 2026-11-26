@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   lsp:
-    uses: sunchengzhu/fiber-py-integration-test/.github/workflows/lsp-ci.yml@df9176ffedb7d4c59ae041889db98e34b8513792
+    uses: sunchengzhu/fiber-py-integration-test/.github/workflows/lsp-ci.yml@fa42ea2e12077c68df67e17b0de8f34fcf6fcd7c
     with:
       fiber_commit: ${{ inputs.fiber_commit }}
-      integration_commit: 'df9176ffedb7d4c59ae041889db98e34b8513792'
+      integration_commit: 'fa42ea2e12077c68df67e17b0de8f34fcf6fcd7c'
