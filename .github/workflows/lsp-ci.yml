@@ -202,7 +202,32 @@ jobs:
         if: always()
         env:
           BUCKET: ${{ matrix.id }}
-        run: python scripts/lsp_ci.py retain --source "ci-artifacts/$BUCKET"
+        run: |
+          if ! python scripts/lsp_ci.py retain --source "ci-artifacts/$BUCKET"; then
+            echo "fallback=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: 归档失败时上传原运行目录
+        id: runtime_fallback
+        if: ${{ !cancelled() && steps.retain.outputs.fallback == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: lsp-runtime-fallback-${{ matrix.id }}
+          path: tmp
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+      - name: 记录备用原运行目录上传成功
+        if: ${{ !cancelled() && steps.runtime_fallback.outcome == 'success' }}
+        env:
+          BUCKET: ${{ matrix.id }}
+          ARTIFACT_ID: ${{ steps.runtime_fallback.outputs.artifact-id }}
+        run: |
+          if [[ ! "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::备用原运行目录上传缺少 artifact ID"
+            exit 1
+          fi
+          printf '%s\n' "$ARTIFACT_ID" > "ci-artifacts/$BUCKET/runtime-fallback.txt"
+          echo "::warning title=LSP 原始状态归档::标准归档失败，原运行目录已上传为 lsp-runtime-fallback-${BUCKET}（artifact ${ARTIFACT_ID}）"
       - name: 收集原生结果及最终归档状态
         if: always()
         env:
@@ -224,14 +249,6 @@ jobs:
           path: ci-artifacts
           include-hidden-files: true
           retention-days: 14
-      - name: 归档失败时保留原运行目录
-        if: ${{ always() && steps.retain.outcome != 'success' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: lsp-runtime-fallback-${{ matrix.id }}
-          path: tmp
-          include-hidden-files: true
-          retention-days: 14
 
   report:
     name: ④ 全量结果 / 未执行清单 / HTML 总览
@@ -239,6 +256,8 @@ jobs:
     if: always()
     runs-on: ubuntu-22.04
     timeout-minutes: 15
+    outputs:
+      complete: ${{ steps.render.outputs.complete }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -260,12 +279,13 @@ jobs:
           path: ci-results
           merge-multiple: true
       - name: 根据执行计划核对原生结果，不把缺失结果记为通过
+        id: render
         if: always()
         env:
           LSP_CI_PLAN_RESULT: ${{ needs.plan.result }}
           LSP_CI_BUILD_RESULT: ${{ needs.build.result }}
           LSP_CI_TESTS_RESULT: ${{ needs.tests.result }}
-        run: python scripts/lsp_ci.py report --plan ci-plan/plan.json --source ci-results --output ci-report
+        run: python scripts/lsp_ci.py report --plan ci-plan/plan.json --source ci-results --output ci-report --publish-only
       - name: 保存 HTML / JSON / JUnit / Markdown 报告
         if: always()
         uses: actions/upload-artifact@v4
@@ -274,3 +294,19 @@ jobs:
           path: ci-report
           if-no-files-found: error
           retention-days: 14
+
+  verify_results:
+    name: 核对回归结果完整性
+    needs: [plan, build, tests, report]
+    # 只处理汇总独有的问题，已有失败的 job 会直接让整轮失败。
+    if: >-
+      ${{ !cancelled() && needs.plan.result == 'success' && needs.build.result == 'success'
+          && needs.tests.result == 'success' && needs.report.result == 'success'
+          && needs.report.outputs.complete != 'true' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: 检查未通过或缺失的结果
+        run: |
+          echo "::error::回归结果未全部确认通过，请查看 lsp-report"
+          exit 1

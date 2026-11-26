@@ -299,6 +299,57 @@ def test_missing_plan_is_explicitly_unknown_and_nonzero(tmp_path):
     assert "计划 未取得" in (tmp_path / "report/index.html").read_text()
 
 
+@pytest.mark.parametrize(
+    ("outcome", "fallback_id", "complete"),
+    [
+        ("passed", "12345", True),
+        ("failure", "12345", False),
+        ("passed", None, False),
+        ("passed", "invalid", False),
+    ],
+)
+def test_ci_publishes_report_and_preserves_verdict_with_fallback(
+    tmp_path, monkeypatch, outcome, fallback_id, complete
+):
+    path, directory, selected = fixture_plan(tmp_path, 1)
+    native_job(directory, selected, [outcome])
+    (directory / "runtime-retention.json").unlink()
+    if fallback_id is not None:
+        (directory / "runtime-fallback.txt").write_text(fallback_id + "\n")
+    collected = tmp_path / "collected"
+    ci.collect_results(directory, collected / "query")
+    report = tmp_path / "report"
+    output = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    published = subprocess.run(
+        [
+            sys.executable,
+            str(runner.ROOT / "scripts/lsp_ci.py"),
+            "report",
+            "--plan",
+            str(path),
+            "--source",
+            str(collected),
+            "--output",
+            str(report),
+            "--publish-only",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert published.returncode == 0, published.stderr
+    assert output.read_text() == f"complete={str(complete).lower()}\n"
+    result = ci.read(report / "report.json")
+    assert result["counts"] == {outcome: 1}
+    assert result["complete"] is complete
+    if fallback_id == "12345":
+        assert not result["problems"]
+        assert "lsp-runtime-fallback-query" in result["warnings"][0]
+        assert "归档警告" in (report / "summary.md").read_text()
+    else:
+        assert result["problems"] and not result["warnings"]
+
+
 def test_progress_telemetry_write_failure_does_not_interrupt_teardown(
     tmp_path, monkeypatch, capsys
 ):

@@ -290,6 +290,7 @@ def collect_results(bucket_dir, destination):
             "events.jsonl",
             "batch-error.json",
             "runtime-retention.json",
+            "runtime-fallback.txt",
         }:
             target = destination / path.relative_to(bucket_dir)
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -387,7 +388,7 @@ def results(plan_path, source):
         c["nodeid"]: {**c, "status": "not_run", "detail": "", "evidence": ""}
         for c in planned["cases"]
     }
-    problems, observed = [], set()
+    problems, warnings, observed = [], [], set()
     root = Path(source)
     aggregate = ET.Element("testsuites")
     for bucket in planned["buckets"]:
@@ -539,7 +540,17 @@ def results(plan_path, source):
                 f"{bucket['label']}: 任务退出码 {job.get('exit_code', '未记录')}"
             )
         retention = directory / "runtime-retention.json"
+        fallback = directory / "runtime-fallback.txt"
         try:
+            if fallback.is_file():
+                artifact_id = fallback.read_text().strip()
+                if not re.fullmatch(r"[1-9][0-9]*", artifact_id):
+                    raise ValueError("备用归档的 artifact ID 无效")
+                warnings.append(
+                    f"{bucket['label']}: 标准归档失败，原运行目录已上传为 "
+                    f"lsp-runtime-fallback-{bucket['id']}（artifact {artifact_id}）"
+                )
+                continue
             state = read(retention)
             if (
                 state.get("unavailable")
@@ -553,19 +564,22 @@ def results(plan_path, source):
                 f"{bucket['label']}: 最终原始状态归档未确认，检查 fallback 产物: {error}"
             )
     counts = Counter(r["status"] for r in rows.values())
-    return planned, list(rows.values()), problems, aggregate, counts
+    return planned, list(rows.values()), problems, warnings, aggregate, counts
 
 
 def render_report(plan_path, source, output):
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     try:
-        planned, rows, problems, aggregate, counts = results(plan_path, source)
+        planned, rows, problems, warnings, aggregate, counts = results(
+            plan_path, source
+        )
     except (OSError, ValueError, KeyError, ET.ParseError) as error:
-        planned, rows, problems, aggregate, counts = (
+        planned, rows, problems, warnings, aggregate, counts = (
             {"revision": "未知", "integration_commit": "未知"},
             [],
             [f"无法可靠生成报告: {error}"],
+            [],
             ET.Element("testsuites"),
             Counter(),
         )
@@ -586,6 +600,7 @@ def render_report(plan_path, source, output):
             "integration_commit": planned["integration_commit"],
             "counts": counts,
             "problems": problems,
+            "warnings": warnings,
             "cases": rows,
             "complete": not bad,
             "stages": stages,
@@ -606,6 +621,7 @@ def render_report(plan_path, source, output):
             f'<tr data-status="{status}"><td class="{status}">{LABELS[status]}</td><td>{esc(row["bucket"])}</td><td><b>{esc(row["case"])}</b> {esc(row["description"])}<details><summary>定位与证据</summary><code>{esc(row["nodeid"])}</code><p>组证据 artifact 内：<code>{esc(row["evidence"])}</code></p><pre>{esc(row["detail"])}</pre></details></td></tr>'
         )
     issues = "".join("<li>" + esc(p) + "</li>" for p in problems)
+    issues += "".join("<li>警告：" + esc(w) + "</li>" for w in warnings)
     options = '<option value="all">所有状态</option>' + "".join(
         f'<option value="{k}">{v}</option>' for k, v in LABELS.items()
     )
@@ -638,6 +654,8 @@ function filter(){{const s=document.getElementById('status').value,q=document.ge
         summary += (
             "\n### 调度 / 证据问题\n\n" + "\n".join("- " + p for p in problems) + "\n"
         )
+    if warnings:
+        summary += "\n### 归档警告\n\n" + "\n".join("- " + w for w in warnings) + "\n"
     (output / "summary.md").write_text(summary)
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as stream:
@@ -667,6 +685,11 @@ def main():
     p.add_argument("--plan", type=Path, required=True)
     p.add_argument("--source", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
+    p.add_argument(
+        "--publish-only",
+        action="store_true",
+        help="Report the verdict via GITHUB_OUTPUT and exit successfully if the report was written.",
+    )
     args = parser.parse_args()
     if args.command == "resolve":
         revision = resolve_commit(args.commit)
@@ -684,7 +707,12 @@ def main():
     elif args.command == "retain":
         retain_runtime(args.source)
     else:
-        return render_report(args.plan, args.source, args.output)
+        result = render_report(args.plan, args.source, args.output)
+        if not args.publish_only:
+            return result
+        if os.environ.get("GITHUB_OUTPUT"):
+            with Path(os.environ["GITHUB_OUTPUT"]).open("a") as stream:
+                stream.write(f"complete={'false' if result else 'true'}\n")
     return 0
 
 
