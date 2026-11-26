@@ -308,6 +308,11 @@ pub async fn process(
         .context("no persisted watchtower approval")?;
     let destination: Script =
         serde_json::from_value::<ckb_jsonrpc_types::Script>(policy["destination"].clone())?.into();
+    let fee_sponsor_lock = serde_json::from_value::<Option<ckb_jsonrpc_types::Script>>(
+        policy["fee_sponsor_lock"].clone(),
+    )?
+    .map(Script::from);
+    let sponsor_lock = fee_sponsor_lock.as_ref().unwrap_or(&destination);
     let max_fee = policy["max_fee"].as_u64().context("fee cap")?;
     let status = rpc
         .get_watchtower_signing_status(&agent.tenant_token()?, id.into())
@@ -376,7 +381,7 @@ pub async fn process(
         let cell = scoped.live_cell(&input.previous_output()).await?;
         if i > 0 {
             ensure!(
-                cell.output.lock() == destination
+                cell.output.lock() == *sponsor_lock
                     && cell.output.type_().to_opt().is_none()
                     && cell.data.is_empty(),
                 "unapproved sponsor input"
@@ -401,7 +406,7 @@ pub async fn process(
         source: record.reference.clone(),
         destination,
         #[cfg(feature = "hosted-v2")]
-        fee_sponsor_lock: None,
+        fee_sponsor_lock,
         fee: total,
         additional_inputs: sponsors,
         cell_deps: chain.deps.clone(),

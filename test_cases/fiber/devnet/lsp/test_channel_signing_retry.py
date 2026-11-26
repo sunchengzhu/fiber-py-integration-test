@@ -3,10 +3,34 @@
 import copy
 import time
 
-from test_cases.fiber.devnet.lsp._lsp_test import ChannelSigningTestBase
+from scripts.build_lsp_test_binaries import MERGED_LSP_REVISION
+from test_cases.fiber.devnet.lsp._lsp_test import (
+    DEFERRED_FUNDING_WINDOW,
+    REVISION,
+    ChannelSigningTestBase,
+)
 
 
 class TestChannelSigningRetry(ChannelSigningTestBase):
+    # The five opening cases may share a Hosted FNN with this funding window.
+    defer_external_funding = REVISION == MERGED_LSP_REVISION
+    if defer_external_funding:
+        fiber_config_extra = {
+            **ChannelSigningTestBase.fiber_config_extra,
+            "external_funding_timeout_seconds": DEFERRED_FUNDING_WINDOW,
+        }
+
+    def setup_method(self, method):
+        if (
+            REVISION == MERGED_LSP_REVISION
+            and method.__name__ == "test_payment_retry_settles_balances_once"
+        ):
+            assert self._node_mode == "independent"
+            self.defer_external_funding = False
+            self.complete_opening_before_wallet = True
+            self.fiber_config_extra = ChannelSigningTestBase.fiber_config_extra.copy()
+        super().setup_method(method)
+
     # TEST-MAP: LSP-RETRY-01
     def test_identical_retry_preserves_next_request(self):
         submission, following = self._apply_and_pause_next()

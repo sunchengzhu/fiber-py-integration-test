@@ -133,7 +133,7 @@ class _FilterSubscriptionBase(SubscriptionTestBase):
                     tenant=tenant["label"],
                     request=tenant["before"],
                     submission=tenant["gate"].submission,
-                    funding=tenant["funding_tx_hash"],
+                    **self._frozen_funding(tenant),
                 )
         self.business_until = min(time.monotonic() + 420, self.work_until)
         self._record("business_start", until=self.business_until)

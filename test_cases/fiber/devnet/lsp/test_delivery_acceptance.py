@@ -9,7 +9,6 @@ import socket
 import tempfile
 import time
 
-from scripts.build_lsp_test_binaries import MERGED_LSP_REVISION
 from test_cases.fiber.devnet.lsp._lsp_test import (
     DEFAULT_REVISION,
     BUNDLE,
@@ -30,7 +29,6 @@ from test_cases.fiber.devnet.lsp.test_delayed_payment_recovery import (
 class _DeliveryBase(_DelayedPaymentBase):
     tenant_labels = ("A",)
     lsp_config_extra = {"max_buffer_duration_ms": 600000}
-    complete_opening_before_wallet = REVISION == MERGED_LSP_REVISION
 
     @classmethod
     def setup_class(cls):

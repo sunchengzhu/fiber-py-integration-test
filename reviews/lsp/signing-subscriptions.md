@@ -1,5 +1,13 @@
 # LSP WebSocket 签名订阅用例评审
 
+## 导读
+
+验证普通订阅、浏览器凭证和过滤器只收到用户有权看到的待签工作。合入版在钱包提交前冻结待签工作，并在 WebSocket 升级前验证凭证；订阅权限仍由 RPC 检查。
+
+## 合入版握手认证判定
+
+本批沿用已确认的 `12fd72f` 开通测试前提与[时间窗口](signing-subscriptions.md#合入版开通签名测试前提)。[安全提交 `8145309`](https://github.com/nervosnetwork/fiber/commit/8145309e793097bdc9899c62c7e58d7d2fdcff67) 在 WebSocket 升级前验证 Biscuit；合入版 `rpc/mod.rs` 的测试明确要求无效 Biscuit 返回 HTTP 401，而有效但缺权限的凭证先升级为 101，再收到 RPC 拒绝。`LSP-SUBSCRIPTION-04`、`LSP-SUBSCRIPTION-17` 的评审行和自动化已按这一行为同步；运行结果另记，不以映射表示通过。
+
 当前主会话决定（2026-10-30整体盘点）：普通订阅8个场景、11个方法均为旧用例，仅缺843版本结果；重新展开的[Gate2草稿](#2026-10-30-普通订阅版本验证-gate2固定84333ee)保留但暂缓，不作为新增覆盖推进。先核清真正未覆盖行为，旧订阅留待最终版本的相关回归。未修改对应自动化或启动本批测试，下述旧批次结果不替代843结果。
 
 订阅过滤 Gate3 已完成：用户确认20～28九行、28数组兼容及150分钟预算后，进一步明确授权改用LSP分支最新代码。本批固定 `84333eea8488a8afc7e4474aa4bbd0e7e973cee9`，十二个方法已映射，正式1+3共48/48、相关3/3通过；实际构建、自检、预算及证据见[运行记录](../../test_cases/fiber/devnet/lsp/README.md#84333ee-订阅过滤-gate3完成2026-10-29)。此前04产物准备失败保留历史，不转记通过。已完成的浏览器鉴权 Gate3：`LSP-SUBSCRIPTION-14～19`，固定 `04c206465b48da85b99aa58e80afe9801a2cb2db`，Gate1/Gate2 已获用户确认；新六行已接入映射，正式1+3共44/44通过，相关既有14方法回归14/14通过，见 [浏览器鉴权运行记录](../../test_cases/fiber/devnet/lsp/README.md#04c2064-浏览器鉴权-gate32026-10-26)。01～07、10～13 保留已批准行为；2026-10-26 在 04 上的 14 方法回归通过见 [运行记录](../../test_cases/fiber/devnet/lsp/README.md#04c2064-websocket-既有订阅回归与下一步2026-10-26)。以下迁移经过和24版结果保留历史依据，不替代本次843过滤批次的实际结果。
@@ -11,7 +19,7 @@
 ## 既有行为的共同前提与观察口径
 
 - T 是启用认证的公共 FNN，A/B 是两个不同的 Hosted 租户，P 是独立普通节点。各行使用独立环境，A–T/B–T 为私有 CKB 通道，真实 SDK 完成批准、注资验证、绑定及签名。只读观察器不生成签名。
-- 专用 `rpc.ws_listening_addr` 从 WS 握手的 `Authorization: Bearer <token>` 保存凭证，认证在随后 RPC 调用时执行；不能把携带凭证等同于握手阶段拒绝。通过 `subscribe` 订阅 `channel_signing`。凭证须允许 `write("subscriptions")` 及对应 topic 读取，身份来自凭证。常规环境重新签发当前 token，不拿旧版缺少订阅权限的 token 冒充当前协议故障。
+- 专用 `rpc.ws_listening_addr` 在 WS 升级前验证 Bearer 或浏览器凭证的存在、签名、有效期及撤销状态；缺失或无效凭证返回 HTTP 401。有效凭证的 `write("subscriptions")` 与对应 topic 读取权限在 `subscribe` RPC 检查，身份来自凭证。常规环境重新签发当前 token，不拿旧版缺少订阅权限的 token 冒充当前协议故障。
 - C 表示连接，U 表示该连接返回的订阅 ID；保留其字符串/数字类型，以 `params.subscription == U` 关联 `subscribe` 通知。比较 `params.result.type` 与完整 `data`，不能只检查 channel ID 或日志。
 - R1/R2 是同通道先后产生的完整 `SignatureRequired` 请求，S1/S2 是真实 SDK 已保存的完整提交。转发器冻结提交，独立 RPC 保存当前请求作为比较基准。签名 body 包含 `channel_id`、`request_id`、`partial_signature`、`next_material`。
 - 建立订阅只补发当前待签请求，没有 `snapshot_complete`、历史游标或 session ID。每行预先冻结待签集合，收到预期内容后继续有界观察；需要证明“不投递”的场景，在观察窗口之后用同一订阅收到主动产生的正向事件证明它仍有效。ping、socket 未断开不够。
@@ -31,9 +39,9 @@ Testing: required
 
 ### SPEC-02：凭证决定权限与节点范围
 Condition: 客户端通过 WS 握手头提供凭证后调用订阅或取消；凭证属于 A、B 或 operator。
-Expected: 缺失/无效凭证及缺少必要权限的请求拒绝；有效租户只收到本租户状态，operator 获得 host 范围而非租户私有待签内容；失败请求不破坏已有合法订阅。
-Observable: subscribe 的 JSON-RPC 拒绝、各订阅的完整状态内容，以及错误操作后合法订阅的正向事件。
-Basis: [RPC 调用时认证](https://github.com/nervosnetwork/fiber/blob/24b5c38bc098aeb29de5f6af7ac28dc667f218e3/crates/fiber-lib/src/rpc/middleware.rs)、[认证、topic 权限及 scope](https://github.com/nervosnetwork/fiber/blob/24b5c38bc098aeb29de5f6af7ac28dc667f218e3/crates/fiber-lib/src/rpc/subscription.rs)、[租户 token 能力](https://github.com/nervosnetwork/fiber/blob/24b5c38bc098aeb29de5f6af7ac28dc667f218e3/crates/fiber-lib/src/lsp/token.rs)。
+Expected: 缺失或无效凭证在握手阶段返回 HTTP 401；有效凭证缺少订阅或 topic 权限时，握手后由 RPC 拒绝；有效租户只收到本租户状态，operator 获得 host 范围而非租户私有待签内容；失败请求不破坏已有合法订阅。
+Observable: 真实握手状态、有效凭证的 subscribe JSON-RPC 拒绝、各订阅的完整状态内容，以及错误操作后合法订阅的正向事件。
+Basis: [握手凭证校验与 HTTP 401](https://github.com/nervosnetwork/fiber/blob/12fd72f2062fc2e5b6418f7e85e7bff355bf50cb/crates/fiber-lib/src/rpc/mod.rs)、[Biscuit 预检](https://github.com/nervosnetwork/fiber/blob/12fd72f2062fc2e5b6418f7e85e7bff355bf50cb/crates/fiber-lib/src/rpc/biscuit.rs)、[订阅权限及范围](https://github.com/nervosnetwork/fiber/blob/12fd72f2062fc2e5b6418f7e85e7bff355bf50cb/crates/fiber-lib/src/rpc/subscription.rs)。
 Source: explicit
 Testing: required
 
@@ -71,9 +79,9 @@ Testing: required
 
 ### SPEC-07：浏览器入口保留 RPC 权限和租户范围
 Condition: 编码及协议组合合法，浏览器凭证已通过握手归一化；随后订阅 channel_signing。
-Expected: 无效 Biscuit、缺订阅写权限或缺 topic 读取权限仍在 RPC 阶段拒绝；有效 A/B 凭证只收到各自私有状态，拒绝请求不影响合法订阅。
-Observable: HTTP 101 后的真实 JSON-RPC 拒绝及无事件、权限正向对照、A/B 完整 R1/R2 归属和原通道终态。
-Basis: [同一 Biscuit 权限规则](https://github.com/nervosnetwork/fiber/blob/04c206465b48da85b99aa58e80afe9801a2cb2db/crates/fiber-lib/src/rpc/subscription.rs#L54)、[RPC 授权及范围](https://github.com/nervosnetwork/fiber/blob/04c206465b48da85b99aa58e80afe9801a2cb2db/crates/fiber-lib/src/rpc/subscription.rs#L249)。
+Expected: 编码合法但无效的 Biscuit 在握手认证时返回 HTTP 401；签名有效但缺订阅写权限或 topic 读取权限的凭证升级后由 RPC 拒绝；有效 A/B 凭证只收到各自私有状态，拒绝请求不影响合法订阅。
+Observable: 无效 Biscuit 的真实 HTTP 401、有效但缺权限凭证的 HTTP 101 和 JSON-RPC 拒绝、权限正向对照、A/B 完整 R1/R2 归属和原通道终态。
+Basis: [握手阶段认证](https://github.com/nervosnetwork/fiber/blob/12fd72f2062fc2e5b6418f7e85e7bff355bf50cb/crates/fiber-lib/src/rpc/mod.rs)、[凭证有效性预检](https://github.com/nervosnetwork/fiber/blob/12fd72f2062fc2e5b6418f7e85e7bff355bf50cb/crates/fiber-lib/src/rpc/biscuit.rs)、[RPC 授权及范围](https://github.com/nervosnetwork/fiber/blob/12fd72f2062fc2e5b6418f7e85e7bff355bf50cb/crates/fiber-lib/src/rpc/subscription.rs)。
 Source: explicit
 Testing: required
 
@@ -109,6 +117,14 @@ Basis: [单字段结构体](https://github.com/nervosnetwork/fiber/blob/04c20646
 Source: inference
 Testing: required
 
+## 合入版开通签名测试前提
+
+适用于 Fiber `12fd72f` 的 SUBSCRIPTION-01～07、10～28，以及引用本节的开通隔离、重试、恢复场景。保留真实 SDK 和未签注资提案，在钱包注资前取得原 R1/S1 与后续 R2/S2。仍按各行只读、扣留、重连或恢复的定义取证。完成各行待签检查后，由原 SDK 完成初始承诺，钱包只提交一次原注资，并用原提案、RPC 回执和链上已确认输出核对同一通道。涉及 SDK 自行重连时，先取得原约定的真实 WS 恢复证据，不用主动 SDK 轮询替代它。双租户的原注资提案需要使用互不重叠的钱包输入。
+
+仅在本节列出的开通隔离、重试、恢复和订阅用例各自的 Hosted FNN 中将 `external_funding_timeout_seconds` 设为 86400 秒，FNN 重启时继续使用原配置。保留各用例既有的阶段上限、进入与放行余量检查及负向观察窗口。产品从保存原注资提案后开始计时；测试用双方查询到的原通道 `created_at` 作为保守的更早起点计算余量，重启或重连都不重计。共享默认配置、产品默认 300 秒和专门验证期限的用例不受影响。本节取代上述组在旧版本下“先提交钱包签名”和“不可延长本条测试配置窗口”的共同前提；旧版本的运行证据按原条件保留。
+
+[合入版外部注资提交检查](https://github.com/nervosnetwork/fiber/blob/12fd72f2062fc2e5b6418f7e85e7bff355bf50cb/crates/fiber-lib/src/fiber/channel.rs#L4002-L4045) · [上游 Hosted 开通集成测试](https://github.com/nervosnetwork/fiber/blob/12fd72f2062fc2e5b6418f7e85e7bff355bf50cb/crates/fiber-lib/src/lsp/tests/integration.rs#L756-L835)
+
 ## 测试树
 
 <!-- TEST-TREE-BEGIN -->
@@ -131,7 +147,7 @@ Testing: required
   - 当前注册 token 原样接入及协商响应 LSP-SUBSCRIPTION-14 [primary] -> SPEC-05
   - 同一 token 的三种编码/入口兼容 LSP-SUBSCRIPTION-15 [primary] -> SPEC-05
   - 五种握手拒绝输入及原连接存活 LSP-SUBSCRIPTION-16 [primary] -> SPEC-06
-  - 合法编码但无效 Biscuit 的 RPC 拒绝 LSP-SUBSCRIPTION-17 [primary] -> SPEC-07
+  - 合法编码但无效 Biscuit 的握手拒绝 LSP-SUBSCRIPTION-17 [primary] -> SPEC-07
   - 缺写/缺读分别拒绝且互补权限可用 LSP-SUBSCRIPTION-18 [primary] -> SPEC-07
   - 两个有效浏览器租户的初始及实时隔离 LSP-SUBSCRIPTION-19 [primary] -> SPEC-07
 - 过滤参数（04 Gate2 新批次）
@@ -164,7 +180,7 @@ Testing: required
 | `LSP-SUBSCRIPTION-01` | - [x] A–T 开通中冻结 R1，SDK 已保存 S1 但从未提交并退出；A 新建通道签名订阅，收到当前工作后复核 R1，再用原存储继续签名 | 返回订阅 ID U；U 收到与预存 R1 完全一致的待签内容；只读期间 R1 不变；恢复签名后原通道双方就绪，注资身份一致 | 初始工作遗漏、内容被截断，或订阅本身推进签名状态 | P0 |
 | `LSP-SUBSCRIPTION-02` | - [x] A 订阅 U 已收到冻结 R1；应用真实 S1，冻结后续 S2；期间不重连、不查询，收到后再直连核对 R2，最后恢复签名 | S1 首次返回 Applied；原 U 主动收到不同请求 ID 的完整 R2，与随后查询一致；原通道最终双方就绪 | 实时通知漏发或发送旧内容，客户端只能靠查询继续 | P0 |
 | `LSP-SUBSCRIPTION-03` | - [x] A/B 各有冻结 R1 并分别订阅；核对初始工作，依次应用各自 S1 并冻结各自 R2，在完整观察窗口及后续正向事件中检查归属，再完成两条原通道 | 各订阅只收到所属租户的完整 R1/R2，不含另一租户私有请求；两条原订阅均实际收到各自新 R2，最终两条原通道就绪 | 初始补发或实时通知跨租户泄露，或用失效连接的静默掩盖隔离错误 | P0 |
-| `LSP-SUBSCRIPTION-04` | - [x] A 已有合法订阅及冻结 R1；分别使用缺失 token、无效 token、有效但缺 subscriptions 写权限、有效但缺 channel_signing 读取权限的凭证尝试订阅，每种失败后推进 A 到新的 R2 | 四种输入的 subscribe 均返回 JSON-RPC 错误、不建立有效订阅且不交付签名事件；不以 WS 握手失败为判据；原 A 订阅在各自独立场景中仍收到完整 R2，原通道可完成 | 未授权读取签名数据，或无效请求破坏已有合法订阅 | P1 |
+| `LSP-SUBSCRIPTION-04` | - [x] A 已有合法订阅及冻结 R1；分别以缺失 token、无效 token、有效但缺 subscriptions 写权限、有效但缺 channel_signing 读取权限的凭证发起连接，在升级成功时尝试订阅，每种失败后推进 A 到新的 R2 | 缺失或无效 token 的握手返回 HTTP 401；两个有效但缺权限的凭证握手为 101、subscribe 返回 JSON-RPC 错误；四种均无有效订阅及签名事件，原 A 订阅各自收到完整 R2，原通道可完成 | 未授权读取签名数据，或无效请求破坏已有合法订阅 | P1 |
 | `LSP-SUBSCRIPTION-05` | - [x] A 的 C1/U1 已收到 R1，S1 从未应用；关闭 C1，用相同 token 新建 C2 并重新订阅，复核当前工作后完成签名 | C2 获得自己的有效订阅 U2，补发完整 R1；观察期间请求不推进；随后 U2 收到应用 S1 后的新 R2，原通道双方就绪 | 普通重连丢失未完成工作，或仍依赖已移除的会话参数恢复 | P0 |
 | `LSP-SUBSCRIPTION-06` | - [x] 真实 SDK 已保存 S1，FNN 仍待 R1；确认 SDK 已处理完暂停事件后切断其真实 WS 连接，保持 PID、token 和存储，允许它自动恢复 | 原 SDK 自行建立新连接并成功订阅，收到完整 R1；它生成的提交体与原 S1 相同，首次到 FNN 返回 Applied；原通道就绪且注资不变 | 仅观察器能重连而真实 SDK 卡住、丢失已签记录或重新注册才能继续 | P0 |
 | `LSP-SUBSCRIPTION-07` | - [x] S1 已 Applied、R2 冻结且未提交，关闭旧连接并重新订阅；收到 R2 后有界观察，再放行 S2 及后续签名并在同一订阅观察新状态 | 新订阅补发的完整当前请求是 R2，直到后续正向状态到达均不重放 R1；R2 未被订阅消耗；原通道最终就绪 | 重连误回放已完成请求，或用空连接静默掩盖恢复失败 | P0 |
@@ -175,7 +191,7 @@ Testing: required
 | `LSP-SUBSCRIPTION-14` | - [x] A–T 冻结 R1，使用当前注册返回的原始 token，经浏览器凭证子协议建立订阅，应用真实 S1 后在原订阅等待 R2，再恢复原 SDK | token 为未填充 base64url；握手返回 101 且只协商 fiber-rpc、不回显凭证；订阅收到完整 R1/R2，R2 到达前不靠查询推进，原通道最终双方就绪且注资不变 | 新浏览器入口无法接入、泄露凭证或只有握手成功而不能收到工作 | P0 |
 | `LSP-SUBSCRIPTION-15` | - [x] A–T 冻结 R1，取确有尾部填充的有效 A token，以去填充的浏览器子协议、带填充 Bearer、去填充 Bearer 在三连接订阅，再应用一次 S1 并完成原通道 | 三种输入解码为同一 token 字节；三连接各收到完整 R1/R2；浏览器仅协商 fiber-rpc 且不回显凭证，两个 Bearer 均无需提供该协议；原通道双方就绪、注资不变 | 旧编码输入不兼容、重复编码 token，或仅测没有实际填充的伪边界 | P1 |
 | `LSP-SUBSCRIPTION-16` | - [x] A 的合法订阅已收到冻结 R1；分别以带凭证但缺 fiber-rpc、重复凭证、同时带 Bearer 和凭证子协议、空后缀、非法 base64url 后缀请求新握手，每种独立场景随后推进 A 到 R2 并恢复签名 | 五种请求实际送达服务端并返回 HTTP 400，不建立订阅；原合法订阅仍收到完整 R2，原通道双方就绪且注资不变；客户端本地拒绝不算通过 | 歧义凭证被接受、错误输入绕过握手检查，或误伤合法订阅 | P1 |
-| `LSP-SUBSCRIPTION-17` | - [x] A 的合法订阅已有冻结 R1；另一连接使用 fiber-rpc 和编码合法但内容不是有效 Biscuit 的凭证子协议完成握手后订阅，再推进 A 的 R2 并完成原通道 | 错误凭证连接握手为 101 且仅协商 fiber-rpc；subscribe 返回 JSON-RPC 错误、无订阅 ID、无签名事件；A 原订阅收到完整 R2，原通道就绪且注资不变 | 把编码校验误当 token 认证，或错误地要求此输入在握手失败 | P1 |
+| `LSP-SUBSCRIPTION-17` | - [x] A 的合法订阅已有冻结 R1；另一连接以 fiber-rpc 和编码合法但内容不是有效 Biscuit 的凭证子协议请求握手，再推进 A 的 R2 并完成原通道 | 错误凭证的真实握手返回 HTTP 401，未升级、无订阅 ID 或签名事件；A 原订阅收到完整 R2，原通道就绪且注资不变 | 把编码校验误当 token 认证，或错误凭证仍能建立连接 | P1 |
 | `LSP-SUBSCRIPTION-18` | - [x] A 的合法订阅已有冻结 R1；分别用签名有效且身份正确、仅缺订阅写权限或仅缺通道读取权限的浏览器凭证握手，证明互补权限可用后订阅，再各自推进 A 的 R2 并完成通道 | 两种输入均握手 101 且仅协商 fiber-rpc；缺写者签名查询成功、缺读者未知 ID 取消返回 false 而签名查询拒绝；subscribe 均 RPC 拒绝且无事件；原订阅收到 R2、原通道就绪且注资不变 | 浏览器入口绕过任一权限，或用全无权限 token 掩盖未执行另一项检查 | P1 |
 | `LSP-SUBSCRIPTION-19` | - [x] A/B 各有冻结 R1，分别用各自有效浏览器凭证订阅；核对初始工作后依次应用各自 S1，在同一订阅收取各自 R2，再恢复两方原 SDK | 两连接握手 101 且仅协商 fiber-rpc；初始及实时事件只含所属租户完整 R1/R2，不出现对方私有状态；两个原订阅均收到正向 R2，两条原通道就绪且各自注资不变 | 凭证归一化丢失身份导致跨租户泄露，或用空连接静默掩盖隔离失败 | P0 |
 | `LSP-SUBSCRIPTION-20` | - [x] A 唯一私有通道冻结 R1；同一连接分别省略 options、传 null、{}、channel_ids:null 建立订阅，再应用真实 S1 并完成原通道 | 四个订阅各收到完整 R1 和新 R2，订阅期间 R1 不被消耗；原通道双方就绪、原注资不变 | 默认参数被误当空集或不同默认形式行为不一致 | P1 |
@@ -229,7 +245,7 @@ Testing: required
 
 15 的 padded 字符串必须实际含 1 或 2 个尾部 `=`，去填充后必须不同且解码字节一致；不能盲目追加无效填充。如当前注册 token 长度恰好不需要填充，Gate3 可最小扩展已有测试专用 token 测试代码：保留从真实 token 验证得到的 A tenant/node，签发 subscriptions 写与 channels 读权限，加入不参与授权的长度控制 fact，以至多三种连续长度取得有效且需要填充的序列化 token。中性 fact 名称和值避开所有授权规则，仅用于控制编码长度。只使用本地公开 devnet 测试私钥，不改产品签发逻辑；未取得有效测试代码则报告测试准备失败，不跳过或伪称兼容通过。该 token 仅供只读观察器；真实签名仍由原 SDK 身份/存储完成。
 
-16 的五个输入各自使用独立准备和收尾，不在同一冻结窗口内循环累积：缺 fiber-rpc 时其余凭证有效；重复相同凭证两次；同一有效 token 同时放 header 和子协议；后缀为空；后缀为 HTTP/subprotocol 合法但 base64url 非法的 `!`。HTTP 400 是固定 04 源码观察，随本行提交人工确认，不绑定错误响应正文。必须取得真实服务器 HTTP 400；Python 参数校验异常、连接失败、超时或其他状态码均不能代替。17 使用对 `not a Biscuit` 字节的一次无填充 base64url 编码，编码合法但认证无效，必须先取得 101 再断言 RPC 错误。
+16 的五个输入各自使用独立准备和收尾，不在同一冻结窗口内循环累积：缺 fiber-rpc 时其余凭证有效；重复相同凭证两次；同一有效 token 同时放 header 和子协议；后缀为空；后缀为 HTTP/subprotocol 合法但 base64url 非法的 `!`。HTTP 400 是固定 04 源码观察，随本行提交人工确认，不绑定错误响应正文。必须取得真实服务器 HTTP 400；Python 参数校验异常、连接失败、超时或其他状态码均不能代替。17 使用对 `not a Biscuit` 字节的一次无填充 base64url 编码，编码合法但认证无效；必须取得真实服务器 HTTP 401，不能用客户端本地校验或断线代替。
 
 18 的两种输入各自独立；复用已有 token 权限测试代码，保留有效签名及唯一 A tenant/node。缺写者先在同连接查询完整 R1 成功；缺读者先以避开所有活动 ID 的未知取消请求证明写权限，再证明签名查询失败，最后验证 subscribe 拒绝。不能因为握手成功就宣称身份或权限正确。
 
@@ -381,6 +397,8 @@ GPT 6.1 sol已只读复核04→843差异：subscription RPC/types/鉴权/SDK核�
 构建/测试通过现有完整SHA参数 `--revision` / `LSP_TEST_REVISION` 选择843，独立输出 `pr-1623-84333ee`。在新的APFS缓存副本中清理 `fiber-bin`、`fnn`、`fiber-store`、`fiber-types`、`fiber-json-types`、`fiber-lsp-sdk`、`fiber-lsp-sdk-agent` 七个相关本地包，保留第三方依赖缓存；让产品实现与版本嵌入一起重新编译，而非伪造版本字符串。原缓存、04 bundle及上次失败产物不覆盖。新执行阶段仍从产物准备计时，环境15分钟/整体150分钟、相关3条及固定1+3、失败即停；本次新批次的真实结果记录在测试目录README。
 
 ## 2026-10-30 普通订阅版本验证 Gate2（固定84333ee）
+
+本节记录固定 `84333ee` 的历史计划，不适用于 `12fd72f` 的 WebSocket 握手认证；合入版以页首 `LSP-SUBSCRIPTION-04`、`17` 两行及 SPEC-02/07 为准。
 
 用户已确认[本批Gate1](signing-subscriptions-scope.md#2026-10-30-普通订阅版本验证-gate1主会话已确认)。范围为 `LSP-SUBSCRIPTION-01/04/05/06/07/10/11/13`，共8个既有场景、11个方法。产品固定 `84333eea8488a8afc7e4474aa4bbd0e7e973cee9`，由主会话推进，GPT-6 Sol High复核。本节仅作Gate2交接，尚未修改对应自动化、启动构建、节点或测试。
 

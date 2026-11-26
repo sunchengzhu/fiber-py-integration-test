@@ -1,4 +1,4 @@
-"""Hosted no-TLC settlement; 02 is split-path, 05 is SDK prepare-only evidence."""
+"""Hosted no-TLC Watchtower settlement and split-path approval recovery."""
 
 import copy
 from contextlib import contextmanager
@@ -15,6 +15,7 @@ import time
 import requests
 import yaml
 
+from scripts.build_lsp_test_binaries import MERGED_LSP_REVISION
 from test_cases.fiber.devnet.lsp._isolated_contract import (
     align_devnet_commitment_lock,
 )
@@ -50,9 +51,33 @@ class WatchtowerBudgetExpired(BaseException):
 
 
 class _WatchtowerBase(ChannelSigningTestBase):
+    # These methods retain the approved historical D=S funding oracle.
+    legacy_operator_payout_methods = {
+        "test_authorized_settlement",
+        "test_missing_approval_then_adapted_settlement",
+        "test_cross_tenant_read",
+        "test_cross_tenant_submit",
+        "test_adapter_rejects_invalid_authorization",
+    }
+    complete_opening_before_wallet = REVISION == MERGED_LSP_REVISION
     tenant_labels = ("A", "B")
     agent_extra_args = ("--ack-held-events",)
     tenant_rpc_timeout = 10
+
+    def _operator_wallet_lock(self):
+        wallet = self.Ckb_cli.util_key_info_by_private_key(self.account1_private_key)
+        return {
+            "code_hash": self.Config.CKB_DEFAULT_CONFIG[
+                "ckb_block_assembler_code_hash"
+            ],
+            "hash_type": "type",
+            "args": wallet["lock_arg"],
+        }
+
+    def _tenant_shutdown_script(self, label, funding_script):
+        if self._testMethodName in self.legacy_operator_payout_methods:
+            return self._operator_wallet_lock()
+        return funding_script
 
     @contextmanager
     def budget(self, seconds):
@@ -128,10 +153,10 @@ class _WatchtowerBase(ChannelSigningTestBase):
         self.phase_deadlines = {}
         caps = {
             "test_authorized_settlement": 1260,
+            "test_independent_payout_with_operator_fee_sponsor": 1080,
             "test_missing_approval_then_adapted_settlement": 1440,
             "test_cross_tenant_read": 1320,
             "test_cross_tenant_submit": 2100,
-            "test_independent_destination_rejects_operator_payout": 1020,
         }
         self.cleanup_due = min(
             self.started + caps.get(method.__name__, 1260),
@@ -205,8 +230,9 @@ class _WatchtowerBase(ChannelSigningTestBase):
                     tenant["channel_id"],
                     tenant["gate"],
                 )
-                self.gate.release()
-                self._submit(self.gate.submission)
+                if not self.complete_opening_before_wallet:
+                    self.gate.release()
+                    self._submit(self.gate.submission)
                 self._finish_opening()
                 tenant["baseline"] = self._channel(tenant["client"])
                 assert not tenant["baseline"]["pending_tlcs"]
@@ -220,16 +246,7 @@ class _WatchtowerBase(ChannelSigningTestBase):
             self.a = self.tenants[0]
             self.b = self.tenants[1] if len(self.tenants) > 1 else None
             # The destination is independently derived from T's local wallet key.
-            wallet = self.Ckb_cli.util_key_info_by_private_key(
-                self.account1_private_key
-            )
-            self.destination = {
-                "code_hash": self.Config.CKB_DEFAULT_CONFIG[
-                    "ckb_block_assembler_code_hash"
-                ],
-                "hash_type": "type",
-                "args": wallet["lock_arg"],
-            }
+            self.destination = self._operator_wallet_lock()
             config = yaml.load(
                 Path(self.fiber1.fiber_config_path).read_text(), Loader=yaml.BaseLoader
             )
@@ -291,18 +308,22 @@ class _WatchtowerBase(ChannelSigningTestBase):
         assert time.monotonic() <= self.prep_due, "preparation exceeded 300 seconds"
 
     def approve(self, tenant):
+        payout = tenant["shutdown_script"]
+        sponsor = self.destination if payout != self.destination else None
+        approval = {"destination": payout, "max_fee": 10000}
+        if sponsor is not None:
+            approval["fee_sponsor_lock"] = sponsor
         with self.budget(30):
-            self.control(
-                tenant,
-                "watchtower-authorize",
-                {"destination": self.destination, "max_fee": 10000},
-            )
+            self.control(tenant, "watchtower-authorize", approval)
             policy = json.loads(
                 (
                     tenant["status_file"].parent / "store/watchtower-approvals.json"
                 ).read_text()
             )[tenant["channel_id"]]
-            assert policy == {"destination": self.destination, "max_fee": 10000}, policy
+            assert policy == {
+                **approval,
+                "fee_sponsor_lock": sponsor,
+            }, policy
 
     def inspect(self, tx, signature=None):
         value = {"transaction": {k: v for k, v in tx.items() if k != "hash"}}
@@ -517,6 +538,9 @@ class _WatchtowerBase(ChannelSigningTestBase):
     def ledger(self, tenant):
         point = {"tx_hash": tenant["commitment"]["hash"], "index": "0x0"}
         source = tenant["source"]
+        payout_lock = tenant["shutdown_script"]
+        separate_sponsor = payout_lock != self.destination
+        initial_capacity = number(tenant["commitment"]["outputs"][0]["capacity"])
         initial = raw(source["witness"])
         rows = []
         sides = []
@@ -556,11 +580,14 @@ class _WatchtowerBase(ChannelSigningTestBase):
                 sponsor += number(cell["capacity"])
             rem = 0
             dest = 0
+            user_payout = 0
             next_point = None
             for index, out in enumerate(tx["outputs"]):
                 assert out["type"] is None and tx["outputs_data"][index] == "0x"
                 if out["lock"] == self.destination:
                     dest += number(out["capacity"])
+                elif out["lock"] == payout_lock:
+                    user_payout += number(out["capacity"])
                 else:
                     assert next_point is None and index == 0
                     expected = copy.deepcopy(parent["lock"])
@@ -574,7 +601,7 @@ class _WatchtowerBase(ChannelSigningTestBase):
                     assert out["lock"] == expected
                     rem = number(out["capacity"])
                     next_point = {"tx_hash": tx["hash"], "index": "0x0"}
-            fee = c + sponsor - rem - dest
+            fee = c + sponsor - rem - dest - user_payout
             assert 0 <= fee <= 10000
             payout = c - rem
             final = body[1 + 36 * (1 - side) : 1 + 36 * (1 - side) + 20] == bytes(20)
@@ -585,6 +612,17 @@ class _WatchtowerBase(ChannelSigningTestBase):
                 else int.from_bytes(body[offset + 20 : offset + 36], "little")
             )
             is_a = side == int(source["reference"]["for_remote"])
+            if separate_sponsor:
+                # Derive shares from the saved record and actual claim order.
+                party_amount = source["local_amount" if is_a else "remote_amount"]
+                expected_payout = (
+                    initial_capacity - rows[0]["P"] if final else int(party_amount)
+                )
+                assert payout == expected_payout > 0
+                assert user_payout == (expected_payout if is_a else 0), tx
+                assert dest - sponsor == expected_payout - user_payout - fee, tx
+                if is_a:
+                    assert sponsor >= fee > 0, tx
             if is_a:
                 matches = []
                 for audit in tenant["gate"].audit_snapshot()["requests"]:
@@ -644,6 +682,7 @@ class _WatchtowerBase(ChannelSigningTestBase):
                     "S": sponsor,
                     "R": rem,
                     "D": dest,
+                    "U": user_payout,
                     "F": fee,
                     "P": payout,
                 }
@@ -654,12 +693,19 @@ class _WatchtowerBase(ChannelSigningTestBase):
             point = next_point
         self.record("ledger", tenant=tenant["label"], rows=rows)
         if len(rows) == 2:
-            c0 = number(tenant["commitment"]["outputs"][0]["capacity"])
-            assert sum(r["P"] for r in rows) == c0
+            assert sum(r["P"] for r in rows) == initial_capacity
             assert (
-                sum(r["D"] - r["S"] + r["F"] for r in rows) + tenant["close_fee"]
+                sum(r["U"] + r["D"] - r["S"] + r["F"] for r in rows)
+                + tenant["close_fee"]
                 == tenant["funding_capacity"]
             )
+            if separate_sponsor:
+                a, t = sorted(rows, key=lambda r: not r["a"])
+                assert a["a"] and not t["a"]
+                assert sum(r["U"] for r in rows) == a["P"]
+                assert sum(r["D"] - r["S"] for r in rows) == t["P"] - sum(
+                    r["F"] for r in rows
+                )
         return rows
 
     def finish(self, tenant):
@@ -747,7 +793,7 @@ class _WatchtowerBase(ChannelSigningTestBase):
 
 
 class TestWatchtowerSettlement(_WatchtowerBase):
-    # Historical D=S oracle only; new independent-payout 01 awaits a product fix.
+    # Keep the original settlement regression with a shared payout/sponsor lock.
     def test_authorized_settlement(self):
         """
         1. 预先批准真实地址与费用。
@@ -898,6 +944,33 @@ class TestWatchtowerSettlement(_WatchtowerBase):
         assert len(self.ledger(self.b)) == 2
 
 
+class TestWatchtowerIndependentPayout(_WatchtowerBase):
+    tenant_labels = ("A",)
+
+    # TEST-MAP: LSP-WATCHTOWER-01
+    def test_independent_payout_with_operator_fee_sponsor(self):
+        """
+        1. 开通私有通道，预先批准 A 的独立收款地址和 T 的代付钱包。
+        2. 由 T 强关，等待承诺成熟和真实结算工作。
+        3. 核对 A 的签名实际用于链上支出、两方到账及费用，并观察 65 秒。
+        """
+        # 1. 冻结开通时绑定的用户收款地址和独立的运营方代付钱包。
+        assert self.a["shutdown_script"] != self.destination
+        self.record(
+            "independent-payout-intent",
+            payout=self.a["shutdown_script"],
+            sponsor=self.destination,
+        )
+        self.approve(self.a)
+
+        # 2. 真实强关并等待成熟及 SDK 收到结算交易。
+        self.close_and_mature(self.a)
+        self.current(self.a)
+
+        # 3. 沿真实链核对双方各结算一次、A 全额到账和 T 代付。
+        self.finish(self.a)
+
+
 class TestWatchtowerAdapter(_WatchtowerBase):
     """Unmapped adapter checks; never reported as product scenario passes."""
 
@@ -942,234 +1015,3 @@ class TestWatchtowerAdapter(_WatchtowerBase):
         assert "fee exceeds local cap" in refused["error"]
         self.approve(self.a)
         assert not self.a["gate"].watchtower_submissions
-
-
-class TestWatchtowerDestinationRejection(_WatchtowerBase):
-    """84333ee: one real candidate, original SDK validation, no signing path."""
-
-    tenant_labels = ("A",)
-    agent_extra_args = ("--ack-held-events", "--watchtower-diagnostic-only")
-
-    def assert_operator_payout_candidate(self, status):
-        """Independently bind the wrong payout to A's still-unsettled share."""
-        assert status["type"] == "SignatureRequired"
-        assert status["content"]["key_purpose"] == {"type": "Settlement"}
-        tx = status["content"]["transaction"]
-        assert self.inspect(tx)["request_id"] == status["request_id"]
-        rows = self.ledger(self.a)
-        assert not any(row["a"] for row in rows), rows
-        point = {
-            "tx_hash": rows[-1]["tx_hash"] if rows else self.a["commitment"]["hash"],
-            "index": "0x0",
-        }
-        assert tx["inputs"][0]["previous_output"] == point
-        parent = self.transaction(point["tx_hash"])["outputs"][0]
-        body = bytearray(raw(self.a["source"]["witness"]))
-        for row in rows:
-            offset = 1 + 36 * row["side"]
-            body[offset : offset + 36] = bytes(36)
-        witness = raw(tx["witnesses"][0])
-        assert witness[:17] == bytes([16, 0, 0, 0] * 4 + [1])
-        assert witness[17:90] == bytes(body)
-        side = witness[90] - 254
-        assert side == int(self.a["source"]["reference"]["for_remote"])
-        assert witness[91] == 0
-        assert digest(body)[:20] == raw(parent["lock"]["args"])[36:56]
-        offset = 1 + 36 * side
-        assert body[offset : offset + 20] != bytes(20)
-        final = body[1 + 36 * (1 - side) : 1 + 36 * (1 - side) + 20] == bytes(20)
-        capacity = number(parent["capacity"])
-        entitled = (
-            capacity
-            if final
-            else int.from_bytes(body[offset + 20 : offset + 36], "little")
-        )
-        assert entitled > 0
-        body[offset : offset + 36] = bytes(36)
-        expected_remainder = copy.deepcopy(parent["lock"])
-        args = raw(expected_remainder["args"])
-        expected_remainder["args"] = (
-            "0x" + (args[:36] + digest(body)[:20] + b"\x01" + args[57:]).hex()
-        )
-        remainder, sponsor_output, remainder_count = 0, 0, 0
-        for index, output in enumerate(tx["outputs"]):
-            assert output["type"] is None and tx["outputs_data"][index] == "0x"
-            assert (
-                output["lock"] != self.a["shutdown_script"]
-            ), "candidate already pays A"
-            if output["lock"] == self.destination:
-                sponsor_output += number(output["capacity"])
-            else:
-                assert not final and index == 0 and output["lock"] == expected_remainder
-                remainder_count += 1
-                remainder += number(output["capacity"])
-        assert remainder_count == (0 if final else 1)
-        assert remainder == capacity - entitled
-        assert sponsor_output > 0
-        sponsor_input, seen = 0, {json.dumps(point, sort_keys=True)}
-        for value in tx["inputs"][1:]:
-            outpoint = value["previous_output"]
-            key = json.dumps(outpoint, sort_keys=True)
-            assert key not in seen
-            seen.add(key)
-            live = self.rpc("get_live_cell", [outpoint, True])
-            assert live["status"] == "live", "candidate sponsor no longer live"
-            cell = live["cell"]
-            assert cell["output"]["lock"] == self.destination
-            assert cell["output"]["type"] is None and cell["data"]["content"] == "0x"
-            sponsor_input += number(cell["output"]["capacity"])
-        assert tx["cell_deps"] == self.a["deps"]["settlement_deps"]
-        fee = capacity + sponsor_input - remainder - sponsor_output
-        assert 0 <= fee <= 10000
-        self.record(
-            "operator-payout-candidate",
-            request=status,
-            input=point,
-            A_entitled=entitled,
-            A_output=0,
-            sponsor_input=sponsor_input,
-            sponsor_output=sponsor_output,
-            remainder=remainder,
-            fee=fee,
-        )
-        return fee
-
-    # TEST-MAP: LSP-WATCHTOWER-05
-    def test_independent_destination_rejects_operator_payout(self):
-        """
-        1. 固定A独立退出地址和T赞助地址，持久化原SDK批准。
-        2. T真实强关成熟，核对错付候选并取得原SDK只验证拒绝。
-        3. 连续65秒核对零签名提交及A份额未解锁，保留拒绝层级。
-        """
-        # 1. 固定A独立退出地址和T赞助地址，持久化原SDK批准。
-        assert REVISION == DEFAULT_REVISION or (
-            RETEST_REVISION is not None and REVISION == RETEST_REVISION
-        ), "use a separately reviewed revision for repair regression"
-        destination = self.a["shutdown_script"]
-        wallet = self.Ckb_cli.util_key_info_by_private_key(self.a["private_key"])
-        assert destination["args"] == wallet["lock_arg"]
-        assert destination != self.destination
-        policy_path = self.a["status_file"].parent / "store/watchtower-approvals.json"
-        self.control(
-            self.a,
-            "watchtower-authorize",
-            {"destination": destination, "max_fee": 10000},
-        )
-        policy = json.loads(policy_path.read_text())[self.a["channel_id"]]
-        assert policy == {"destination": destination, "max_fee": 10000}
-        self.record(
-            "independent-payout-intent",
-            destination=destination,
-            sponsor=self.destination,
-            policy=policy,
-        )
-
-        # 2. T真实强关成熟，核对错付候选并取得原SDK只验证拒绝。
-        self.close_and_mature(self.a)
-        self.current(self.a)
-        with self.budget(
-            self.phase_deadlines[(self.a["label"], "work")] - time.monotonic()
-        ):
-            seen = set()
-            while True:
-                assert len(seen) < 3, "three-work diagnostic limit"
-                result = self.control(
-                    self.a, "watchtower-diagnose", {"sponsor": self.destination}
-                )
-                request_id = result.get("request_id")
-                assert (
-                    request_id and request_id not in seen
-                ), "same invalid work repeated"
-                seen.add(request_id)
-                assert len(seen) <= 3, "three-work diagnostic limit"
-                if result.get("checkpoint_invalid"):
-                    assert result["sdk_called"] is False
-                    self.record("diagnostic-checkpoint-invalid", result=result)
-                    self.current(self.a)
-                    continue
-                assert result["sdk_called"] is True, result
-                assert result["prepared"] is False, result
-                assert result["rejection_layer"] in (
-                    "sdk_sponsor",
-                    "sdk_output_destination",
-                ), result
-                assert (
-                    result["snapshot_unchanged"] and result["approval_unchanged"]
-                ), result
-                assert (
-                    result["snapshot_before_hash"] == result["snapshot_after_hash"]
-                ), result
-                assert (
-                    result["check_only"]
-                    and not result["can_sign"]
-                    and not result["can_submit"]
-                )
-                assert all(result["checks"].values()), result
-                status = result["request"]
-                live = self.rpc(
-                    "get_live_cell",
-                    [
-                        status["content"]["transaction"]["inputs"][0][
-                            "previous_output"
-                        ],
-                        True,
-                    ],
-                )
-                if live["status"] != "live":
-                    self.record(
-                        "diagnostic-checkpoint-consumed", result=result, live=live
-                    )
-                    self.current(self.a)
-                    continue
-                fee = self.assert_operator_payout_candidate(status)
-                assert result["authorization_destination_rpc"] == destination
-                assert number(result["authorization"]["fee"]) == fee
-                assert (
-                    json.loads(policy_path.read_text())[self.a["channel_id"]] == policy
-                )
-                self.record("independent-payout-rejected", result=result)
-                break
-
-        # 3. 连续65秒核对零签名提交及A份额未解锁，保留拒绝层级。
-        assert (
-            self.total_due - time.monotonic() >= 75
-        ), "insufficient full observation budget"
-        store_snapshot = self.a["status_file"].parent / "store/snapshot.bin"
-        snapshot_before = hashlib.sha256(store_snapshot.read_bytes()).hexdigest()
-        with self.budget(75):
-            start = previous = time.monotonic()
-            samples, max_gap = 0, 0.0
-            while True:
-                sample_start = time.monotonic()
-                with self.budget(2):
-                    assert not self.a["gate"].watchtower_submissions
-                    assert (
-                        hashlib.sha256(store_snapshot.read_bytes()).hexdigest()
-                        == snapshot_before
-                    )
-                    assert not any(
-                        row["method"] == "submit_watchtower_signature"
-                        for row in self.a["gate"].audit_snapshot()["requests"]
-                    )
-                    assert not any(row["a"] for row in self.ledger(self.a))
-                    assert (
-                        json.loads(policy_path.read_text())[self.a["channel_id"]]
-                        == policy
-                    )
-                sampled = time.monotonic()
-                max_gap = max(max_gap, sampled - previous)
-                assert max_gap <= 2, f"negative sampling gap {max_gap:.3f}s"
-                previous, samples = sampled, samples + 1
-                if sampled - start >= 65:
-                    break
-                time.sleep(max(0, sample_start + 1 - time.monotonic()))
-            self.record(
-                "independent-payout-observation",
-                seconds=sampled - start,
-                samples=samples,
-                max_sample_gap=max_gap,
-                rejection_layer=result["rejection_layer"],
-                snapshot_sha256=snapshot_before,
-                error=result["error"],
-                independent_payout_verified=False,
-            )

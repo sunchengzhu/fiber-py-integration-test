@@ -382,7 +382,7 @@ async fn control(
                 channel_id: channel,
                 destination: serde_json::from_value(value["destination"].clone())?,
                 #[cfg(feature = "merged-lsp")]
-                fee_sponsor_lock: None,
+                fee_sponsor_lock: serde_json::from_value(value["fee_sponsor_lock"].clone())?,
                 max_fee: value["max_fee"].as_u64().context("fee cap")?,
             })
             .await?;

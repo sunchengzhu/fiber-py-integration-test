@@ -99,9 +99,9 @@ Testing: required
 
 1. 在任何付款之前保存所有通道的基线余额、funding、A 的 `NoSignatureRequired` 和 FNN 日志文件/偏移；03 同时保存 B 基线。确认准备期间签名请求已处理完，A gate 的既有请求完成，再将 A gate 设为扣留所有签名。A 的 SDK 与 Python 租户 RPC 都经同一审计 gate，后续不能走未记录的直连旁路。
 2. 调用 A 的 `send_payment` 一次后，必须在 60 秒内得到该付款的 `SignatureRequired/CompleteReceivedCommitment`，保存完整请求 R 和真实 SDK 已保存的签名提交 S。R 的通道、方向、结算 TLC hash/金额/expiry 必须对应 A；`session_evidence.peer_partial_signature` 存在，SDK 验证通过并产出 S；同一 hash 在 T 的 A–T 通道是 offered、在 A 是 received，在 P–T 也存在正确上游 TLC。
-3. 从付款前偏移起，要求该通道新出现 `set_waiting_ack(true)` 后发送 `CommitmentSigned` 的日志，时间早于捕获 R；从付款开始到建立检查点，A gate 没有把任何新的签名送到 FNN，也未手工直交或放过 A 的 `SendCommitmentSigned`。A 的唯一对端是 T，R 代表来自 T 的待完成承诺，结合真实 SDK 验证、方向及日志形成归属证据。若最先阻塞的签名不是目标转换，或不能排除 A 自己的发送，不应用它去换一个检查点，本轮报检查点未取得。
-4. 这是一组协议与观测证据，**不是直接读取内部 `waiting_ack`**。源码发送路径 [先设置 ACK 并持久化，再发送承诺](https://github.com/nervosnetwork/fiber/blob/24b5c38bc098aeb29de5f6af7ac28dc667f218e3/crates/fiber-lib/src/fiber/channel.rs#L2157)；A 的接收路径 [保存收到的对端签名并要求 CompleteReceivedCommitment](https://github.com/nervosnetwork/fiber/blob/24b5c38bc098aeb29de5f6af7ac28dc667f218e3/crates/fiber-lib/src/fiber/channel.rs#L9772)。两侧日志可能继承同一 Network span，不能据此判断公共/租户侧；debug `Scalar(#...)` 是截断值，不能宣称与 RPC 的完整签名逐字相等。
-5. 检查点成立后不得出现该 A–T 通道 ACK 被清除或新的承诺发送/版本推进；继续扣住 R，在线时每轮全量比较 R，离线时只被动检查日志并在恢复前全量核对 R。该通道的 `latest_commitment_transaction_hash` 保持检查点值，不能要求共享 P–T 在 B 付款时承诺不变化。
+3. 从付款前偏移起，要求该通道恰好出现一次 `set_waiting_ack(true)`，且捕获 R 前没有后续 `set_waiting_ack(false)`；从付款开始到建立检查点，A gate 没有把任何新的签名送到 FNN，也未手工直交或放过 A 的 `SendCommitmentSigned`。A 的唯一对端是 T，R 代表来自 T 的待完成承诺，结合真实 SDK 验证、方向及日志形成归属证据。若最先阻塞的签名不是目标转换，或不能排除 A 自己的发送，不应用它去换一个检查点，本轮报检查点未取得。
+4. 这是一组协议与观测证据，**不是直接读取内部 `waiting_ack`**。`12fd72f` 的 V2 [发送路径](https://github.com/nervosnetwork/fiber/blob/12fd72f2062fc2e5b6418f7e85e7bff355bf50cb/crates/fiber-lib/src/fiber/channel.rs#L12735-L12758)先设置 ACK 并持久化，再发送 `CommitmentSignedV2`，不再输出旧 V1 的 `send commitment signed: CommitmentSigned` 日志；[接收路径](https://github.com/nervosnetwork/fiber/blob/12fd72f2062fc2e5b6418f7e85e7bff355bf50cb/crates/fiber-lib/src/fiber/channel.rs#L12764-L12825)将收到的对端签名推进至待完成承诺。两侧日志可能继承同一 Network span，不能据此判断公共/租户侧；debug `Scalar(#...)` 是截断值，不能宣称与 RPC 的完整签名逐字相等。
+5. 检查点成立后不得出现该 A–T 通道 ACK 被清除、再次设置或承诺版本推进；继续扣住 R，在线时每轮全量比较 R，离线时只被动检查日志并在恢复前全量核对 R。该通道的 `latest_commitment_transaction_hash` 保持检查点值，不能要求共享 P–T 在 B 付款时承诺不变化。
 
 ## 时间预算和安全期限
 
