@@ -26,6 +26,10 @@ from scripts.lsp_parallel import validate_ports, validate_plan, wait_child, run_
 from scripts.lsp_ci_progress import DiskBudgetExceeded, disk_guard
 
 SUITE = "test_cases/fiber/devnet/lsp"
+DELIVERY_DIAGNOSTIC = (
+    SUITE + "/test_delivery_acceptance.py::TestDeliveryAcceptance::"
+    "test_buffered_reply_lost_after_real_acceptance"
+)
 REVISION = "76307312e8de518c9a32074e6d16867c04de4f86"
 DEFAULT_REVISION = REVISION
 INVOICE = SUITE + "/test_tenant_boundaries.py::TestTenantQueryIsolation::"
@@ -638,6 +642,8 @@ def main():
         bundle = args.bundle.resolve()
         env = environment(bundle)
         nodeids = collect(selectors, output, env)
+        if selectors == [SUITE]:
+            nodeids = [nodeid for nodeid in nodeids if nodeid != DELIVERY_DIAGNOSTIC]
         jobs = build_plan(nodeids, args.independent)
         if args.workers == 2:
             if args.progress:

@@ -154,6 +154,12 @@ class TestPaymentAuthorizationRecovery(_DelayedPaymentBase):
         # Preparation must neither create a preimage-bearing invoice nor authorize it.
         pass
 
+    def _wait_for_opening_commitment(self, tenant, deadline=None):
+        # Let the SDK consume the WS requests before the control can poll and sign them.
+        if deadline is None:
+            deadline = min(self.preparation_until, time.monotonic() + 10)
+        super()._wait_for_opening_commitment(tenant, deadline=deadline)
+
     def setUp(self):
         super().setUp()
         self.gate.release()
