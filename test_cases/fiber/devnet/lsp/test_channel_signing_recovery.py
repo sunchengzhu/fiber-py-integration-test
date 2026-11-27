@@ -9,7 +9,13 @@ import signal
 import subprocess
 import time
 
-from test_cases.fiber.devnet.lsp._lsp_test import ChannelSigningTestBase, stop_agent
+from scripts.build_lsp_test_binaries import MERGED_LSP_REVISION
+from test_cases.fiber.devnet.lsp._lsp_test import (
+    DEFERRED_FUNDING_WINDOW,
+    REVISION,
+    ChannelSigningTestBase,
+    stop_agent,
+)
 
 
 class _SequenceBudgetExpired(BaseException):
@@ -17,9 +23,28 @@ class _SequenceBudgetExpired(BaseException):
 
 
 class TestChannelSigningRecovery(ChannelSigningTestBase):
+    def setup_method(self, method):
+        if REVISION == MERGED_LSP_REVISION:
+            if method.__name__ in {
+                "test_sdk_restart_with_saved_unsubmitted_opening_signature",
+                "test_sdk_restart_without_learning_applied_result",
+                "test_hosted_fnn_restart_with_pending_opening_signature",
+            }:
+                self.defer_external_funding = True
+                self.fiber_config_extra = {
+                    **self.fiber_config_extra,
+                    "external_funding_timeout_seconds": DEFERRED_FUNDING_WINDOW,
+                }
+            else:
+                self.complete_opening_before_wallet = True
+        super().setup_method(method)
+
     def _check_opening_window(self, seconds):
         created = int(self._channel(self.client)["created_at"], 16) / 1000
-        assert created + 86400 - time.time() >= seconds
+        expires = created + self.opening_window_seconds
+        if self.defer_external_funding:
+            expires = min(expires, self.tenant["original_funding_deadline"])
+        assert expires - time.time() >= seconds
 
     def _finish_opening(self):
         super()._finish_opening()

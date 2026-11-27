@@ -299,6 +299,57 @@ def test_missing_plan_is_explicitly_unknown_and_nonzero(tmp_path):
     assert "计划 未取得" in (tmp_path / "report/index.html").read_text()
 
 
+@pytest.mark.parametrize(
+    ("outcome", "fallback_id", "complete"),
+    [
+        ("passed", "12345", True),
+        ("failure", "12345", False),
+        ("passed", None, False),
+        ("passed", "invalid", False),
+    ],
+)
+def test_ci_publishes_report_and_preserves_verdict_with_fallback(
+    tmp_path, monkeypatch, outcome, fallback_id, complete
+):
+    path, directory, selected = fixture_plan(tmp_path, 1)
+    native_job(directory, selected, [outcome])
+    (directory / "runtime-retention.json").unlink()
+    if fallback_id is not None:
+        (directory / "runtime-fallback.txt").write_text(fallback_id + "\n")
+    collected = tmp_path / "collected"
+    ci.collect_results(directory, collected / "query")
+    report = tmp_path / "report"
+    output = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    published = subprocess.run(
+        [
+            sys.executable,
+            str(runner.ROOT / "scripts/lsp_ci.py"),
+            "report",
+            "--plan",
+            str(path),
+            "--source",
+            str(collected),
+            "--output",
+            str(report),
+            "--publish-only",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert published.returncode == 0, published.stderr
+    assert output.read_text() == f"complete={str(complete).lower()}\n"
+    result = ci.read(report / "report.json")
+    assert result["counts"] == {outcome: 1}
+    assert result["complete"] is complete
+    if fallback_id == "12345":
+        assert not result["problems"]
+        assert "lsp-runtime-fallback-query" in result["warnings"][0]
+        assert "归档警告" in (report / "summary.md").read_text()
+    else:
+        assert result["problems"] and not result["warnings"]
+
+
 def test_progress_telemetry_write_failure_does_not_interrupt_teardown(
     tmp_path, monkeypatch, capsys
 ):
@@ -578,6 +629,57 @@ def test_runtime_archive_keeps_original_database_and_manifest(tmp_path, monkeypa
             hashlib.sha256(tar.extractfile(manifest[0]["path"]).read()).hexdigest()
             == manifest[0]["sha256"]
         )
+
+
+@pytest.mark.parametrize(
+    ("bucket_id", "archive_budget_gib", "initial_gib", "free_gib", "succeeds"),
+    [
+        ("subscription", 3, 20, 17.5, True),
+        ("payment", 2, 20, 17.5, False),
+        ("subscription", 3, 9, 7, False),
+    ],
+)
+def test_subscription_archive_has_room_after_test_budget(
+    tmp_path,
+    monkeypatch,
+    bucket_id,
+    archive_budget_gib,
+    initial_gib,
+    free_gib,
+    succeeds,
+):
+    monkeypatch.setattr(ci, "ROOT", tmp_path)
+    source = tmp_path / "tmp/lsp-owned/contract/node"
+    source.mkdir(parents=True)
+    (source / "database").write_bytes(b"original database")
+    bucket = tmp_path / bucket_id
+    ci.write(
+        bucket / "job.json",
+        {
+            "id": bucket_id,
+            "free_bytes_before": int(initial_gib * 2**30),
+            "archive_disk_budget_gib": archive_budget_gib,
+        },
+    )
+    ci.write(
+        bucket / "entry/job-000/before-teardown/test/runtime.json",
+        {"sources": [["ckb", str(source)]]},
+    )
+    monkeypatch.setattr(
+        ci.shutil,
+        "disk_usage",
+        lambda _: SimpleNamespace(free=int(free_gib * 2**30)),
+    )
+
+    if succeeds:
+        ci.retain_runtime(bucket)
+        assert (
+            ci.read(bucket / "runtime-retention.json")["archive_disk_budget_gib"] == 3
+        )
+        assert (bucket / "runtime.tar.gz").is_file()
+    else:
+        with pytest.raises(RuntimeError, match="disk floor/batch budget"):
+            ci.retain_runtime(bucket)
 
 
 def test_valid_binary_bundle_restores_modes_and_refuses_overwrite(

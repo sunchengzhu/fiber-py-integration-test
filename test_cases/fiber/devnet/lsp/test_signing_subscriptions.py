@@ -5,8 +5,13 @@ import os
 import subprocess
 import time
 
+from websockets.exceptions import InvalidStatus
+
+from scripts.build_lsp_test_binaries import MERGED_LSP_REVISION
 from test_cases.fiber.devnet.lsp._lsp_test import (
     BUNDLE,
+    DEFERRED_FUNDING_WINDOW,
+    REVISION,
     ChannelSigningTestBase,
     stop_agent,
 )
@@ -15,6 +20,11 @@ from test_cases.fiber.devnet.lsp._subscription_observer import SubscriptionObser
 
 class SubscriptionTestBase(ChannelSigningTestBase):
     agent_extra_args = ("--ack-held-events",)
+    defer_external_funding = REVISION == MERGED_LSP_REVISION
+    if defer_external_funding:
+        fiber_config_extra = {
+            "external_funding_timeout_seconds": DEFERRED_FUNDING_WINDOW
+        }
 
     def setUp(self):
         self.observers = []
@@ -48,9 +58,16 @@ class SubscriptionTestBase(ChannelSigningTestBase):
     def _window(self, tenant, seconds):
         channel = self._channel(tenant["client"], tenant["channel_id"])
         created = int(channel["created_at"], 16) / 1000
-        assert (
-            created + self.opening_window_seconds - time.time() >= seconds
-        ), "insufficient opening budget"
+        expires = created + self.opening_window_seconds
+        if self.defer_external_funding:
+            expires = min(expires, tenant["original_funding_deadline"])
+        assert expires - time.time() >= seconds, "insufficient opening budget"
+
+    def _frozen_funding(self, tenant):
+        if self.defer_external_funding:
+            assert "funding_tx_hash" not in tenant, "wallet submitted before checkpoint"
+            return {"funding_proposal_hash": tenant["funding_proposal_hash"]}
+        return {"funding": tenant["funding_tx_hash"]}
 
     def _stop_preparation_sdk(self):
         for tenant in self.tenants:
@@ -152,6 +169,9 @@ class SubscriptionTestBase(ChannelSigningTestBase):
                 )
                 self.addCleanup(stop_agent, tenant["agent"])
             deadline = time.monotonic() + 120
+            if self.defer_external_funding:
+                self._submit_deferred_funding(tenant, deadline)
+            local = None
             while time.monotonic() < deadline:
                 assert tenant["agent"].poll() is None, self._agent_log(tenant)[-1500:]
                 assert not tenant["gate"].errors, tenant["gate"].errors
@@ -167,7 +187,7 @@ class SubscriptionTestBase(ChannelSigningTestBase):
                 time.sleep(0.2)
             else:
                 raise AssertionError(
-                    f"original channel did not finish: {local['state']}"
+                    f"original channel did not finish: {local and local['state']}"
                 )
             assert len(tenant["client"].list_channels({})["channels"]) == 1
             assert local["channel_outpoint"] == public["channel_outpoint"]
@@ -176,6 +196,9 @@ class SubscriptionTestBase(ChannelSigningTestBase):
             assert "0x" + outpoint[:32].hex() == tenant["funding_tx_hash"]
             tx = self.node.getClient().get_transaction(tenant["funding_tx_hash"])
             assert tx["tx_status"]["status"] == "committed", tx
+            if self.defer_external_funding:
+                self._assert_original_funding_confirmed(tenant)
+                assert time.monotonic() < deadline, "opening confirmed after deadline"
             stable = (local, public)
             for _ in range(5):
                 time.sleep(1)
@@ -580,8 +603,19 @@ class TestInvalidSubscriptions(SubscriptionTestBase):
                 )
             )
             headers["Authorization"] = "Bearer " + fixture["token"]
-        # A successful constructor proves the upgrade itself was not the rejection.
+        if kind in ("missing", "invalid"):
+            try:
+                self._connect(headers=headers)
+            except InvalidStatus as error:
+                assert error.response.status_code == 401, error.response
+            else:
+                raise AssertionError("missing or invalid token upgraded successfully")
+            assert self._state(tenant) == tenant["before"]
+            return current, subscription, None
+
+        # A successful constructor proves permission rejection happened after upgrade.
         rejected = self._connect(headers=headers)
+        assert rejected.client.response.status_code == 101, rejected.client.response
         if kind == "subscriptions-write":
             reply = rejected.request(
                 "get_channel_signing_status", [{"channel_id": self.channel_id}]
@@ -610,7 +644,8 @@ class TestInvalidSubscriptions(SubscriptionTestBase):
 
         def no_unauthorized_event():
             self._assert_owner(current, subscription, tenant)
-            assert not rejected.frames(), rejected.frames()
+            if rejected is not None:
+                assert not rejected.frames(), rejected.frames()
 
         self._observe(no_unauthorized_event)
         self._finish_channels()
@@ -618,8 +653,8 @@ class TestInvalidSubscriptions(SubscriptionTestBase):
 
     # TEST-MAP: LSP-SUBSCRIPTION-04
     def test_missing_token_does_not_disrupt_subscription(self):
-        """1. 缺少 token 的 subscribe 返回错误且无事件。2. 原合法订阅收到新请求并完成通道。"""
-        # 1. 独立环境验证 RPC 拒绝，不把 WS 握手失败当作通过。
+        """1. 缺少 token 的握手返回 401、未建立订阅。2. 原合法订阅收到新请求并完成通道。"""
+        # 1. 独立环境验证真实握手状态和原状态未受影响。
         original = self._reject_subscription("missing")
 
         # 2. 继续推进 R2、观察无泄露并检查原通道终态。
@@ -627,8 +662,8 @@ class TestInvalidSubscriptions(SubscriptionTestBase):
 
     # TEST-MAP: LSP-SUBSCRIPTION-04
     def test_invalid_token_does_not_disrupt_subscription(self):
-        """1. 无效 token 的 subscribe 返回错误且无事件。2. 原合法订阅收到新请求并完成通道。"""
-        # 1. 独立环境验证 RPC 拒绝，不把 WS 握手失败当作通过。
+        """1. 无效 token 的握手返回 401、未建立订阅。2. 原合法订阅收到新请求并完成通道。"""
+        # 1. 独立环境验证真实握手状态和原状态未受影响。
         original = self._reject_subscription("invalid")
 
         # 2. 继续推进 R2、观察无泄露并检查原通道终态。

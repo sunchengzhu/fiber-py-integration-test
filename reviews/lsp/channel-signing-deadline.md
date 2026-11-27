@@ -2,33 +2,33 @@
 
 ## 导读
 
-本次仅重审开通阶段的两条用例，固定 Fiber #1623 的 `505c48fbe01fe22504f99bde085d8ebda2c53018`。钱包的有效注资签名交出后，即便当前链上查不到注资交易，签过的交易仍可能被对端广播并确认。FNN 先完成初始承诺握手，将可用于单方退出的本地承诺持久化，再接受钱包注资签名。若此后只因为时间到了就丢掉通道状态，原注资一旦确认，用户可能失去安全退出所需的承诺。因此新版在钱包提交后保留开通状态。另一笔真实确认的交易花掉原注资必需输入后，原注资才失去确认的可能，FNN 到达跟踪深度后即可自动中止未确认的开通。[外部注资公开规则][external-funding] · [提交与持久化顺序][submit-funding] · [清理修复 #1747][funding-fix]
+合入 `develop` 后，FNN 先完成初始承诺握手并保存可用于单方退出的交易，再接受钱包注资签名。注资签名交出后，原交易即使尚未确认，仍可能上链。本批还复核签名截止后的双方真实关闭竞争：晚到签名必须被拒，保护是否生效要看 A 的实际广播；败方恢复要看真实赢家与远端关闭状态，不要求 T 恰好在观测窗口开始后才广播。[外部注资公开规则][external-funding] · [合入版提交顺序][merged-submit] · [合入版旧计时器测试][merged-stale]
 
 ## 需要你决定
 
-两条新版判据及 TIMEOUT-04 的首例实现均已确认。TIMEOUT-05 在自己的 devnet 中重建同一中止前提，随后验证已应用签名的迟到重放。
-
-- `LSP-TIMEOUT-04` 验证同一次开通的两个阶段。超过普通期限且原输入仍可用时保持待开。原输入被另一笔交易确认花费后自动中止。
-- `LSP-TIMEOUT-05` 在上述合法中止后，原样重放开通时已获真实 `Applied` 的通道签名，验证迟到的重放被拒绝。新版在接受钱包签名前已要求这一轮承诺签名完成，因此本行的证据范围是**已应用签名的迟到重放**。如需保留旧用例的“未应用签名首次晚到”，应另行评审钱包尚未提交时合法中止的路径。
+- `LSP-TIMEOUT-03`：旧版在已提交钱包签名后扣住开通签名。合入版改为暂停本条 devnet 的矿工，用原注资交易尚未确认来保持开通，并在跨过外部注资期限后恢复挖矿。
+- `LSP-TIMEOUT-04/05`：在 `12fd72f` 上沿用 `505c48fb` 已评审的场景和判据。已取得的历史结果仍归原版本。
+- `LSP-TIMEOUT-07`（已确认）：保留自然竞争，分别证明 A 确实尝试截止保护，以及实际由 A 还是 T 的交易确认。
+- `LSP-TIMEOUT-12`（已确认）：保留固定查询窗口、T 真实接受、A 真实 RBF 拒绝及完整恢复观察。T 可以在窗口开始前获接受，时间范围从 D 起至窗口释放前。
 
 ## 用例
 
-A 是真实 SDK 管理的 Hosted 租户，T 是公共 LSP，W 是持有原输入的测试钱包。每条在独立 devnet 中运行，05 先独立重建 04 的合法中止前提。表中 `[x]` 表示存在 `TEST-MAP`。04、05 在固定 `505c48fb` 上执行新版场景。`76307312` 入口保留各自的历史行为。其余用例继续沿用原评审版本。
+A 是真实 SDK 管理的 Hosted 租户，T 是公共 LSP，W 是持有原输入的测试钱包。每条在独立 devnet 中运行，05 先独立重建 04 的合法中止前提。表中 `[x]` 表示存在 `TEST-MAP`。03–05 与 07/12 是合入版的执行方案；旧版本的执行记录保留，其余用例的场景和判据不变。
 
 <!-- TEST-CASES-BEGIN -->
 | 用例 | 场景 | 预期结果 | 防止的问题 | 优先级 |
 | --- | --- | --- | --- | --- |
 | `LSP-TIMEOUT-01` | - [x] A–T 进入外部注资等待后一直不提交钱包签名，直到越过配置的外部注资期限；随后用 `list_channels(only_pending=true)` 查询双方开通失败记录，并核对链上输入 | 双方都出现该通道的失败条目，状态为 `Closed` 且带 `FUNDING_ABORTED` 标志；没有任何注资交易上链；原未签注资交易的每个输入仍是可用 live cell | 超期不中止、只在单侧生效，或中止时钱包资金已经被带上链 | P0 |
 | `LSP-TIMEOUT-02` | - [x] 在 01 的中止终态上，用保存的原未签注资交易补签并提交，再查询开通记录、通道数量与链上 | 提交被拒绝；失败条目保持同一条 `Closed` 与 `FUNDING_ABORTED`，不出现新的待开记录或新通道；原输入仍未被花费 | 晚到钱包提交把已放弃的通道重新激活，或让同一笔资金对应两个通道 | P0 |
-| `LSP-TIMEOUT-03` | - [x] 钱包在外部注资期限内提交有效注资交易，之后的通道签名一直暂缓到越过原外部注资期限、但未越过普通开通期限；再放行签名并等待开通完成 | 原通道没有被中止，仍在合法开通过程中；放行后双方达到 `ChannelReady`，`channel_outpoint` 指向本次那笔已确认注资，没有重新注资或重开通道 | 旧的外部注资计时器误杀已完成钱包提交的流程，或“没有中止但流程其实已坏”被当成通过 | P1 |
-| `LSP-TIMEOUT-04` | - [x] 固定 `505c48fb`，真实完成 A–T 初始承诺，隔离原注资广播并在期限内成功提交钱包签名。越过 180 秒普通期限后在真实 CKB devnet 确认另一笔交易花费原注资的同一输入 | 输入仍可用且原注资未确认时保持待开。冲突交易确认并满足跟踪深度后，A 自动将原通道记为 `Closed/FUNDING_ABORTED`，失败详情指向确认的输入花费，原通道退出活动列表、原注资未上链 | 钱包已交签名后被普通期限提前中止，或输入确认失效后一直挂起 | P0 |
-| `LSP-TIMEOUT-05` | - [x] 固定 `505c48fb`，保存同 A、同通道在开通时已获 `Applied` 的真实签名请求，待该通道因 04 的确认输入花费被中止且状态清理后，用同一有效租户授权直连 FNN 原样重放 | 返回该通道已清理的 JSON-RPC 业务错误，无 `Applied` 或 `AlreadyApplied`。失败历史、活动通道及待开记录保持不变，无新签名请求、承诺广播或链上资金副作用 | 晚到重放得到成功回执、复活被中止的通道或推进承诺 | P1 |
+| `LSP-TIMEOUT-03` | - [x] 在 `12fd72f` 完成初始承诺后暂停本条 devnet 的矿工；钱包在 60 秒外部注资期限内提交原注资交易，确认它已入池但尚未确认，保持未确认至提交后至少 65 秒，然后在通道创建后第 180 秒前恢复挖矿 | 跨过旧注资期限时原通道仍待开、没有中止记录；恢复挖矿后双方以同一通道 ID 进入 `ChannelReady`，`channel_outpoint` 指向原注资交易的已确认输出，无重新注资或重开通道 | 旧计时器误杀已提交注资的开通，或原通道一直挂起却被误判为通过 | P1 |
+| `LSP-TIMEOUT-04` | - [x] 固定 `505c48fb` 或 `12fd72f`，真实完成 A–T 初始承诺，隔离原注资广播并在期限内成功提交钱包签名。越过 180 秒普通期限后在真实 CKB devnet 确认另一笔交易花费原注资的同一输入 | 输入仍可用且原注资未确认时保持待开。冲突交易确认并满足跟踪深度后，A 自动将原通道记为 `Closed/FUNDING_ABORTED`，失败详情指向确认的输入花费，原通道退出活动列表、原注资未上链 | 钱包已交签名后被普通期限提前中止，或输入确认失效后一直挂起 | P0 |
+| `LSP-TIMEOUT-05` | - [x] 固定 `505c48fb` 或 `12fd72f`，保存同 A、同通道在开通时已获 `Applied` 的真实签名请求，待该通道因 04 的确认输入花费被中止且状态清理后，用同一有效租户授权直连 FNN 原样重放 | 返回该通道已清理的 JSON-RPC 业务错误，无 `Applied` 或 `AlreadyApplied`。失败历史、活动通道及待开记录保持不变，无新签名请求、承诺广播或链上资金副作用 | 晚到重放得到成功回执、复活被中止的通道或推进承诺 | P1 |
 | `LSP-TIMEOUT-06` | - [x] 测试代码对照：hold 发票与真实 SDK 授权就绪，T 注入 expiry 为注入时刻加 22～25 秒的 TLC 并到达检查点 A；放行承载 TLC 的承诺签名到达检查点 B；再放行被扣住的撤销签名直到 ACK 往返完成 | 检查点 A：发票为 `Open`、待签请求出现、目标 TLC 在 A 的 TLC 列表中。检查点 B：最新已签承诺含目标 TLC 且 SDK 记录该版本完整签署，**发票仍为 `Open`**。继续放行后：发票变为 `Received`，且不再有待签请求。短期限测试代码与三段状态转移都真实可达 | 测试代码不可用导致后续失败行假通过，或把“承诺已签”误当成“发票已 `Received`” | P1 |
-| `LSP-TIMEOUT-07` | - [x] 从检查点 B 扣住撤销签名，等到超过 D 加 1 秒再直连 FNN 提交这份签名 | 提交发生在 T 发出承诺签名后 30 秒以内；该签名不被首次应用，不返回 `Applied`，承诺号不推进、不产生新的承诺交易；A 最终进入截止保护并等待承诺确认，允许周期维护先于这次提交触发；链上关闭交易与 A 侧保存的承诺哈希一致 | 晚到签名仍能首次应用并继续原更新、节点不启动保护，或把对端无响应强关算成签名截止保护；也防止把“必须由本次提交触发”写成断言 | P0 |
+| `LSP-TIMEOUT-07` | - [x] 检查点 B 扣住撤销签名，超过 D 加 1 秒且仍在 T 发出承诺签名后 30 秒内直连 FNN 提交；保留 A/T 真实关闭竞争并观察链上赢家 | 签名不被首次应用、不返回 `Applied`，承诺号与哈希不推进；A 在截止保护中实际广播其已签承诺。A 赢时该承诺确认并记录本地关闭；T 赢时 T 的已绑定承诺确认且 A 的真实广播收到 CKB `RBFRejected`；两种结果都精确花费原 funding，待签请求随后清理 | 晚到签名继续原更新、节点未尝试保护，或把 T 的关闭冒充 A 的保护成功 | P0 |
 | `LSP-TIMEOUT-08` | - [x] A–T 就绪后暂停本条矿工，停在检查点 A 并扣住新通道签名；在 D 前绑定双方承诺并启用广播隔离，待 A 被真实 CKB 接受且 T 的竞争广播实际被拦后恢复挖块；确认关闭后提交原扣留签名 | A 在 D 后 15 秒内无新提交、无手动关闭地启动保护并广播不含目标 TLC 的旧完整承诺；首次真实转发起 60 秒内确认并花费原注资，A 记录本地强关；待签清除，晚到提交被真实 FNN 拒绝，随后 5 秒无请求复活、承诺推进或新承诺广播；未知交易或隔离前提不成立均失败 | 自动保护依赖客户端再提交、确认错误承诺、把对端关闭冒充 A 保护，或请求清理后仍能复活更新 | P0 |
 | `LSP-TIMEOUT-10` | - [x] A–T 就绪后暂停本条矿工，到达检查点 B：A 已完整签署含目标 TLC 的承诺，下一撤销签名始终扣留；在 D 前绑定双方承诺并启用广播隔离，待 A 被真实 CKB 接受且 T 的竞争广播实际被拦后恢复挖块 | A 在 D 后 15 秒内自动保护并广播该承诺；首次真实转发起 60 秒内由真实 CKB 确认并花费原注资，A 记录本地强关；确认交易规范化签名消息匹配 SDK 完整记录，目标 payment_hash 与 expiry 准确且区别于注入前承诺；未交 preimage，发票在有效期内仍为 Open；未知交易或隔离前提不成立均失败 | 用旧的无 TLC 承诺或 T 的交易冒充 A 的含 TLC 强关，或把广播成功当确认、把隔离成功当产品恢复无缺陷 | P0 |
 | `LSP-TIMEOUT-11` | - [x] 建立检查点 C：先让 TLC-A 的承诺签名与撤销签名都应用、ACK 往返完成，等发票 A 变为 `Received`；再注入独立的 TLC-B 并停在它的检查点 B；让保护在 D 触发、关闭交易确认。全程不交出任何 preimage、不批准兑现；发票 A 自身有效期设为 90 秒，确认后等到越过它再查询 | 关闭交易含 TLC-A（其版本已完整签署）；发票 A 全程不是 `Paid`，确认时与越过其自身有效期之后都保持 `Received`，不变成 `Open` 或 `Expired`；收款方没有成功收入，锁定额不被当成已结算，不产生第二次结算 | 把关闭当结算完成、发票被误判已支付、锁定额被记成收入，或用“扣住 ACK 未完成”的检查点冒充 `Received` 场景 | P0 |
-| `LSP-TIMEOUT-12` | - [x] A–T 就绪后到达检查点 B：A 已完整签署含目标 TLC 的承诺，下一撤销签名始终扣留；仅对 A 发送前的真实 unknown 交易查询使用一次固定 250 ms 响应窗口，保留双方真实广播，取得 T 确认及 A 真实 RBFRejected 后持续观察 | T 精确花费原 funding 且索引可查后，A 在 330 秒内自动进入 Closed/UNCOOPERATIVE_REMOTE，关闭 hash 指向 T 且为 NoSignatureRequired；观察满 330 秒并覆盖恢复后至少 10 秒（总上限 340 秒），全部后续样本不回退且有同通道 Hosted A 恢复日志；场景或证据不成立均非零退出 | A 广播失败后不能自动识别赢家、只凭无待签或最后一帧误判恢复，或把场景未取得当恢复通过 | P1 |
+| `LSP-TIMEOUT-12` | - [x] A–T 就绪后到达检查点 B：A 已完整签署含目标 TLC 的承诺，下一撤销签名始终扣留；仅对 A 发送前的真实 unknown 查询使用一次固定 250 ms 响应窗口；T 在 D 后、窗口释放前真实获接受，允许早于窗口起点，A 随后收到真实 RBFRejected | T 的交易确认、精确花费原 funding 且索引可查后，A 在 330 秒内自动进入 Closed/UNCOOPERATIVE_REMOTE，关闭 hash 指向 T 且为 NoSignatureRequired；观察满 330 秒并覆盖恢复后至少 10 秒（总上限 340 秒），全部后续样本不回退且有同通道 Hosted A 恢复日志；场景或证据不成立均非零退出 | A 广播失败后不能自动识别赢家、只凭无待签或最后一帧误判恢复，或把场景未取得当恢复通过 | P1 |
 | `LSP-TIMEOUT-13` | - [x] A 赢下受控强关竞争；A 的关闭确认后，检查 T 的远端关闭状态 | T 必须进入 Closed/UNCOOPERATIVE_REMOTE，关闭哈希等于 A 的真实关闭，且不保留本地关闭；A 侧状态保持 | 输家 T 不识别远端关闭或重复结算 | P1 |
 <!-- TEST-CASES-END -->
 
@@ -44,7 +44,8 @@ A 是真实 SDK 管理的 Hosted 租户，T 是公共 LSP，W 是持有原输入
 
 ### 新版验证设计与判定边界
 
-- **真实入口。** 用固定版本 FNN、真实 SDK 和钱包提交 RPC 完成初始承诺与钱包提交，保留原 channel ID、funding hash、所有输入 outpoint、签名结果和时间。钱包提交须在配置的外部注资期限内、且在通道创建后第 180 秒前成功。提交后当场读取原 ID 的待开状态、所有原输入仍可用的链查询，并保存在第 180 秒前取得的一次完整样本。适配前的用例在未完成初始承诺时提交钱包签名，被 FNN 拒绝。Delivery 借助隔离工作树内的 V2 驱动和开通顺序适配验证了正常开通。
+- **03 的独立判据。** 暂停本条 CKB 的矿工，不改变宿主时间。记录提交注资回执的原交易哈希，用 CKB RPC 证实交易已入池。保持交易未确认至提交成功后至少 65 秒，在旧期限后核对双方原通道的待开和失败记录。恢复原矿工后，用 CKB RPC 核对原交易确认和原输出，用双方通道 RPC 核对同一通道进入 `ChannelReady`。未入池、提前确认或未在创建后第 180 秒前恢复挖矿均不算通过。恢复后最多再等 120 秒。只证明原开通跨过旧期限并继续，无需推断某个内部计时器实际触发。04/05 继续使用下述广播隔离方案。
+- **04/05 的真实入口。** 用固定版本 FNN、真实 SDK 和钱包提交 RPC 完成初始承诺与钱包提交，保留原 channel ID、funding hash、所有输入 outpoint、签名结果和时间。钱包提交须在配置的外部注资期限内、且在通道创建后第 180 秒前成功。提交后当场读取原 ID 的待开状态、所有原输入仍可用的链查询，并保存在第 180 秒前取得的一次完整样本。适配前的用例在未完成初始承诺时提交钱包签名，被 FNN 拒绝。Delivery 借助隔离工作树内的 V2 驱动和开通顺序适配验证了正常开通。
 - **仅隔离原注资写入。** Hosted A–T 直接在同一 FNN 内交换消息，外部 `disconnect_peer` 无法断开这段内部链路。方案在独立 devnet 的 CKB RPC 入口按原注资 hash 拦住 `send_transaction`，两侧共用该入口。记录原请求并立即返回带专用标记的测试拒绝，例如 `-32099 / LSP_TEST_ORIGINAL_FUNDING_BLOCKED`。该请求留在代理，不送往 CKB，拒绝回执仅证明拦截有效。其他请求及所有链读原样转发。测试钱包提交冲突交易及独立验链直连真实 CKB。拦截从签名提交前开始持续到归档。实际广播拦截必须可核验，真实链上原注资始终未进入池或确认。冲突交易提交前，把捕获的完整原注资交易直连 CKB 做一次 `test_tx_pool_accept`，确认这份交易具备入池资格。该接口只验证交易，原交易仍保持在池外。该方案验证受控的原注资未送达，不推断真实对端掉线的行为。[Hosted 内部连接][hosted-connection] · [内部消息发送][internal-peer] · [公开断连入口][disconnect-peer]
 - **链上事实先于 FNN 中止。** 原输入所属交易已确认。冲突交易 hash 必须不同，真实规范链区块内的交易输入必须包含同一 outpoint。自转必须显式选定该输入，避免钱包自动选币花费其他 cell。采集区块号和哈希、冲突交易原始输入、原输入失活、原注资未确认及其 funding cell 未生成。等待期间推进挖块并连续采样。该提交跟踪深度为 4，计算基准是跟踪器首次观察到输入失活的链尖，晚于冲突交易入块时会相应顺延。记录透明代理上的真实链尖、原注资、目标输入和父交易读请求及响应。短暂停本条矿工，让冲突先在池中可查，取得覆盖一次跟踪轮询的池内样本后恢复挖块。冲突入块后先在同一链尖取得输入已失活的样本，逐块推进，至少覆盖一个未满深度的负向观测，再给跟踪器足够的链尖增量及最后一次完整轮询。记录实际轮询周期，默认 4 秒。只能以原始读序列关联跟踪器观察，无法绑定某次轮询时报告已观察的深度区间。单次 `get_live_cell` 返回失活或池拒绝不足以取得中止前提。[输入检查][watched-input] · [深度计算][tracing-depth] · [固定深度][tracing-constant]
 - **时间与判定。** 建议环境及开通准备上限 240 秒。提交钱包后采样正常待开状态，跨过创建后 180 秒普通期限，继续观察到第 190 秒再提交冲突交易。提交冲突交易后至首次独立读到规范链确认最多 60 秒，从首次确认开始另给 60 秒推进区块及跟踪轮询，预算从固定起点算，单次查询有界。确认区块按计划推进。从冲突确认后观测到的一次完整跟踪轮询的链尖保守起算至少四个后续块，再留一次完整轮询的时间。跟踪器是否实际发起读取是诊断项，开通及真实链条件齐备且链推进和预留时间充分，收不到清理结果仍按产品断言失败。05 在中止后拒签观察 5 秒，轮询间隔最多 1 秒。每条总业务预算上限分别为 550、555 秒，另外保留独立清理预算。以上为回归观察预算。准备或链资格失败须保留证据单列。
@@ -53,6 +54,8 @@ A 是真实 SDK 管理的 Hosted 租户，T 是公共 LSP，W 是持有原输入
 
 [external-funding]: https://github.com/nervosnetwork/fiber/blob/505c48fbe01fe22504f99bde085d8ebda2c53018/docs/external-funding.md#L33-L44
 [submit-funding]: https://github.com/nervosnetwork/fiber/blob/505c48fbe01fe22504f99bde085d8ebda2c53018/crates/fiber-lib/src/fiber/channel.rs#L3992-L4063
+[merged-submit]: https://github.com/nervosnetwork/fiber/blob/12fd72f2062fc2e5b6418f7e85e7bff355bf50cb/crates/fiber-lib/src/fiber/channel.rs#L4002-L4045
+[merged-stale]: https://github.com/nervosnetwork/fiber/blob/12fd72f2062fc2e5b6418f7e85e7bff355bf50cb/crates/fiber-lib/src/fiber/tests/channel.rs#L12577-L12628
 [funding-fix]: https://github.com/nervosnetwork/fiber/pull/1747
 [funding-timeout]: https://github.com/nervosnetwork/fiber/blob/505c48fbe01fe22504f99bde085d8ebda2c53018/crates/fiber-lib/src/fiber/channel.rs#L10334-L10355
 [funding-stop]: https://github.com/nervosnetwork/fiber/blob/505c48fbe01fe22504f99bde085d8ebda2c53018/crates/fiber-lib/src/fiber/channel.rs#L4245-L4303
@@ -126,19 +129,19 @@ TIMEOUT-04 在固定版本的真实 FNN、SDK 和 CKB 0.202.0 上单独执行两
 
 ## Spec
 
-本轮更新 SPEC-02 的安全退出和终态保护规则，其他 Spec 继续沿用各自版本。历史新增行 12 使用 SPEC-09。
+本轮为 SPEC-01/02 补充合入版的执行前提，其他 Spec 继续沿用各自版本。历史新增行 12 使用 SPEC-09。
 
 ### SPEC-01：外部注资期限及晚到钱包提交（原有行为）
 Condition: 通道等待外部钱包注资，或钱包已在外部期限内提交。
-Expected: 未提交时到期中止且原输入未花费，晚到钱包提交不能复活；已及时提交时旧检查不提前中止，放行通道签名后正常就绪。
+Expected: 未提交时到期中止且原输入未花费，晚到钱包提交不能复活；已及时提交时跨过旧外部注资期限仍能继续，原注资确认后原通道正常就绪。
 Observable: 开通失败记录、真实提交结果、CKB 输入及原通道就绪状态。
-Basis: [原 Gate1 的开通分支](channel-signing-deadline-scope.md#两条业务分支不能使用同一种超时预期)及本文件原 01～03 行。
+Basis: [原 Gate1 的开通分支](channel-signing-deadline-scope.md#两条业务分支不能使用同一种超时预期)及[合入版旧计时器测试][merged-stale]。
 Source: explicit
 Testing: required
 
 ### SPEC-02：已提交外部注资的安全退出与终态保护
 
-- Condition: 固定 `505c48fb`，同一 Hosted 通道初始承诺完成、钱包签名已被接纳，原注资尚未确认。
+- Condition: 固定 `505c48fb` 或 `12fd72f`，同一 Hosted 通道初始承诺完成、钱包签名已被接纳，原注资尚未确认。
 - Expected: 原注资仍可确认时保留开通及退出状态。确认的冲突交易花费原输入且达到跟踪深度后，A 自动中止并保留该通道的失败历史，后续原通道签名重放返回通道已清理的业务错误且无副作用。
 - Observable: 钱包提交回执、超过普通期限前后同通道状态、真实 CKB 区块与精确输入、同通道 `Closed/FUNDING_ABORTED` 及失败详情、原签名的前后回执和重放前后状态。
 - Basis: [外部注资公开规则][external-funding]、[输入花费清理修复][funding-fix]、[签名提交路由][signature-routing]及[终态清理][terminal-cleanup]。
@@ -154,10 +157,10 @@ Source: explicit
 Testing: required
 
 ### SPEC-04：截止后的新签名不能继续更新（原有行为）
-Condition: 检查点 B 的未应用撤销签名在 D 之后提交。
-Expected: 不首次应用、承诺不推进，节点进入保护；不要求一定由此次提交触发。
-Observable: 提交结果、承诺版本与关闭行为；原 07 的竞争归因假设不在本轮修复范围。
-Basis: [截止提交检查](https://github.com/nervosnetwork/fiber/blob/24b5c38bc098aeb29de5f6af7ac28dc667f218e3/crates/fiber-lib/src/fiber/channel.rs#L2276)及本文件原 07 行。
+Condition: 检查点 B 的未应用撤销签名在 D 之后提交；A/T 保留真实关闭竞争。
+Expected: 签名不首次应用、承诺不推进；A 实际广播已签承诺启动保护，不要求一定由此次提交触发。A 赢则该承诺确认并记本地关闭；T 赢则 T 已绑定承诺确认、A 的真实广播得到 CKB `RBFRejected`。
+Observable: 提交结果、承诺版本、A/T 原始广播与响应、原 funding 的精确花费及真实确认、待签清理。
+Basis: 合入版 [截止提交检查](https://github.com/nervosnetwork/fiber/blob/12fd72f2062fc2e5b6418f7e85e7bff355bf50cb/crates/fiber-lib/src/fiber/channel.rs#L14299-L14313)及 [保护后清理待签](https://github.com/nervosnetwork/fiber/blob/12fd72f2062fc2e5b6418f7e85e7bff355bf50cb/crates/fiber-lib/src/fiber/channel.rs#L3219-L3240)；本地失败记录显示 T 先确认、A 的真实广播收到 `RBFRejected`，原用例只等 A 自身确认的归因不成立。
 Source: explicit
 Testing: required
 
@@ -194,10 +197,10 @@ Source: explicit
 Testing: required
 
 ### SPEC-09：双方真实竞争后的独立败方恢复与回归边界
-Condition: 检查点 B 保留双方真实广播；一次固定 250 ms 的 A 查询响应窗口内 T 的真实发送被接受，A 随后得到真实 RBFRejected；T 确认且同一 funding 花费已被索引器查到，FNN/SDK/链持续运行。
+Condition: 检查点 B 保留双方真实广播；一次固定 250 ms 的 A 查询响应窗口内或其开始前，T 在 D 后、窗口释放前真实获接受，A 在查询释放后得到真实 RBFRejected；T 确认且同一 funding 花费已被索引器查到，FNN/SDK/链持续运行。
 Expected: A 在链观察就绪后 330 秒内自动转为 Closed，含 UNCOOPERATIVE_REMOTE、关闭哈希等于 T 的真实确认交易、NoSignatureRequired；完整观察 330 秒且首次恢复后至少观察 10 秒，全部后续样本不回退，总观察上限 340 秒。这是固定版本回归预算，不是产品 SLA。
 Observable: 唯一 A/T 内容绑定、双方真实请求/响应、精确 funding 花费、单调时间与连续状态样本，以及同一 channel 的 Hosted A 远端关闭识别与状态转换日志。
-Basis: 已批准 [SPEC-09 Gate1](channel-signing-deadline-scope.md#spec-09-独立败方恢复回归gate1-范围)；固定版本 [失败处理](https://github.com/nervosnetwork/fiber/blob/24b5c38bc098aeb29de5f6af7ac28dc667f218e3/crates/fiber-lib/src/fiber/network.rs)、300 秒 Hosted 扫描及远端识别（同文件 2514～2520、256、9125～9131、4860～4906 行）；[链索引查询](https://github.com/nervosnetwork/fiber/blob/24b5c38bc098aeb29de5f6af7ac28dc667f218e3/crates/fiber-lib/src/ckb/client.rs) 139～152、187～215、321～338 行。
+Basis: 已批准 [SPEC-09 Gate1](channel-signing-deadline-scope.md#spec-09-独立败方恢复回归gate1-范围)；合入版仍以 [300 秒关闭扫描](https://github.com/nervosnetwork/fiber/blob/12fd72f2062fc2e5b6418f7e85e7bff355bf50cb/crates/fiber-lib/src/fiber/network.rs#L280-L287)和 [远端确认识别](https://github.com/nervosnetwork/fiber/blob/12fd72f2062fc2e5b6418f7e85e7bff355bf50cb/crates/fiber-lib/src/fiber/network.rs#L5830-L5866)恢复败方。`12fd72f` 本地证据中 T 的交易在窗口开始前约 6.7 ms 转发、约 2.0 ms 获 CKB 接受，两个时刻都在 D 之后；A 随后获真实 `-1111/RBFRejected`。窗口开始时刻不是产品恢复条件。
 Source: explicit
 Testing: required
 
@@ -206,7 +209,7 @@ Testing: required
 ## 测试树
 
 <!-- TEST-TREE-BEGIN -->
-- 开通阶段（本轮仅重审 04/05；01～03 不变）
+- 开通阶段（本轮重审 03–05；01/02 不变）
   - 未交钱包签名到期中止：LSP-TIMEOUT-01 [primary] -> SPEC-01
   - 中止后晚到钱包提交不复活：LSP-TIMEOUT-02 [primary] -> SPEC-01
   - 及时钱包提交后的旧检查不误中止：LSP-TIMEOUT-03 [primary] -> SPEC-01
@@ -215,9 +218,9 @@ Testing: required
     - 合法中止并清理后，拒绝已应用过的原签名重放：LSP-TIMEOUT-05 [primary] -> SPEC-02
 
 - 通道就绪后的签名保护
-  - 原检查点/晚到提交/发票行为（本轮不改）
+  - 检查点、晚到提交与发票状态
     - A、B 到 Received 的真实对照：LSP-TIMEOUT-06 [primary] -> SPEC-03
-    - D 后的新签名不应用：LSP-TIMEOUT-07 [primary] -> SPEC-04
+    - D 后的新签名不应用，A 的实际保护与自然 A/T 赢家分别举证：LSP-TIMEOUT-07 [primary] -> SPEC-04
     - Received 发票不因关闭误结算：LSP-TIMEOUT-11 [primary] -> SPEC-07
   - 已有隔离 T 广播后的 A 侧保护
     - 检查点 A 无新提交，旧无 TLC 承诺确认且旧请求不复活：LSP-TIMEOUT-08 [primary] -> SPEC-05
@@ -226,7 +229,7 @@ Testing: required
   - 双方真实竞争后的败方识别（本批仅 B）
     - A-win 后 T 识别远端关闭：LSP-TIMEOUT-13 [primary] -> SPEC-09
     - B 的含 TLC 完整承诺就绪，T 胜出且 A 真实 RBF 后自动识别远端关闭：LSP-TIMEOUT-12 [primary] -> SPEC-09
-    - 一次固定查询窗口、唯一交易归属及真实确认，缺任一前提均不能记恢复通过：LSP-TIMEOUT-12 [ref] -> SPEC-09
+    - 一次固定查询窗口、释放前 T 获接受、唯一交易归属及真实确认，缺任一前提均不能记恢复通过：LSP-TIMEOUT-12 [ref] -> SPEC-09
     - 索引可见后完整观察，关闭方向/hash/无待签恢复后不回退，并有 Hosted A 归因证据：LSP-TIMEOUT-12 [ref] -> SPEC-09
 <!-- TEST-TREE-END -->
 
@@ -258,7 +261,7 @@ Testing: required
 
 ## 历史 SPEC-09 批次说明
 
-该历史批次新增 12（P1，独立失败恢复行为）；其检查点 B、`t_ready` 和预算见下节，原映射与执行记录保留。当前完整用例表已前置，本轮只重审 04/05，不新增 12 或其他行为。
+该历史批次新增 12（P1，独立失败恢复行为）；其检查点 B、`t_ready` 和预算见下节，原映射与执行记录保留。完整用例表已前置；本批不新增 12 或其他行为。
 ## LSP-TIMEOUT-12：检查点 B 独立败方恢复
 
 固定源码、FNN、SDK 与驱动依据均为 `24b5c38bc098aeb29de5f6af7ac28dc667f218e3`、dev profile；执行前重新检查构建清单、实际二进制摘要及版本。下列步骤与断言同属一条端到端用例，不把准备、日志采集另拆成“已覆盖”的产品行为。本条保持挖块、索引、FNN 和 SDK 运行，不复用 08/10 的停矿或广播 `arm()` 准备入口。
@@ -269,7 +272,7 @@ Testing: required
 2. 开具金额 1,000,000 Shannon、有效期 600 秒的 hold 发票，SDK 真实授权；记录实际创建时间与到期时间，不交 preimage。注入寿命 22 秒 TLC，读回准确 `payment_hash/expiry`，固定 `D = expiry - 1333ms`（本版本 debug、2 秒/epoch、承诺延迟 1 epoch）。放行承载 TLC 的承诺签名一次，到检查点 B 后保存并始终扣留下一份 `SendRevokeAndAck`。必须是 `SignatureRequired`、发票 `Open`，A 最新完整承诺已不同于注入前且含目标 TLC。
 3. 在 D 前至少 5 秒完成准备：按 A/T 最新承诺 hash 各找到唯一 SDK 记录，A 为 `complete && !for_remote` 且 TLC hash/expiry 准确，T 为 `for_remote`（不要求此记录在 A 的 SDK 中完整聚签）；计算两份不同的规范化签名消息，前后读回版本不变。此时通道仍 Ready、同一撤销请求仍待签、funding 仍 live，代理未记录目标关闭广播。保存签名提交计数基线；实际发票到期必须晚于 `D + 450s`。任一准备失败即结束本次，不重新注入 TLC 或延长发票。
 4. 根据既有 `Spawning InFlightCkbTxActor ... Closing(Pubkey(T), channel, true)` 日志唯一绑定 A 的实际关闭 hash；同时保留 Hosted A 身份及动态 actor 关联。只对 D 后该 hash 的真实 `get_transaction` unknown 响应设置一次 250 ms 窗口；取到上游原文后记录 `window_start`，固定 `release_at = window_start + 0.250s`。该 hash 在窗口内并发 unknown 响应共用这一释放点，不滚动延长；至少一次命中真实发送前查询 `[hash, "0x0", true]`，只命中 tracer `[hash]` 不够。
-5. 窗口等待不持共享代理锁，原始响应在固定释放点之后原样发出；T 的查询、双方 `send_transaction` 和其他请求全部真实转发。要求 T 的真实转发与 CKB 接受响应完成均落在 `[window_start, release_at)`，A 在其发送前查询已释放后真实转发。A 必须收到原始 `error.code=-1111` **且** `error.data` 含 `RBFRejected`；保存双方原始交易、响应、单调时间和规范化消息，确认分别匹配步骤 3 的 A/T 内容及同一 funding 输入。不能用错误 message、`already in pool` 日志或“非 A 即 T”判断归属。
+5. 窗口等待不持共享代理锁，原始响应在固定释放点之后原样发出；T 的查询、双方 `send_transaction` 和其他请求全部真实转发。要求 T 的真实转发与 CKB 接受响应均在 `[D, release_at)`，允许早于 `window_start`；A 在其发送前查询已释放后真实转发。A 必须收到原始 `error.code=-1111` **且** `error.data` 含 `RBFRejected`；保存双方原始交易、响应、单调时间和规范化消息，确认分别匹配步骤 3 的 A/T 内容及同一 funding 输入。不能用错误 message、`already in pool` 日志或“非 A 即 T”判断归属；T 早于窗口开始获接受只说明真实竞争已先发生，不据此宣称查询延迟造成 T 获胜。
 6. 从独立 CKB 读取 T 的实际交易首次为 `committed`，记 `t_commit`，保存区块号/hash、实际交易及精确 funding 输入。所有查询延迟此时都已结束；A 的实际关闭交易不得已确认。随后直接按同一 funding lock 进行 exact、lock、非分组的 `get_transactions` 查询（desc、每页 100，最多 3 页且共用当前轮预算），必须找到 T 的 `io_type=input` 项，并用该项的 `io_index` 定位 T 完整交易中的输入、核对原 funding outpoint 的 hash/index；同时确认 T 仍 committed、索引器高度已达其区块，三项同轮成立时记 `t_ready`。不能用 `get_cells`、高度追平或最后一帧索引高度替代花费证据。
 7. 从 `t_ready` 起继续挖块、索引和所有进程，代理仅记录/原样转发。按下表采样；第一次完整满足恢复谓词的样本完成时记 `t_recover`。即使提前恢复也观察满 330 秒；后续每个完整样本都必须保持恢复谓词，并至少取得相距 10 秒的恢复成功样本。首次恢复不得晚于 `t_ready+330s`，最后观察不得越过 `t_ready+340s`；扣留签名始终不提交，禁止手动关闭、重启、调费、停矿、代发交易或新的时序干预。
 8. 在窗口内持续落盘证据，记录最终判断后有界清理本条资源。保存同通道 Hosted A 的 `is shutdown by remote` 与随后的状态转换，结合链/RPC 样本证明恢复来源；不写死 actor ID，不用 watchtower 的 `PeriodicCheck` 代替 Hosted A 证据。失败也保留原始日志、最后完整样本和未完成步骤，不能在清理阶段追加读取而将超期结果补成通过。
@@ -281,7 +284,7 @@ wall clock 仅用于 TLC/发票协议时间；在读取实际 expiry 时记录�
 | 阶段 | 固定起点与预算 | 到期处理 |
 | --- | --- | --- |
 | 发票与 B 准备 | 发票实际创建起有效 600 秒；全部准备完成 `<=D-5s`，实际到期 `>D+450s` | 准备过晚、发票余量不足或记录不唯一：准备失败；不补开新发票/新通道替代 |
-| 查询时序控制 | 一次 `window_start+250ms`；实际响应写出不早于 release_at，最迟 release_at+100ms（仅调度容差） | 超容差为测试准备失败；T 的发送与接受仍须在原 250 ms 窗口内，不能用容差延长竞争窗口 |
+| 查询时序控制 | 一次 `window_start+250ms`；实际响应写出不早于 release_at，最迟 release_at+100ms（仅调度容差） | 超容差为测试准备失败；T 的发送与接受必须在 D 后、release_at 前，可早于窗口起点；不能用容差延长释放时间 |
 | 双方真实竞争 | D 到 D+15 秒，捕获 T 接受和 A 真实 RBF；阶段轮询间隔最多 0.5 秒 | 保存实际结果；按下方分类处理，不自动调参重跑 |
 | T 真实确认 | 从 T 首次匹配交易真实转发起 60 秒 | 不能以接受代替 committed；到期按真实链、广播及进程证据定位 |
 | 链观察就绪 | 首次 `t_commit` 起 30 秒 | 精确 input 索引不可见时本次不能作为有效恢复验证，不启用一个新的 330 秒重试周期 |
@@ -299,7 +302,7 @@ wall clock 仅用于 TLC/发票协议时间；在读取实际 expiry 时记录�
 ### 必须同时成立的断言
 
 - **确实是 B：** A 的当前完整签署版本含准确目标 TLC hash/expiry，区别于注入前版本；保存的下一撤销请求从未提交，基线后的真实签名提交计数不增加，全程未交 preimage。初始发票为 Open、其创建时有效期覆盖整段预算；后续发票/余额只作诊断，不在本条新增付款或资金结算终态预期。
-- **真实败方场景：** D 前无目标关闭广播；唯一 A/T 消息绑定与固定窗口成立；双方都是 FNN 自发真实广播；T 接受、A 真实 RBF（code 与 data 双条件）及 T committed 缺一不可。目标 funding 的无法归属交易、代理注入错误、未命中 preflight 或 A 获胜均不能通过。
+- **真实败方场景：** D 前无目标关闭广播；唯一 A/T 消息绑定与固定窗口成立；双方都是 FNN 自发真实广播；T 在 D 后、固定窗口释放前获接受，A 查询释放后真实 RBF（code 与 data 双条件），T committed，缺一不可。T 早于窗口起点获接受不证明延迟造成胜负；目标 funding 的无法归属交易、代理注入错误、未命中 preflight 或 A 获胜均不能通过。
 - **赢家及链就绪：** T 原始成功响应 hash、独立 committed hash、规范化消息与 SDK 的 T 记录一致；确认交易精确花费原 funding（hash/index），原 cell 已不再 live（dead/unknown 且 cell=null，仅作交叉证据）。同 funding lock 索引返回 T input，索引高度达其确认区块。不能要求 T 的承诺也含本条 TLC；本例不是 10 的 A 含 TLC 承诺上链断言。
 - **恢复谓词：** A 的通道存在，`state_name=Closed`，flags 含 `UNCOOPERATIVE_REMOTE` 且不含 `UNCOOPERATIVE_LOCAL`，`shutdown_transaction_hash` 等于 T 实际确认 hash，真实签名状态为 `NoSignatureRequired`。允许仍有 `WAITING_ONCHAIN_SETTLEMENT`；无待签、单个 hash、关闭日志或 RPC 错误均不能独立证明恢复。首次完整满足后不得回退或改指其他交易；不要求观察到中间状态，以免漏采短暂状态造成假失败。
 - **持续性与归因：** 满足全部时间/连续采样条件，所有恢复后样本保持上述谓词；T 在每轮仍 committed、链及索引健康，无额外干预；同 channel、同 Hosted A 的远端关闭识别日志及随后状态转换齐全。即使状态已正确，缺日志或采样缺口也不能记为本批完整证据通过。
@@ -385,7 +388,7 @@ Gate3 修正了 CKB RPC 的状态表达：固定 0.202.0 随包官方文档（�
 
 ## 场景展开
 
-04/05 给出新版评审步骤。其他场景沿用原有操作顺序，12 的完整步骤及断言见上方专节。
+03–05 给出合入版评审步骤。其他场景沿用原有操作顺序，12 的完整步骤及断言见上方专节。
 
 ### LSP-TIMEOUT-01：外部注资超期必须中止
 
@@ -401,9 +404,9 @@ Gate3 修正了 CKB RPC 的状态表达：固定 0.202.0 随包官方文档（�
 
 ### LSP-TIMEOUT-03：旧计时器不能误中止
 
-1. 在外部注资期限内提交有效注资交易，然后在第一个待签通道签名处暂停提交。
-2. 等到越过原外部注资期限（配置 60 秒）、但仍在普通开通期限（配置 180 秒）内，确认通道没有被中止。
-3. 放行签名与后续转换，等待双方 `ChannelReady`，核对 `channel_outpoint` 与本次注资交易一致。
+1. 用真实 SDK 完成双方初始承诺签名，暂停本条 devnet 的矿工。钱包在外部注资期限内提交原交易，记录回执和原通道 ID，通过 CKB RPC 确认原交易已入池。
+2. 从提交成功保持未确认至少 65 秒。复查双方原 ID 仍在待开、没有失败记录，链上尚未确认。
+3. 在通道创建后第 180 秒前恢复原矿工。最多等 120 秒，确认原交易上链、双方原 ID 进入 `ChannelReady`，且两侧 `channel_outpoint` 指向本次注资的原输出。
 
 ### LSP-TIMEOUT-04：确认注资输入被花费后自动中止
 
@@ -429,10 +432,10 @@ Gate3 修正了 CKB RPC 的状态表达：固定 0.202.0 随包官方文档（�
 
 ### LSP-TIMEOUT-07：窗口内签名、越过 D 再提交
 
-1. 在检查点 B 保存被扣住的撤销签名、完整内容、承诺哈希与 T 发出承诺签名的时间。
+1. 在检查点 B 保存被扣住的撤销签名、A 已完整签署的承诺哈希及签名消息、T 对原 funding 的承诺内容与 T 发出承诺签名的时间。链 RPC 观察器只记录并原样转发双方请求，不改变广播顺序。
 2. 等到实际时间超过 D 加 1 秒，直连 FNN 提交这份签名；确认提交时刻仍在 T 发出承诺签名后 30 秒以内。
-3. 确认没有被应用、承诺号与承诺哈希不变，A 进入等待承诺确认的关闭状态。若周期维护已经先触发关闭，同样记为通过，只要求最终进入截止保护而不是由这次提交触发。
-4. 比对链上关闭交易与保存的承诺哈希，确认是 A 侧强关；确认待签请求在强关成功后被清理。
+3. 确认签名没有被应用、承诺号与承诺哈希不变。观察 A 在截止保护中尝试广播与其 SDK 完整记录相同签名消息的承诺；若周期维护先触发保护，同样接受，不要求由本次提交触发。
+4. 在首次广播后 60 秒内独立确认原 funding 的实际花费，只接受已绑定的 A/T 承诺。A 赢时核对其真实确认与本地关闭；T 赢时核对 T 的真实确认及 A 广播收到原始 `-1111/RBFRejected`，不把 T 的关闭称作 A 保护，也不在本条等待远端 300 秒扫描。随后在 15 秒内确认待签请求清理；缺任何一方真实证据均失败。
 
 ### LSP-TIMEOUT-08：无人提交时维护自行保护
 

@@ -14,6 +14,7 @@ import time
 
 REVISION = "76307312e8de518c9a32074e6d16867c04de4f86"
 HOSTED_V2_REVISION = "505c48fbe01fe22504f99bde085d8ebda2c53018"
+MERGED_LSP_REVISION = "12fd72f2062fc2e5b6418f7e85e7bff355bf50cb"
 ROOT = Path(__file__).resolve().parents[1]
 F2_REVISION = "56c761c45c271c086b05c8d5ea3e033448f5fdf8"
 
@@ -447,7 +448,7 @@ def main():
         (driver_build / "Cargo.toml").write_text(
             '[package]\nname = "lsp-integration-driver"\nversion = "0.1.0"\nedition = "2021"\n'
             '[workspace]\n[[bin]]\nname = "lsp-integration-driver"\npath = "main.rs"\n'
-            "[features]\nhosted-v2 = []\n"
+            '[features]\nhosted-v2 = []\nmerged-lsp = ["hosted-v2"]\n'
             "[dependencies]\n" + dependencies + "\n"
             'anyhow = "1.0"\nclap = { version = "4.5", features = ["derive"] }\n'
             'biscuit-auth = "=6.0.0"\n'
@@ -488,7 +489,9 @@ def main():
             "--manifest-path",
             str(driver_build / "Cargo.toml"),
         ]
-        if revision == HOSTED_V2_REVISION:
+        if revision == MERGED_LSP_REVISION:
+            driver_command.extend(("--features", "merged-lsp"))
+        elif revision == HOSTED_V2_REVISION:
             driver_command.extend(("--features", "hosted-v2"))
         subprocess.run(
             driver_command,
@@ -563,7 +566,7 @@ def main():
                 (driver_build / "Cargo.lock").read_bytes()
             ).hexdigest(),
         }
-        if revision == HOSTED_V2_REVISION:
+        if revision in (HOSTED_V2_REVISION, MERGED_LSP_REVISION):
             driver_manifest["driver_build_command"] = driver_command
     manifest = {
         "revision": args.revision,

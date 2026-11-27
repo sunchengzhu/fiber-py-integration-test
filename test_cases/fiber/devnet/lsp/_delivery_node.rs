@@ -24,11 +24,16 @@ mod upstream {
         let mut store = open_store_with_migration(
             fiber.store_path(),
             fiber.store_sync_writes(),
+            #[cfg(feature = "merged-lsp")]
+            fiber.store_channel_cache_capacity(),
             Box::new(cli_confirm),
             Box::new(cli_progress),
         )
         .map_err(|e| ExitMessage(e.to_string()))?;
+        #[cfg(not(feature = "merged-lsp"))]
         let port = Arc::new(OutputPort::default());
+        #[cfg(feature = "merged-lsp")]
+        let port = Arc::new(fnn::store::store_impl::StoreChangePort::default());
         let changes = port.clone();
         store.set_watcher(Arc::new(move |change| {
             crate::event("store_change", serde_json::json!({"change":change}));
@@ -389,6 +394,9 @@ fn snapshot(store: &Store) -> Result<Value, String> {
         .get_all_payment_sessions()
         .into_iter()
         .map(|session| {
+            #[cfg(feature = "merged-lsp")]
+            let attempts = store.get_attempts(session.session_key());
+            #[cfg(not(feature = "merged-lsp"))]
             let attempts = store.get_attempts(session.payment_hash());
             let previous_keys = session
                 .request
@@ -564,7 +572,11 @@ async fn control(
     let (proxy, _) = Actor::spawn(Some("delivery test proxy".into()), Proxy, real.clone())
         .await
         .map_err(|e| e.to_string())?;
-    let real_port = LspDeliveryPort::new(real.clone());
+    let real_port = LspDeliveryPort::new(
+        real.clone(),
+        #[cfg(feature = "merged-lsp")]
+        store.clone(),
+    );
     STATE.get().unwrap().lock().unwrap().real = Some(real);
     let delivery_port = Arc::new(HostedPortProxy {
         real: real_port,

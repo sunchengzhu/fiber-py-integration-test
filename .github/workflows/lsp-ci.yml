@@ -29,12 +29,12 @@ jobs:
       short_revision: ${{ steps.resolve.outputs.short_revision }}
       matrix: ${{ steps.plan.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           repository: sunchengzhu/fiber-py-integration-test
           ref: ${{ inputs.integration_commit }}
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           cache: pip
@@ -63,7 +63,7 @@ jobs:
         run: python scripts/lsp_ci.py plan --revision "$FIBER_REVISION" --output ci-plan
       - name: 保存执行计划
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lsp-plan
           path: ci-plan
@@ -75,18 +75,18 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           repository: sunchengzhu/fiber-py-integration-test
           ref: ${{ inputs.integration_commit }}
           persist-credentials: false
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           repository: nervosnetwork/fiber
           ref: ${{ needs.plan.outputs.revision }}
           path: product
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           cache: pip
@@ -115,7 +115,7 @@ jobs:
             test_cases/framework/test_lsp_setup_cleanup.py 2>&1 | tee ci-preflight/stdout.log
       - name: 保留工程预检结果
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lsp-preflight
           path: |
@@ -123,7 +123,7 @@ jobs:
             ci-preflight/stdout.log
           retention-days: 14
       - name: 复用 Cargo 缓存，不复用未核验的运行二进制
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -137,7 +137,7 @@ jobs:
           FIBER_REVISION: ${{ needs.plan.outputs.revision }}
         run: python scripts/lsp_ci_build.py build --source product --revision "$FIBER_REVISION" --target ci-target --output ci-build
       - name: 上传运行二进制及逐文件清单
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lsp-runtime
           path: |
@@ -148,7 +148,7 @@ jobs:
           retention-days: 14
       - name: 无论成功失败均保留构建输出
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lsp-build-logs
           path: |
@@ -167,12 +167,12 @@ jobs:
       max-parallel: 8
       matrix: ${{ fromJSON(needs.plan.outputs.matrix || '{"include":[{"id":"unavailable","label":"未生成计划","count":0}]}') }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           repository: sunchengzhu/fiber-py-integration-test
           ref: ${{ inputs.integration_commit }}
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           cache: pip
@@ -181,11 +181,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y lsof
           python -m pip install -r requirements.txt -r test_cases/fiber/devnet/lsp/requirements.txt
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: lsp-plan
           path: ci-plan
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: lsp-runtime
           path: ci-build
@@ -202,7 +202,32 @@ jobs:
         if: always()
         env:
           BUCKET: ${{ matrix.id }}
-        run: python scripts/lsp_ci.py retain --source "ci-artifacts/$BUCKET"
+        run: |
+          if ! python scripts/lsp_ci.py retain --source "ci-artifacts/$BUCKET"; then
+            echo "fallback=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: 归档失败时上传原运行目录
+        id: runtime_fallback
+        if: ${{ !cancelled() && steps.retain.outputs.fallback == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: lsp-runtime-fallback-${{ matrix.id }}
+          path: tmp
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+      - name: 记录备用原运行目录上传成功
+        if: ${{ !cancelled() && steps.runtime_fallback.outcome == 'success' }}
+        env:
+          BUCKET: ${{ matrix.id }}
+          ARTIFACT_ID: ${{ steps.runtime_fallback.outputs.artifact-id }}
+        run: |
+          if [[ ! "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::备用原运行目录上传缺少 artifact ID"
+            exit 1
+          fi
+          printf '%s\n' "$ARTIFACT_ID" > "ci-artifacts/$BUCKET/runtime-fallback.txt"
+          echo "::warning title=LSP 原始状态归档::标准归档失败，原运行目录已上传为 lsp-runtime-fallback-${BUCKET}（artifact ${ARTIFACT_ID}）"
       - name: 收集原生结果及最终归档状态
         if: always()
         env:
@@ -210,7 +235,7 @@ jobs:
         run: python scripts/lsp_ci.py collect --source "ci-artifacts/$BUCKET" --output "ci-results/$BUCKET"
       - name: 上传轻量结果供全局汇总
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lsp-results-${{ matrix.id }}
           path: ci-results
@@ -218,18 +243,10 @@ jobs:
           retention-days: 14
       - name: 上传本组完整证据
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lsp-evidence-${{ matrix.id }}
           path: ci-artifacts
-          include-hidden-files: true
-          retention-days: 14
-      - name: 归档失败时保留原运行目录
-        if: ${{ always() && steps.retain.outcome != 'success' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: lsp-runtime-fallback-${{ matrix.id }}
-          path: tmp
           include-hidden-files: true
           retention-days: 14
 
@@ -239,38 +256,57 @@ jobs:
     if: always()
     runs-on: ubuntu-22.04
     timeout-minutes: 15
+    outputs:
+      complete: ${{ steps.render.outputs.complete }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           repository: sunchengzhu/fiber-py-integration-test
           ref: ${{ inputs.integration_commit }}
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         continue-on-error: true
         with:
           name: lsp-plan
           path: ci-plan
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         continue-on-error: true
         with:
           pattern: lsp-results-*
           path: ci-results
           merge-multiple: true
       - name: 根据执行计划核对原生结果，不把缺失结果记为通过
+        id: render
         if: always()
         env:
           LSP_CI_PLAN_RESULT: ${{ needs.plan.result }}
           LSP_CI_BUILD_RESULT: ${{ needs.build.result }}
           LSP_CI_TESTS_RESULT: ${{ needs.tests.result }}
-        run: python scripts/lsp_ci.py report --plan ci-plan/plan.json --source ci-results --output ci-report
+        run: python scripts/lsp_ci.py report --plan ci-plan/plan.json --source ci-results --output ci-report --publish-only
       - name: 保存 HTML / JSON / JUnit / Markdown 报告
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lsp-report
           path: ci-report
           if-no-files-found: error
           retention-days: 14
+
+  verify_results:
+    name: 核对回归结果完整性
+    needs: [plan, build, tests, report]
+    # 只处理汇总独有的问题，已有失败的 job 会直接让整轮失败。
+    if: >-
+      ${{ !cancelled() && needs.plan.result == 'success' && needs.build.result == 'success'
+          && needs.tests.result == 'success' && needs.report.result == 'success'
+          && needs.report.outputs.complete != 'true' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: 检查未通过或缺失的结果
+        run: |
+          echo "::error::回归结果未全部确认通过，请查看 lsp-report"
+          exit 1

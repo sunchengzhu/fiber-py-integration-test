@@ -84,7 +84,7 @@ class _BrowserSubscriptionBase(SubscriptionTestBase):
                     tenant=tenant["label"],
                     request=tenant["before"],
                     submission=tenant["gate"].submission,
-                    funding=tenant["funding_tx_hash"],
+                    **self._frozen_funding(tenant),
                 )
         self.business_until = min(time.monotonic() + 300, self.total_until - 30)
         self._record("business_start", until=self.business_until)
@@ -312,7 +312,7 @@ class _BrowserSubscriptionBase(SubscriptionTestBase):
                 self._owners(bindings, rejected)
 
     def _finish_browser(self, bindings, rejected=()):
-        # All original channels share this deadline; no re-registration or new funding.
+        # Complete every original channel and its funding within one shared deadline.
         with self._budget(120) as due:
             for tenant in self.tenants:
                 with self._budget(10):
@@ -327,6 +327,10 @@ class _BrowserSubscriptionBase(SubscriptionTestBase):
                     env={**os.environ, "LSP_NODE_ID": str(self.public_key)},
                 )
                 self.addCleanup(stop_agent, tenant["agent"])
+            if self.defer_external_funding:
+                for tenant in self.tenants:
+                    self._submit_deferred_funding(tenant, due)
+                    self._owners(bindings, rejected)
             while True:
                 ready = True
                 snapshots = []
@@ -385,6 +389,8 @@ class _BrowserSubscriptionBase(SubscriptionTestBase):
                     funding = self.node.getClient().get_transaction(
                         tenant["funding_tx_hash"]
                     )
+                    if self.defer_external_funding:
+                        self._assert_original_funding_confirmed(tenant)
                 assert funding["tx_status"]["status"] == "committed", funding
                 self._record(
                     "ready",
@@ -439,6 +445,12 @@ class _BrowserSubscriptionBase(SubscriptionTestBase):
                 headers["Authorization"] = "Bearer " + token
             elif kind == "empty":
                 protocols = [PROTOCOL, CREDENTIAL]
+            elif kind == "invalid-biscuit":
+                protocols = [
+                    PROTOCOL,
+                    CREDENTIAL
+                    + base64.urlsafe_b64encode(b"not a Biscuit").decode().rstrip("="),
+                ]
             else:
                 assert kind == "encoding"
                 protocols = [PROTOCOL, CREDENTIAL + "!"]
@@ -461,7 +473,8 @@ class _BrowserSubscriptionBase(SubscriptionTestBase):
                         headers=list(response.headers.raw_items()),
                         body=bytes(response.body).hex(),
                     )
-                    assert response.status_code == 400, response
+                    expected_status = 401 if kind == "invalid-biscuit" else 400
+                    assert response.status_code == expected_status, response
                 else:
                     self.observers.append(unexpected)
                     self.addCleanup(unexpected.close)
@@ -474,14 +487,11 @@ class _BrowserSubscriptionBase(SubscriptionTestBase):
             self._finish_browser([good])
 
     def _rpc_rejected(self, kind):
+        assert kind in ("subscriptions-write", "channel-signing-read"), kind
         with self._budget(300):
             good = self._subscribe_browser(self._connect_browser())
             self._initial([good])
-            token = (
-                base64.urlsafe_b64encode(b"not a Biscuit").decode().rstrip("=")
-                if kind == "invalid"
-                else self._credential(kind).rstrip("=")
-            )
+            token = self._credential(kind).rstrip("=")
             rejected = self._connect_browser(token=token)
             self._record("rpc_rejection_input", kind=kind)
             if kind == "subscriptions-write":
@@ -610,10 +620,10 @@ class TestBrowserSigningSubscriptions(_BrowserSubscriptionBase):
         self._handshake_rejected("encoding")
 
     # TEST-MAP: LSP-SUBSCRIPTION-17
-    def test_browser_invalid_biscuit_rejected_after_upgrade(self):
-        """1. 保留合法订阅并以无效Biscuit取得101。订阅RPC拒绝。原通道完成。"""
-        # 1. 区分合法编码和真实认证；必须在升级之后获得RPC拒绝。
-        self._rpc_rejected("invalid")
+    def test_browser_invalid_biscuit_rejected_during_handshake(self):
+        """1. 保留合法订阅并以编码合法的无效 Biscuit 握手，取得 401。2. 原订阅收到 R2，通道完成。"""
+        # 1. 必须取得服务端真实 401，不能以客户端本地拒绝代替。
+        self._handshake_rejected("invalid-biscuit")
 
     # TEST-MAP: LSP-SUBSCRIPTION-18
     def test_browser_missing_write_rejected_after_upgrade(self):

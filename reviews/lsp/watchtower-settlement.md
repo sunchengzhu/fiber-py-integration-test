@@ -1,5 +1,16 @@
 # Gate2：Hosted watchtower 授权与无 TLC 结算
 
+## 导读
+
+合入版 `12fd72f` 已能分别表达 A 的收款地址与 T 的费用钱包。完整本地回归中，原 05 取得的真实候选已经付往 A，因此该场景归入 843 的历史诊断。已确认的 01 独立到账与 06 目的地替换是当前版本的对应验证入口。[Agent 授权](https://github.com/nervosnetwork/fiber/blob/12fd72f2062fc2e5b6418f7e85e7bff355bf50cb/tests/fiber-lsp-sdk-agent/src/agent.rs#L850-L889) · [SDK 验证器](https://github.com/nervosnetwork/fiber/blob/12fd72f2062fc2e5b6418f7e85e7bff355bf50cb/crates/fiber-lsp-sdk/src/onchain.rs#L248-L275)
+
+## 合入版用例范围
+
+- 经确认，`LSP-WATCHTOWER-05` 已从活动用例和自动化移除。其 ID 和运行结果保留在 843 的历史诊断中。
+- `LSP-WATCHTOWER-01` 已接入独立的合入版回归。测试驱动将开通时绑定的收款地址和运营方代付地址分别传入真实 SDK，沿已确认的结算交易核对用户到账、运营方净收入与费用，保留 65 秒稳定观察。
+
+## 历史背景
+
 2026-10-29：用户已确认[实测反馈 Gate1](field-feedback-scope.md)。本次仅展开其方向 1/2 的 **Gate2：独立收款归属与目的地替换**，完整设计见[本次补充](#独立收款与目的地替换gate22026-10-29)。就地补强 `LSP-WATCHTOWER-01`，新增 05/06；02 只澄清其历史资金判据引用，02～04 的行为不扩展。用户已明确确认01/02/05/06行集、费用分配和预算，进入Gate3；当前只实现/验证843的05及旧02相关回归，01/06等待修复版。
 
 旧共同前提将 D 定义为 T/sponsor 钱包，既有通过只证明已批准交易的签名、结算及守恒，**不证明 A 的资金回到独立用户控制的钱包**。旧01方法保留历史D=S断言，已移除它对新版01的过时TEST-MAP；新版01仍未实现，04/3ce 的历史结果及 #1706 陈旧请求修复证据保留原范围，不转记新 01 通过。当前只读分析固定 `84333eea8488a8afc7e4474aa4bbd0e7e973cee9`；其独立收款正向有产品能力阻塞，不能用本地适配绕过。
@@ -18,6 +29,7 @@
 - 初始注资沿用 A/T 各 500 CKB 的测试参数；以实际 funding 输出、双方余额与 SDK 已验证完整 recovery record 核对，A/T 的待结算金额均非零，零 pending TLC。强关前不重启/驱逐 FNN 或 SDK。
 - 在开通前给 T 钱包准备额外、未被占用的 plain CKB sponsor cells，总容量至少 1,000 CKB；两个通道按需预留独立资金，不能在待签后让充值/其他测试消耗已引用输入。实际输入、找零和费用仍独立核算。
 - 目的地址 D 是测试从本地 T 钱包配置/公钥推导的完整 secp lock，事先保存。批准的 `max_fee=10_000` Shannon 是**每笔待签交易全部输入输出之差**的上限，不是全通道累计限额或从 A 余额扣款的上限。实际费用超过时失败，不自动提高授权；不是产品固定费率契约。
+- 在 `12fd72f` 的历史 D=S 用例中，A 于开通时明确绑定 D 为自己的 shutdown 收款脚本，注资输入仍由 A 钱包控制；T 的 sponsor 输入与找零也使用 D。这个有意批准运营方收款的历史夹具仅用于 02～04 及旧对照方法，不作为独立收款 01 的覆盖。05 保留 A 自己的独立 shutdown 脚本。
 - 通道延迟沿用 `commitment_delay_epoch=0x10000000001`（一个 epoch）；watchtower 保持模板的 60 秒扫描。独立读取真实 CKB epoch 分数与输入 `since`；SDK 开通使用的 2,000ms epoch 配置不能代替链上 maturity 判断。
 - 真实 RPC 为 `get_watchtower_signing_status({channel_id})`、`submit_watchtower_signature({channel_id,request_id,signature})`；实际事件为 `watchtower_signing`。正常提交要求 FNN 首次接受为 `Applied`；若是相同实际重传导致 `AlreadyApplied`，必须已有该签名的真实首次 Applied 证据，不能只拿重复回执通过。
 - 所有签名必须来自 A/B 自身真实 SDK。取得完整请求 R 时核对 `key_purpose=Settlement`、request ID 与完整 packed 交易字节的哈希、所属 node/channel、SDK 本地 source record 及独立链上输入。不得从 FNN 待签内容反推目的地址或提高费用批准。
@@ -52,23 +64,15 @@ Testing: required
 Condition: A–T 私有 plain CKB 通道、双方非零份额且无 TLC；D_A 是开通已绑定且由 A 控制的 shutdown lock，S 是 T 的费用钱包，D_A≠S；产品已具备分别表达和验证二者的能力。
 Expected: A 只批准 D_A 作为自身收款地址；真实 SDK 签名被 Applied 并用于链上 A 支出，A 合法应得份额进入 D_A，T 份额及 sponsor 费用按独立账本核对；两方各结算一次并稳定至少 65 秒。采用用户已确认的本补充费用分配——沿用合法先后顺序分摊强关费，T 以 sponsor 资金承担结算费，不从 A 已确定份额扣除结算费。
 Observable: 原开通意图、完整 recovery record、独立 D_A/S 归属、预先批准、真实 R/S/Applied、committed 输入输出/witness、逐方应得值与 outpoint 账本、稳定观察。
-Basis: 已确认的实测反馈 Gate1 方向 1；[当前 actor 使用 fee-provider 输出](https://github.com/nervosnetwork/fiber/blob/84333eea8488a8afc7e4474aa4bbd0e7e973cee9/crates/fiber-lib/src/watchtower/actor.rs#L1786)暴露旧判据缺口；本补充的费用承担是待确认验收提案，不宣称当前产品已经支持。
+Basis: 已确认的实测反馈 Gate1 方向 1；合入版 [actor 分离 payout 与 sponsor](https://github.com/nervosnetwork/fiber/blob/12fd72f2062fc2e5b6418f7e85e7bff355bf50cb/crates/fiber-lib/src/watchtower/actor.rs#L1677-L1690)并以 [独立 payout lock 创建结算输出](https://github.com/nervosnetwork/fiber/blob/12fd72f2062fc2e5b6418f7e85e7bff355bf50cb/crates/fiber-lib/src/watchtower/actor.rs#L2305-L2313)。费用分配仍须以真实 CKB 输入输出验证，不能仅凭源码判定测试通过。
 Source: inference
-Testing: required
-
-### SPEC-05：独立批准不能为真实错付候选产生签名
-Condition: A 的固定批准为 D_A，真实 843 工作却把 A 份额并入 S 输出；请求、祖先、maturity、record、deps、费限和输入 live 均可独立验证，额外输入确属预先确定的 S。
-Expected: 原 SDK 拒绝该真实候选，不产生或提交 A 的 Settlement，至少 65 秒观察中 A 份额未解锁；记录最先拒绝层级。sponsor 与 destination 不兼容的拒绝仅证明该候选未通过，不算输出目的地校验或独立收款正向通过。
-Observable: 未改写的真实请求、D_A 批准、S 输入/输出、原 SDK prepare 拒绝、SDK 状态与提交审计、A 未解锁及 T 合法后继证据。
-Basis: [SDK sponsor 限制](https://github.com/nervosnetwork/fiber/blob/84333eea8488a8afc7e4474aa4bbd0e7e973cee9/crates/fiber-lsp-sdk/src/onchain.rs#L256)先于[输出目的地校验](https://github.com/nervosnetwork/fiber/blob/84333eea8488a8afc7e4474aa4bbd0e7e973cee9/crates/fiber-lsp-sdk/src/onchain.rs#L345)；当前本地适配也先检查 sponsor，必须区分适配拒绝与原 SDK 拒绝。
-Source: observation
 Testing: required
 
 ### SPEC-06：金额与费用守恒不能掩盖 payout 被替换
 Condition: 已有原 SDK 在固定 D_A/S 授权下 prepare 成功的自然候选；固定授权及所有控制量，只将一个支付 A 的输出 lock 替换成 S 或独立第三方 D_X，逐个 check-only。
 Expected: 两个变体均被原 SDK 在收款归属约束处拒绝，原样对照仍可 prepare；不调用任何签名或提交入口，SDK 签名历史、revision/nonce 和存储不变。原样对照失败或先被其他约束拒绝时不计本行为通过。
 Observable: 原请求来源、原样/变异 content 与 SDK 重算摘要、完整不变的授权、字段差异、原 SDK 拒绝层级、状态前后摘要、零 sign/submit 审计。
-Basis: 已确认的 Gate1 方向 2；[prepare_onchain](https://github.com/nervosnetwork/fiber/blob/84333eea8488a8afc7e4474aa4bbd0e7e973cee9/crates/fiber-lsp-sdk/src/signer.rs#L1007)是只验证入口；原本地 wrong_destination 修改的是授权，不满足本行的单变量要求。
+Basis: 已确认的 Gate1 方向 2；合入版 [SDK 分别核验 destination 与 sponsor change](https://github.com/nervosnetwork/fiber/blob/12fd72f2062fc2e5b6418f7e85e7bff355bf50cb/crates/fiber-lsp-sdk/src/onchain.rs#L356-L395)；`prepare_onchain` 为只验证入口，原本地 wrong_destination 修改的是授权，不满足本行的单变量要求。
 Source: inference
 Testing: required
 
@@ -78,7 +82,6 @@ Testing: required
 - 真实结算与资金
   - A 只批准独立 D_A，真实到账且 sponsor 与费用分开核算：LSP-WATCHTOWER-01 [primary] -> SPEC-04
 - 独立批准的拒签边界
-  - 真实候选付往 S，原 SDK 拒签且不产生 A 支出：LSP-WATCHTOWER-05 [primary] -> SPEC-05
   - 固定原授权，仅替换合法候选的 A payout lock，check-only 拒绝：LSP-WATCHTOWER-06 [primary] -> SPEC-06
 - 本地批准
   - 原 agent 无批准拒签，明确批准后经独立验证适配入口完成：LSP-WATCHTOWER-02 [primary] -> SPEC-01、SPEC-02
@@ -94,15 +97,14 @@ Testing: required
 <!-- TEST-CASES-BEGIN -->
 | 用例 | 场景 | 预期结果 | 防止的问题 | 优先级 |
 | --- | --- | --- | --- | --- |
-| `LSP-WATCHTOWER-01` | - [ ] A/T 双方非零份额、无 TLC 的私有 CKB 通道中，A 只批准自己开通时绑定的 D_A，D_A≠T 的 sponsor 钱包 S；T 强关，真实成熟后由 SDK 经独立链验证签名 | 按已确认的本补充费用分配，A 的合法应得份额全部进入 D_A，sponsor 输入、T 份额及费用独立守恒；A 签名真实 Applied 并用于该支出，两方各结算一次且终态稳定至少 65 秒 | 钱仍守恒但 A 份额进入运营方钱包，或把 sponsor 总余额当用户所得 | P0 |
+| `LSP-WATCHTOWER-01` | - [x] A/T 双方非零份额、无 TLC 的私有 CKB 通道中，A 只批准自己开通时绑定的 D_A，D_A≠T 的 sponsor 钱包 S；T 强关，真实成熟后由 SDK 经独立链验证签名 | 按已确认的本补充费用分配，A 的合法应得份额全部进入 D_A，sponsor 输入、T 份额及费用独立守恒；A 签名真实 Applied 并用于该支出，两方各结算一次且终态稳定至少 65 秒 | 钱仍守恒但 A 份额进入运营方钱包，或把 sponsor 总余额当用户所得 | P0 |
 | `LSP-WATCHTOWER-02` | - [x] 沿用历史 D=S 判据的 A/T 非零份额、无 TLC 私有 CKB 通道中，不授予 A 本地 watchtower 批准；取得有效请求及原 Agent.handle_event 的缺批准拒签后观察至少 130 秒，再调用原批准 API 并经适配入口完成原通道 | 已确认分段验证边界；批准前 SDK 不产生/提交 A 的 Settlement，A 份额未结算；明确批准后真实 SDK 验链、签名及资金终态满足历史 D=S 共同判据，不扩展为独立收款，也不宣称原 agent 自动事件链仅补批准即可恢复 | 测试驱动自行拦截被误算成 SDK 拒签，或绕过本地批准直接调用 verified 入口却宣称完整授权恢复 | P0 |
 | `LSP-WATCHTOWER-03` | - [x] A/B 自身 watchtower 查询均成功；T 强关 A 后，捕获并扣住 A 对当前有效 Settlement 的真实签名，用 B token 读取 A 的同一 channel，再用 A 处理该工作 | B 读取失败且未返回 A 请求内容；操作前后 A 当前工作及可用输入未被 B 改变；A 的真实提交、结算与共同资金断言通过 | 跨租户泄露签名上下文，或因 B token 无效/无权限而取得假阳性 | P0 |
 | `LSP-WATCHTOWER-04` | - [x] 先让 B 在自己的通道上真实提交有效 Settlement 并完成结算作为写权限对照；再取得 A 通道当前有效请求和扣留的真实 SDK 签名，用 B token 原样提交 A 的 channel/request/signature，随后由 A 提交 | B→A 提交失败，A 原工作不被应用或替换；A 提交同一仍有效签名真实 Applied 且结算守恒；不能用错误签名、过期请求或 AlreadyApplied 代替身份隔离 | 租户身份未参与签名提交路由，或缺少合法写权限/有效签名对照而错误判定隔离成功 | P0 |
-| `LSP-WATCHTOWER-05` | - [x] A 只批准独立 D_A，在当前 843 的真实有效 Settlement 工作把 A 份额付往 S 时，以原授权和真实链证据调用原 SDK 验证并观察至少 65 秒 | SDK 拒签且无 A Settlement 签名或提交，A 份额未解锁；明确最先拒绝层级，sponsor 限制拒绝不算输出目的地校验或正向取回通过 | 为凑结算成功批准运营方收款，或把测试代码提前拦截冒充 SDK 目的地防护 | P0 |
 | `LSP-WATCHTOWER-06` | - [ ] 独立 D_A/S 授权下的自然候选先通过原 SDK prepare；保持原授权、输入、金额、费用等不变，仅将 A payout lock 分别换成 S、独立 D_X，逐个 check-only | 两个变体均因收款归属约束拒绝，原样对照仍可 prepare；全过程不签名、不提交，SDK 状态不变；无有效原样对照或更早拒绝均不得记通过 | 金额守恒掩盖错付，或用修改批准、陈旧摘要及其他校验拒绝取得假阳性 | P1 |
 <!-- TEST-CASES-END -->
 
-02～05存在TEST-MAP；新版01/06未映射，旧01方法仅保留历史D=S验证。复选框只表示映射存在，所有旧通过仍只对应历史D=S判据。02 的引用调整仅固定其原意，03/04 不变；四项历史执行与本次未运行须分开。
+01～04 存在 TEST-MAP，06 尚未映射。原共享收款和费用钱包的结算方法继续作为兼容回归。05 的映射已随合入版退役移除。复选框只表示映射存在。历史执行结果保留原版本归属。
 
 ## 历史分阶段时间预算（02～04 沿用；新 01/05/06 见补充）
 
@@ -295,10 +297,12 @@ P_A/P_T 是独立推导的合法应得值。末尾跨过至少一轮扫描、连
 
 ### 01/06：实际修复版的正向与单变量对照
 
+合入版可单独执行 01：使用真实自然候选完成下文的验链、签名提交与资金核对。第 2～3 步仅用于与 06 合跑时的对照。
+
 1. 先核对并固定获批修复 SHA、同源产物、产品的真实双地址/费用授权接口及可信合约，证明符合本次费用分配；不符则回到评审。准备一条新 A–T 通道及固定 D_A/S 意图，T 真实强关并取得合法自然候选。
 2. 在 A 尚未签名/提交时，以只验证模式执行06：原样 prepare 成功后冻结 content、authorization、SDK state 和链输入。仅改变一个应支付 A 的 output.lock，依次替为 S 与 D_X；完整 input/outpoint/since、output capacity/data/type、deps、witness、授权 source/destination/fee/additional_inputs 均保持不变，脚本长度相同以保持交易体积控制。由 SDK 从变异 content 重算 canonical 摘要/消息，不复用旧摘要。
 3. 对照与两个变体必须在同一仍有效输入/状态下完成；每个变体拒绝后再验证原样仍能 prepare。必须证明拒绝落在归属约束；若因输入竞争、record、nonce、deps、摘要或 sponsor 先拒绝，则06未验收，停止，不为取得分支复跑。全组 check-only 上限30秒，只有适配证据和本地计数允许写入；签名存储摘要/历史/revision/nonce 不变，不调用 `sign_onchain`、`sign_verified`、poll/submit 或广播。
-4. 06结束后，仅对原始自然候选放行01的真实 verified 签名路径。再次核对其当前输入与授权；自然合法后继变化只按既定三工作/原截止规则处理，不把变异内容回送产品。取得 A 首次 Applied 与链上实际签名，完成两方资金及稳定观察。
+4. 01 对原始自然候选执行真实 verified 签名路径。再次核对其当前输入与授权；自然合法后继变化只按既定三工作/原截止规则处理。取得 A 首次 Applied 与链上实际签名，完成两方资金及稳定观察。
 5. 报告两个行为各自结果。06 是本地原 SDK 验证器负向，原 RPC request_id 只用于来源关联；`prepare_onchain` 不接收 RPC request_id，因此此处不证明服务端 request_id 校验或抗重放。05 的旧错误候选不强行移植成修复版真实工作，保留843结果；禁止为重现05而手改产品输出。
 
 ### 最小本地适配与回归边界

@@ -10,6 +10,8 @@ import shutil
 import subprocess
 import tomllib
 
+from build_lsp_test_binaries import MERGED_LSP_REVISION
+
 ROOT = Path(__file__).resolve().parents[1]
 REVISION = "76307312e8de518c9a32074e6d16867c04de4f86"
 
@@ -95,10 +97,16 @@ def main():
         '[dependencies]\nasync-trait = "0.1"\nserde_json = "1"\n',
         1,
     )
+    features = "debug-add-tlc"
+    feature_section = "[features]"
+    if args.revision == MERGED_LSP_REVISION:
+        features += ",merged-lsp"
+        feature_section += "\nmerged-lsp = []\n"
     (build / "Cargo.toml").write_text(
         '[package]\nname = "lsp-delivery-node"\nversion = "0.1.0"\nedition = "2021"\n'
         '[workspace]\n[[bin]]\nname = "lsp-delivery-node"\npath = "_delivery_node.rs"\n'
-        "[features]" + dependencies
+        + feature_section
+        + dependencies
     )
     adapter_sources = sorted(suite.glob("_delivery*.rs"))
     assert suite / "_delivery_node.rs" in adapter_sources
@@ -124,7 +132,7 @@ def main():
             "--manifest-path",
             str(build / "Cargo.toml"),
             "--features",
-            "debug-add-tlc",
+            features,
         ],
         env=env,
         cwd=source,
@@ -146,7 +154,7 @@ def main():
         "--manifest-path",
         str(build / "Cargo.toml"),
         "--features",
-        "debug-add-tlc",
+        features,
     ]
     subprocess.run(command, env=env, cwd=source, check=True)
     product_clean(source, args.revision)

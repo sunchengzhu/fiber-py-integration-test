@@ -4,7 +4,6 @@ Historical 843 allowlist failures remain evidence; all approved cancellation and
 funds assertions are retained for the current product regression.
 """
 
-import copy
 import hashlib
 import json
 from pathlib import Path
@@ -135,43 +134,6 @@ class _CancellationBase(HostedTenantFixture):
             {"payment_hash": payment["hash"]},
         )
         self._record("local_cancel_authorized", payment_hash=payment["hash"])
-
-    def _pause_submissions(self, tenant):
-        with tenant["gate"].lock:
-            tenant["gate"].passthrough = False
-
-    def _release_submissions(self, tenant):
-        tenant["gate"].release()
-
-    def _wait_new_submission(self, tenant, before, until):
-        while True:
-            with tenant["gate"].lock:
-                fresh = [
-                    request_id
-                    for request_id in tenant["gate"].submissions
-                    if request_id not in before
-                ]
-            if fresh:
-                return fresh[0]
-            self._pause(until, 0.05)
-
-    def _submit_held(self, tenant, request_id, until):
-        with tenant["gate"].lock:
-            submission = copy.deepcopy(tenant["gate"].submissions[request_id])
-        assert submission["channel_id"] == tenant["channel_id"], submission
-        result = self._rpc(
-            tenant["client"],
-            "submit_channel_signature",
-            [submission],
-            until,
-        )
-        assert result["type"] in ("Applied", "AlreadyApplied"), result
-        self._record(
-            "held_signature_submitted",
-            request_id=request_id,
-            result=result,
-        )
-        return result
 
     def _payment(self, payment, until):
         return self._rpc(
@@ -391,7 +353,7 @@ class TestHostedInvoiceCancellation(CancellationEnvironment, _CancellationBase):
     def test_open_invoice_cancelled_old_payment_fails_new_payment_succeeds(self):
         """
         1. A 以真实租户身份创建仅含 hash 的 Open 发票并取消。
-        2. P 尝试旧发票，核对失败终态、零费用和全部通道余额回基线。
+        2. P 尝试旧发票，核对失败终态、无新签名派发、零费用和全部通道余额回基线。
         3. 独立新发票经原 Agent 安全释放，按实际费用核对付款和资金。
         """
         until = self.business_until
@@ -399,17 +361,14 @@ class TestHostedInvoiceCancellation(CancellationEnvironment, _CancellationBase):
         old = self._new_hold(self.tenant, "old", until)
         self._cancel(self.tenant, old, until)
 
-        # 2. 旧 hash 没有 SDK 预像释放，异步终态和四端资金均需证实。
-        # 先扣住新 TLC 的签名，等 TLC 在 SDK 状态中存在后再写本地退款授权；
-        # 这样失败移除到达时 SDK 已能接受，而不是在“新 TLC 已 resolved”处拒绝。
-        before = set(self.tenant["gate"].submissions)
-        self._pause_submissions(self.tenant)
+        # 2. 已取消的 Open 发票应在派发到 SDK 前失败；不等待不存在的新签名请求。
+        with self.tenant["gate"].lock:
+            before = set(self.tenant["gate"].submissions)
         self._send_payment(old, until)
-        request_id = self._wait_new_submission(self.tenant, before, until)
-        self._authorize_cancellation(self.tenant, old, until)
-        self._release_submissions(self.tenant)
-        self._submit_held(self.tenant, request_id, until)
         failed = self._wait_terminal(old, "Failed", "Cancelled", until)
+        with self.tenant["gate"].lock:
+            after = set(self.tenant["gate"].submissions)
+        assert after == before, (before, after)
         assert _number(failed["payer"]["fee"]) == 0
         self._assert_settled_funds(failed, None, 0, 0)
         self._no_old_release(old)

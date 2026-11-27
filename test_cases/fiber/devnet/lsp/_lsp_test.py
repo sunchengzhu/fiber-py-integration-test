@@ -16,9 +16,11 @@ import yaml
 
 from framework.basic_fiber import FiberTest, XUDT_TX_HASH
 from framework.fiber_rpc import FiberRPCClient
+from framework.helper.ckb_transaction import raw_transaction_hash
 from framework.helper.udt_contract import UdtContract, issue_udt_tx
 from framework.test_fiber import Fiber, FiberConfigPath, wait_for_port
 from framework.util import get_project_root
+from test_cases.fiber.devnet.lsp._opening_replay import direct_tenant_rpc
 from test_cases.fiber.devnet.lsp._signer_gate import SignatureGate
 from test_cases.fiber.devnet.lsp._retry_signer_gate import RetrySignatureGate
 from test_cases.fiber.devnet.lsp._subscription_observer import SubscriptionProxy
@@ -48,6 +50,15 @@ BISCUIT_PUBLIC_KEY = (
     "ed25519/17b172749be74276f0ed35a5d0685752684a3c5722114bba447a2f301136db79"
 )
 BUNDLE_MANIFEST = "build.json"
+DEFERRED_FUNDING_WINDOW = 24 * 60 * 60
+RAW_FUNDING_FIELDS = (
+    "version",
+    "cell_deps",
+    "header_deps",
+    "inputs",
+    "outputs",
+    "outputs_data",
+)
 
 
 def sha256_file(path):
@@ -405,6 +416,8 @@ class LspTestBase(SigningEnvironment, FiberTest):
     # Deadline suites that hold the wallet funding submission keep this false.
     submit_external_funding = True
     complete_opening_before_wallet = False
+    # Keep the held opening request, but let the test decide when the wallet submits.
+    defer_external_funding = False
     # Keep the pre-merge binary selection local to this suite.
     fiber_version = SimpleNamespace(
         fiber_config_path=FiberConfigPath.CURRENT_DEV.fiber_config_path,
@@ -413,6 +426,10 @@ class LspTestBase(SigningEnvironment, FiberTest):
     start_fiber_config = {
         "fiber_auto_accept_channel_ckb_funding_amount": 500 * 100000000
     }
+
+    def _tenant_shutdown_script(self, label, funding_script):
+        """Select the wallet-approved payout lock before opening this channel."""
+        return funding_script
 
     @classmethod
     def setup_class(cls):
@@ -770,6 +787,10 @@ class LspTestBase(SigningEnvironment, FiberTest):
 
     def setUp(self):
         started = time.monotonic()
+        if self.defer_external_funding:
+            assert (
+                self.submit_external_funding and not self.complete_opening_before_wallet
+            )
         self.public_key = self.fiber1.get_pubkey()
         config_path = Path(self.fiber1.fiber_config_path)
         operator_token = (BUNDLE / "operator-token").read_text().strip()
@@ -862,6 +883,7 @@ class LspTestBase(SigningEnvironment, FiberTest):
                 "hash_type": "type",
                 "args": wallet["lock_arg"],
             }
+            shutdown_script = self._tenant_shutdown_script(label, funding_script)
             tenant = {
                 "label": label,
                 "client": client,
@@ -873,7 +895,7 @@ class LspTestBase(SigningEnvironment, FiberTest):
                 "control_port": control_port,
                 "status_file": status_file,
                 "log": log,
-                "shutdown_script": funding_script,
+                "shutdown_script": shutdown_script,
                 "control_calls": [],
             }
             config = yaml.load(config_path.read_text(), Loader=yaml.BaseLoader)
@@ -889,7 +911,7 @@ class LspTestBase(SigningEnvironment, FiberTest):
                         "funding_amount": hex(500 * 100000000),
                         "commitment_fee_rate": hex(1000),
                         "public": False,
-                        "shutdown_script": funding_script,
+                        "shutdown_script": shutdown_script,
                         "funding_lock_script": funding_script,
                         "external_channel_signer": status[
                             "channel_open_signer_material"
@@ -908,7 +930,7 @@ class LspTestBase(SigningEnvironment, FiberTest):
             opening_input = {
                 "database": str(Path(self.fiber1.tmp_path) / "fiber/store"),
                 "channel_id": channel_id,
-                "shutdown_script": funding_script,
+                "shutdown_script": shutdown_script,
                 "signer_material": status["channel_open_signer_material"],
                 "commitment_lock": scripts["CommitmentLock"]["script"],
                 "funding_dep_count": len(scripts["FundingLock"]["cell_deps"]),
@@ -928,7 +950,9 @@ class LspTestBase(SigningEnvironment, FiberTest):
                 time.sleep(1)
             else:
                 assert False, f"SDK {label} did not bind channel {channel_id}"
-            if self.submit_external_funding:
+            if self.submit_external_funding and not self.defer_external_funding:
+                if self.complete_opening_before_wallet:
+                    self._wait_for_opening_commitment(tenant)
                 signed = self.fiber2.client.call(
                     "sign_external_funding_tx",
                     [
@@ -951,9 +975,13 @@ class LspTestBase(SigningEnvironment, FiberTest):
             self.tenants.append(tenant)
 
         if not self.submit_external_funding:
-            # The wallet still owes its funding signature; no channel signature exists yet.
+            # The scenario controls when the wallet submits its funding signature.
             return
 
+        if self.complete_opening_before_wallet:
+            return
+
+        funding_inputs = set()
         for tenant in self.tenants:
             for _ in range(60):
                 assert tenant["agent"].poll() is None, f"SDK {tenant['label']} exited"
@@ -980,6 +1008,30 @@ class LspTestBase(SigningEnvironment, FiberTest):
                 tenant["client"], tenant["channel_id"]
             )
             assert tenant["state"]["state_name"] != "ChannelReady"
+            if self.defer_external_funding:
+                proposal = copy.deepcopy(tenant["opened"]["unsigned_funding_tx"])
+                proposal_inputs = {
+                    (
+                        item["previous_output"]["tx_hash"],
+                        int(item["previous_output"]["index"], 16),
+                    )
+                    for item in proposal["inputs"]
+                }
+                assert proposal_inputs and proposal_inputs.isdisjoint(funding_inputs), (
+                    "original tenant funding proposals overlap",
+                    tenant["label"],
+                    proposal_inputs,
+                )
+                funding_inputs.update(proposal_inputs)
+                tenant["funding_proposal"] = proposal
+                tenant["funding_proposal_hash"] = raw_transaction_hash(proposal)
+                tenant["original_funding_deadline"] = (
+                    min(
+                        int(row["created_at"], 16) / 1000
+                        for row in self._opening_funding_rows(tenant)
+                    )
+                    + DEFERRED_FUNDING_WINDOW
+                )
         print(f"LSP tenants ready: {time.monotonic() - started:.2f}s")
 
     def _archive_run(self):
@@ -1040,6 +1092,164 @@ class LspTestBase(SigningEnvironment, FiberTest):
         assert len(matching) == 1, f"expected channel {channel_id}, got {channels}"
         return matching[0]["state"]
 
+    def _opening_funding_rows(self, tenant):
+        local = tenant["client"].list_channels({})["channels"]
+        assert len(local) == 1 and local[0]["channel_id"] == tenant["channel_id"], local
+        public = [
+            row
+            for row in self.fiber1.client.list_channels({})["channels"]
+            if row["channel_id"] == tenant["channel_id"]
+        ]
+        assert len(public) == 1, (tenant["channel_id"], public)
+        return local[0], public[0]
+
+    def _wait_for_opening_commitment(self, tenant, deadline=None):
+        # Deferred tests already exercise the genuine WS path. Wait for the node
+        # before calling the SDK control, which can actively poll pending work.
+        verify_after_node = deadline is not None
+        if not verify_after_node:
+            assert self.signer_control(tenant, "wait-opening-commitment") == {
+                "verified": True
+            }
+            deadline = time.monotonic() + 10
+        required = {"OUR_COMMITMENT_SIGNED_SENT", "THEIR_COMMITMENT_SIGNED_SENT"}
+        channel = None
+        while time.monotonic() < deadline:
+            channel = next(
+                (
+                    row
+                    for row in tenant["client"].list_channels({})["channels"]
+                    if row["channel_id"] == tenant["channel_id"]
+                ),
+                None,
+            )
+            if channel is not None:
+                state = channel["state"]
+                flags = set(state.get("state_flags", "").split("|"))
+                commitment = channel["latest_commitment_transaction_hash"]
+                if (
+                    state["state_name"] == "SigningCommitment"
+                    and required <= flags
+                    and commitment
+                ):
+                    if verify_after_node:
+                        status = tenant["client"].call(
+                            "get_channel_signing_status",
+                            [{"channel_id": tenant["channel_id"]}],
+                        )
+                        if status["status"]["type"] != "NoSignatureRequired":
+                            time.sleep(0.2)
+                            continue
+                        assert self.signer_control(
+                            tenant, "wait-opening-commitment"
+                        ) == {"verified": True}
+                        assert (
+                            time.monotonic() < deadline
+                        ), "late opening commitment verification"
+                    print(
+                        f"Opening commitment verified before wallet funding: {commitment}"
+                    )
+                    return
+            time.sleep(0.2)
+        raise AssertionError(
+            f"Channel did not finish opening commitment before wallet funding: {channel}"
+        )
+
+    def _submit_deferred_funding(self, tenant, deadline):
+        assert self.defer_external_funding
+        assert (
+            "funding_tx_hash" not in tenant
+            and "wallet_submission_started" not in tenant
+        )
+        self._wait_for_opening_commitment(tenant, deadline)
+        proposal = tenant["funding_proposal"]
+        remaining = min(10, deadline - time.monotonic())
+        assert remaining > 0, "opening budget exhausted before wallet signing"
+        with requests.Session() as session:
+            session.trust_env = False
+            response = session.post(
+                self.fiber2.client.url,
+                headers=self.fiber2.client.other_params,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 42,
+                    "method": "sign_external_funding_tx",
+                    "params": [
+                        {
+                            "unsigned_funding_tx": proposal,
+                            "private_key": tenant["private_key"],
+                        }
+                    ],
+                },
+                timeout=remaining,
+                allow_redirects=False,
+            )
+        assert response.status_code == 200, "wallet signing HTTP failure"
+        reply = response.json()
+        assert (
+            reply.get("jsonrpc") == "2.0"
+            and reply.get("id") == 42
+            and "result" in reply
+            and "error" not in reply
+        ), "wallet signing RPC failure"
+        signed = reply["result"]["signed_funding_tx"]
+        assert all(signed[field] == proposal[field] for field in RAW_FUNDING_FIELDS)
+        assert (
+            time.time() < tenant["original_funding_deadline"]
+        ), "original external funding window expired"
+        remaining = min(10, deadline - time.monotonic())
+        assert remaining > 0, "opening budget exhausted before wallet submission"
+        tenant["wallet_submission_started"] = time.monotonic()
+        receipt = direct_tenant_rpc(
+            tenant["client"],
+            {
+                "jsonrpc": "2.0",
+                "id": 42,
+                "method": "submit_signed_funding_tx",
+                "params": [
+                    {"channel_id": tenant["channel_id"], "signed_funding_tx": signed}
+                ],
+            },
+            remaining,
+        )
+        body = receipt["body"]
+        assert receipt["http_status"] == 200 and body is not None, receipt
+        assert (
+            body.get("jsonrpc") == "2.0"
+            and body.get("id") == 42
+            and "error" not in body
+        ), receipt
+        funding = body["result"]
+        assert funding["channel_id"] == tenant["channel_id"], funding
+        assert funding["funding_tx_hash"] == tenant["funding_proposal_hash"], funding
+        assert (
+            time.monotonic() < deadline
+        ), "wallet submission returned after opening deadline"
+        tenant["funding_tx_hash"] = funding["funding_tx_hash"]
+
+    def _assert_original_funding_confirmed(self, tenant):
+        funding_hash = tenant["funding_tx_hash"]
+        local, public = self._opening_funding_rows(tenant)
+        assert (
+            local["state"]["state_name"]
+            == public["state"]["state_name"]
+            == "ChannelReady"
+        )
+        assert (
+            local["channel_outpoint"]
+            == public["channel_outpoint"]
+            == funding_hash + "00000000"
+        )
+        committed = self.node.getClient().get_transaction(funding_hash)
+        assert committed["tx_status"]["status"] == "committed", committed
+        tx = committed["transaction"]
+        assert tx["hash"] == funding_hash
+        assert all(
+            tx[field] == tenant["funding_proposal"][field]
+            for field in RAW_FUNDING_FIELDS
+        ), tx
+        print(f"Tenant {tenant['label']} ready with original funding: {funding_hash}")
+
     def signer_control(self, tenant, operation, values=None):
         payload = {
             "operation": operation,
@@ -1075,9 +1285,12 @@ class ChannelSigningTestBase(LspTestBase):
         self.gate = self.tenant["gate"]
         self.subscription_proxy = self.tenant["subscription_proxy"]
         created = int(self._channel(self.client)["created_at"], 16) / 1000
-        assert created + self.opening_window_seconds - time.time() >= (
-            self.opening_window_margin
-        )
+        opening_deadline = created + self.opening_window_seconds
+        if self.defer_external_funding:
+            opening_deadline = min(
+                opening_deadline, self.tenant["original_funding_deadline"]
+            )
+        assert opening_deadline - time.time() >= self.opening_window_margin
 
     def _channel(self, client, channel_id=None):
         channel_id = channel_id or self.channel_id
@@ -1155,8 +1368,10 @@ class ChannelSigningTestBase(LspTestBase):
         }
 
     def _finish_opening(self):
-        self.gate.release()
         deadline = time.monotonic() + 120
+        self.gate.release()
+        if self.defer_external_funding:
+            self._submit_deferred_funding(self.tenant, deadline)
         while time.monotonic() < deadline:
             assert self.tenant["agent"].poll() is None
             assert not self.gate.errors, self.gate.errors
@@ -1172,7 +1387,9 @@ class ChannelSigningTestBase(LspTestBase):
             time.sleep(1)
         else:
             current = self._status()
-            requests = (self.tenant["before"]["status"], current)
+            requests = [current]
+            if "before" in self.tenant:
+                requests.insert(0, self.tenant["before"]["status"])
             summaries = [
                 {
                     "transition": r.get("transition"),
@@ -1207,6 +1424,9 @@ class ChannelSigningTestBase(LspTestBase):
         )
         assert transaction["tx_status"]["status"] == "committed", transaction
         assert not local["pending_tlcs"] and not public["pending_tlcs"]
+        if self.defer_external_funding:
+            self._assert_original_funding_confirmed(self.tenant)
+            assert time.monotonic() < deadline, "opening confirmed after deadline"
 
     def _wait_for_fault_resubscription(self):
         """Observe this SDK's new subscribe attempt after the HTTP fault."""

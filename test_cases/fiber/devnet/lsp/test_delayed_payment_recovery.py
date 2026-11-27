@@ -15,6 +15,7 @@ import time
 import requests
 from websockets.protocol import State
 
+from scripts.build_lsp_test_binaries import MERGED_LSP_REVISION
 from test_cases.fiber.devnet.lsp._lsp_test import (
     BUNDLE,
     ChannelSigningTestBase,
@@ -41,6 +42,7 @@ def _outpoint(value):
 
 
 class _DelayedPaymentBase(ChannelSigningTestBase):
+    complete_opening_before_wallet = REVISION == MERGED_LSP_REVISION
     agent_extra_args = ("--ack-held-events",)
     tenant_rpc_timeout = 2
 
@@ -122,13 +124,14 @@ class _DelayedPaymentBase(ChannelSigningTestBase):
                 tenant["client"].url = tenant["gate"].url
                 tenant["gate"].forward_timeout = 2
                 tenant["gate"].release()
-                submitted = self._rpc(
-                    tenant["client"],
-                    "submit_channel_signature",
-                    [tenant["gate"].submission],
-                    self.preparation_until,
-                )
-                assert submitted["type"] == "Applied", submitted
+                if not self.complete_opening_before_wallet:
+                    submitted = self._rpc(
+                        tenant["client"],
+                        "submit_channel_signature",
+                        [tenant["gate"].submission],
+                        self.preparation_until,
+                    )
+                    assert submitted["type"] == "Applied", submitted
             while True:
                 channels = self._views(self.preparation_until)
                 ready = all(
@@ -722,14 +725,11 @@ class _DelayedPaymentBase(ChannelSigningTestBase):
             waits = [
                 i for i, line in enumerate(lines) if "set_waiting_ack(true)" in line
             ]
-            sends = [
-                i
-                for i, line in enumerate(lines)
-                if "send commitment signed: CommitmentSigned" in line
-            ]
-            assert len(waits) == len(sends) == 1 and waits[0] < sends[0], lines
+            # The V2 sender persists waiting_ack before sending CommitmentSignedV2;
+            # it no longer emits the V1 "send commitment signed" log line.
+            assert len(waits) == 1, lines
             assert not any(
-                "set_waiting_ack(false)" in line for line in lines[sends[0] + 1 :]
+                "set_waiting_ack(false)" in line for line in lines[waits[0] + 1 :]
             ), lines
             assert self._signature_forwards() == self.forwarded_before
             self.request, self.submission = status, submission
@@ -772,18 +772,9 @@ class _DelayedPaymentBase(ChannelSigningTestBase):
         lines = [
             line
             for line in self._log_since_send().splitlines()
-            if self.channel_id in line
-            and (
-                "set_waiting_ack(" in line
-                or "send commitment signed: CommitmentSigned" in line
-            )
+            if self.channel_id in line and "set_waiting_ack(" in line
         ]
-        expected = [
-            line
-            for line in self.checkpoint_log
-            if "set_waiting_ack(" in line
-            or "send commitment signed: CommitmentSigned" in line
-        ]
+        expected = [line for line in self.checkpoint_log if "set_waiting_ack(" in line]
         assert lines == expected, (
             "ACK cleared or commitment advanced while A held",
             lines,

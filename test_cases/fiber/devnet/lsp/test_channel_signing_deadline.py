@@ -16,6 +16,10 @@ import time
 
 import requests
 
+from framework.helper.ckb_transaction import (
+    raw_transaction_hash as _raw_transaction_hash,
+)
+from scripts.build_lsp_test_binaries import MERGED_LSP_REVISION
 from test_cases.fiber.devnet.lsp._lsp_test import (
     BUNDLE,
     REVISION,
@@ -42,8 +46,7 @@ from test_cases.fiber.devnet.lsp._opening_replay import (
     opening_applied_receipt,
 )
 
-# These two never send the wallet funding signature, so setup stops before any
-# channel signature request exists.
+# These two never send the wallet funding signature and leave the SDK gate held.
 WALLET_HOLD_TESTS = {
     "test_external_funding_timeout_aborts_opening",
     "test_late_wallet_submission_after_abort",
@@ -53,8 +56,21 @@ ISOLATED_CLOSE_TESTS = {
     "test_force_close_uses_commitment_with_target_tlc",
     "test_remote_side_recovers_after_local_force_close",
 }
+# Keep the natural A/T close race for 07 and 11. The proxy only records CKB responses;
+# unlike 08/10, this test never arms its broadcast-blocking rule.
+OBSERVED_CLOSE_TESTS = {
+    "test_signature_after_deadline_is_not_applied",
+    "test_no_preimage_outcome_after_close",
+}
 RECOVERY_TEST = "test_checkpoint_b_loser_recovers_remote_close"
+POST_OPENING_TESTS = ISOLATED_CLOSE_TESTS | {
+    RECOVERY_TEST,
+    "test_short_expiry_fixture_reaches_checkpoints",
+    "test_signature_after_deadline_is_not_applied",
+    "test_no_preimage_outcome_after_close",
+}
 
+STALE_FUNDING_TIMER_TEST = "test_stale_external_funding_timer_keeps_opening_alive"
 FUNDING_SPEND_REVISION = "505c48fbe01fe22504f99bde085d8ebda2c53018"
 FUNDING_SPEND_TEST = "test_opening_signature_timeout_aborts_before_broadcast"
 OPENING_REPLAY_TEST = "test_late_channel_signature_after_abort"
@@ -74,87 +90,6 @@ def ckb_hash(preimage):
             bytes.fromhex(preimage.replace("0x", "")),
             digest_size=32,
             person=b"ckb-default-hash",
-        ).hexdigest()
-    )
-
-
-def _raw_transaction_hash(tx):
-    """CKB Molecule RawTransaction hash (witnesses are not part of the tx ID).
-
-    Checked against real CKB accepted hashes as well as the A spawn hash; this
-    distinguishes dependency refreshes that share a canonical signing message.
-    """
-
-    def number(value, size=4):
-        return (int(value, 16) if isinstance(value, str) else value).to_bytes(
-            size, "little"
-        )
-
-    def raw(value):
-        return bytes.fromhex(value.removeprefix("0x"))
-
-    def fixed(items):
-        return number(len(items)) + b"".join(items)
-
-    def table(fields):
-        offset = 4 * (len(fields) + 1)
-        offsets = []
-        for field in fields:
-            offsets.append(number(offset))
-            offset += len(field)
-        return number(offset) + b"".join(offsets) + b"".join(fields)
-
-    def outpoint(value):
-        return raw(value["tx_hash"]) + number(value["index"])
-
-    def script(value):
-        args = raw(value["args"])
-        return table(
-            [
-                raw(value["code_hash"]),
-                bytes(
-                    [{"data": 0, "type": 1, "data1": 2, "data2": 4}[value["hash_type"]]]
-                ),
-                number(len(args)) + args,
-            ]
-        )
-
-    encoded = table(
-        [
-            number(tx["version"]),
-            fixed(
-                [
-                    outpoint(d["out_point"])
-                    + bytes([{"code": 0, "dep_group": 1}[d["dep_type"]]])
-                    for d in tx["cell_deps"]
-                ]
-            ),
-            fixed([raw(h) for h in tx["header_deps"]]),
-            fixed(
-                [
-                    number(i["since"], 8) + outpoint(i["previous_output"])
-                    for i in tx["inputs"]
-                ]
-            ),
-            table(
-                [
-                    table(
-                        [
-                            number(o["capacity"], 8),
-                            script(o["lock"]),
-                            script(o["type"]) if o["type"] else b"",
-                        ]
-                    )
-                    for o in tx["outputs"]
-                ]
-            ),
-            table([number(len(raw(d))) + raw(d) for d in tx["outputs_data"]]),
-        ]
-    )
-    return (
-        "0x"
-        + hashlib.blake2b(
-            encoded, digest_size=32, person=b"ckb-default-hash"
         ).hexdigest()
     )
 
@@ -183,13 +118,17 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         "external_funding_timeout_seconds": 60,
     }
     tlc_amount = 1_000_000
-    # Both A and T can protect at this deadline. Only 08/10 isolate T's broadcast.
+    # Both A and T can protect at this deadline. Only the explicitly isolated
+    # cases block T's broadcast; 07 and 11 retain their natural competition.
     tlc_lifetime_seconds = 22
 
     def setup_method(self, method):
         self.broadcast_gate = None
         self.funding_spend_gate = None
-        if REVISION == FUNDING_SPEND_REVISION and method.__name__ in {
+        if REVISION in {
+            FUNDING_SPEND_REVISION,
+            MERGED_LSP_REVISION,
+        } and method.__name__ in {
             FUNDING_SPEND_TEST,
             OPENING_REPLAY_TEST,
         }:
@@ -232,8 +171,16 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
                 "ckb_rpc_url": self.recovery_observer.url,
             }
             self.addCleanup(self._recovery_cleanup)
-        if method.__name__ in ISOLATED_CLOSE_TESTS:
-            self.deadline_evidence = {"test": method.__name__, "observations": []}
+        if method.__name__ in ISOLATED_CLOSE_TESTS | OBSERVED_CLOSE_TESTS:
+            self.deadline_evidence = {
+                "test": method.__name__,
+                "observations": [],
+                "broadcast_mode": (
+                    "isolated"
+                    if method.__name__ in ISOLATED_CLOSE_TESTS
+                    else "pass_through"
+                ),
+            }
             self.broadcast_gate = CommitmentBroadcastGate(
                 self.node.rpcUrl, BUNDLE / "lsp-integration-driver"
             )
@@ -293,14 +240,21 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
     def setUp(self):
         if self._testMethodName in WALLET_HOLD_TESTS:
             self.submit_external_funding = False
+        elif REVISION == MERGED_LSP_REVISION:
+            if self._testMethodName == STALE_FUNDING_TIMER_TEST:
+                self.complete_opening_before_wallet = True
+                self.submit_external_funding = False
+            elif self._testMethodName in POST_OPENING_TESTS:
+                self.complete_opening_before_wallet = True
         super().setUp()
 
     def _finish_opening(self):
-        # The deliberately held event has been consumed. Submit its real saved
-        # signature explicitly; release first so the following event can proceed.
-        _, submission = self._pending()
-        self.gate.release()
-        self._submit(submission)
+        if not self.complete_opening_before_wallet:
+            # The deliberately held event has been consumed. Submit its saved
+            # signature explicitly; release first so the following event can proceed.
+            _, submission = self._pending()
+            self.gate.release()
+            self._submit(submission)
         super()._finish_opening()
 
     # ---------------------------------------------------------------- helpers
@@ -589,64 +543,162 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
             time.sleep(1)
         assert False, f"transaction did not confirm: {tx}"
 
-    def _confirm_force_close(self, funding, timeout=60):
-        """Wait for this side's closing transaction to confirm and spend the funding."""
-        deadline = time.monotonic() + timeout
-        view = None
-        tx_hash = None
-        while time.monotonic() < deadline:
-            view = self._channel_view(self.client)
-            if view and view["shutdown_transaction_hash"]:
-                tx_hash = view["shutdown_transaction_hash"]
-                tx = self.node.getClient().get_transaction(tx_hash)
+    def _confirm_late_signature_close(self, payment, funding, sides):
+        """Bind each real close attempt to its saved commitment and verify the winner."""
+        until = payment["injected_at"] + 30
+        messages = {}
+        local_rejected = False
+        while time.monotonic() < until:
+            audit = self._isolation_health(until)
+            assert audit["armed"] is None, audit
+            attempts = [e for e in audit["events"] if funding in e["inputs"]]
+            first_forward = min(
+                (
+                    e["forwarded_monotonic"]
+                    for e in attempts
+                    if e["forwarded_monotonic"] is not None
+                ),
+                default=None,
+            )
+            if first_forward is not None:
+                until = first_forward + 60
+            accepted = {}
+            for event in attempts:
+                assert event["received_wall_ms"] >= payment["deadline"], event
+                if event["response"] is None:
+                    continue
+                assert event["outcome"] == "forwarded" and event["http_status"] == 200
+                tx_hash = _raw_transaction_hash(event["transaction"])
+                if tx_hash not in messages:
+                    # Force close may refresh cell deps. The signature binds the
+                    # commitment message, so match that before using the raw hash.
+                    messages[tx_hash] = subprocess.check_output(
+                        [str(BUNDLE / "lsp-integration-driver"), "commitment-message"],
+                        input=json.dumps(event["transaction"]),
+                        text=True,
+                        timeout=self._remaining(until),
+                    ).strip()
+                side = sides.get(messages[tx_hash])
+                assert side, ("unexpected commitment for original funding", event)
+                if side == "A":
+                    assert event["forwarded_monotonic"] < payment["injected_at"] + 30
+                    error = event["response"].get("error") or {}
+                    local_rejected |= error.get("code") == -1111 and (
+                        "RBFRejected" in str(error.get("data"))
+                    )
+                if event["actual_hash"]:
+                    assert event["actual_hash"] == tx_hash, event
+                    accepted[tx_hash] = side
+
+            for tx_hash, side in accepted.items():
+                tx = self._isolated_rpc(
+                    self.node.rpcUrl, "get_transaction", [tx_hash], until
+                )
+                if not tx or tx["tx_status"]["status"] != "committed":
+                    continue
+                assert tx["transaction"]["hash"] == tx_hash, tx
+                assert [
+                    item["previous_output"] for item in tx["transaction"]["inputs"]
+                ] == [funding], tx
+                if side == "A":
+                    view = self._isolated_view(self.client, until)
+                    if view["state"]["state_name"] != "Closed":
+                        continue
+                    assert "UNCOOPERATIVE_LOCAL" in view["state"]["state_flags"], view
+                    assert view["shutdown_transaction_hash"] == tx_hash, view
+                elif not local_rejected:
+                    continue
+                self._observe(
+                    "late_signature_close_confirmed",
+                    winner=side,
+                    transaction_hash=tx_hash,
+                    local_rbf_rejected=local_rejected,
+                )
+                return
+            time.sleep(min(0.2, self._remaining(until)))
+        raise AssertionError("no verified close winner after A attempted protection")
+
+    def _confirm_natural_close_with_tlc(
+        self, funding, commitment_after, records, first, second
+    ):
+        """Confirm the real A/T winner without changing their broadcast race."""
+        view, _ = self._wait_protection()
+        assert view["latest_commitment_transaction_hash"] == commitment_after, view
+        until = time.monotonic() + 60
+        winner = None
+        candidates = []
+        while time.monotonic() < until:
+            audit = self.broadcast_gate.snapshot()
+            assert audit["armed"] is None and not audit["errors"], audit
+            candidates = [
+                event for event in audit["events"] if funding in event["inputs"]
+            ]
+            for event in candidates:
+                if not event["actual_hash"]:
+                    continue
+                tx = self.node.getClient().get_transaction(event["actual_hash"])
+                if tx is None:
+                    continue
                 if tx["tx_status"]["status"] == "committed":
-                    assert tx["transaction"]["inputs"][0]["previous_output"] == {
-                        "tx_hash": funding["tx_hash"],
-                        "index": funding["index"],
-                    }, tx["transaction"]
-                    return view, tx
+                    winner = event, tx
+                    break
+            if winner is not None:
+                break
             self.Miner.miner_with_version(self.node, "0x0")
             time.sleep(1)
-        assert False, f"force close did not confirm: {tx_hash}, {view}"
-
-    def _assert_force_close_uses(self, funding, commitment_after):
-        records = self.signer_control(self.tenant, "records")
-        signed = [
-            record
-            for record in records
-            if record["complete"]
-            and not record["for_remote"]
-            and record["transaction_hash"] == commitment_after
-        ]
-        assert len(signed) == 1, records
-        view, observed_at = self._wait_protection()
-        # Force close refreshes cell_deps. Bind the confirmed transaction to the
-        # exact SDK-verified commitment using Fiber's signed transaction message,
-        # which excludes deps and witnesses, rather than comparing different hashes.
-        assert view["latest_commitment_transaction_hash"] == commitment_after, view
-        closed, tx = self._confirm_force_close(funding)
-        assert closed["state"]["state_name"] == "Closed", closed
-        assert closed["shutdown_transaction_hash"], closed
-        # CKB returns a TransactionView; its hash is RPC metadata, not part of
-        # the Transaction accepted by the canonical-message decoder.
+        assert winner is not None, (
+            "neither naturally broadcast closing transaction confirmed",
+            candidates,
+        )
+        event, tx = winner
+        assert second["deadline"] <= event["received_wall_ms"], event
         transaction = tx["transaction"].copy()
-        transaction.pop("hash")
+        assert any(
+            item["previous_output"] == funding for item in transaction["inputs"]
+        ), transaction
+        transaction.pop("hash", None)
         message = subprocess.check_output(
             [str(BUNDLE / "lsp-integration-driver"), "commitment-message"],
             input=json.dumps(transaction),
             text=True,
+            timeout=10,
         ).strip()
-        assert message == signed[0]["signing_message"], (
-            "confirmed close does not match the saved signed commitment",
-            message,
-            signed[0],
-        )
-        peer = self._channel_view(self.fiber1.client)
-        if peer and peer["shutdown_transaction_hash"]:
-            assert (
-                peer["shutdown_transaction_hash"] != closed["shutdown_transaction_hash"]
+        matching = [
+            record
+            for record in records
+            if record["signing_message"] == message
+            and any(
+                tlc["payment_hash"] == first["hash"]
+                and tlc["expiry"] == first["expiry"]
+                for tlc in record["tlcs"]
             )
-        return view, tx, observed_at
+        ]
+        assert len(matching) == 1, (message, records)
+        signed = matching[0]
+        if not signed["for_remote"]:
+            assert signed["complete"], signed
+            while time.monotonic() < until:
+                local = self._channel_view(self.client)
+                if (
+                    local["state"]["state_name"] == "Closed"
+                    and local["shutdown_transaction_hash"] == event["actual_hash"]
+                ):
+                    break
+                self.Miner.miner_with_version(self.node, "0x0")
+                time.sleep(1)
+            else:
+                raise AssertionError("confirmed A close did not reach local Closed")
+        # A remote SDK record contains A's partial signature; a committed CKB
+        # transaction proves the counterparty completed that version on chain.
+        self._observe(
+            "natural_close_confirmed",
+            winner="remote" if signed["for_remote"] else "local",
+            transaction_hash=event["actual_hash"],
+            signing_message=message,
+            signed_record=signed,
+            funding=funding,
+        )
+        return tx
 
     def _arm_signature_gate(self):
         """After the opening finished, hold the next channel signature again."""
@@ -1208,8 +1260,12 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         ), "T raw transaction hash differs from CKB acceptance"
         start, release = episode["started_at"], episode["release_at"]
         assert start >= payment["deadline"] and abs(release - start - 0.250) < 0.000001
-        assert start <= accepted["forwarded_monotonic"] < release, accepted
-        assert start <= accepted["upstream_response_monotonic"] < release, accepted
+        assert (
+            payment["deadline"]
+            <= accepted["forwarded_monotonic"]
+            <= accepted["upstream_response_monotonic"]
+            < release
+        ), accepted
         preflight = [
             q
             for q in delayed
@@ -1482,6 +1538,10 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
 
     # TEST-MAP: LSP-TIMEOUT-03
     def test_stale_external_funding_timer_keeps_opening_alive(self):
+        if REVISION == MERGED_LSP_REVISION:
+            self._keep_submitted_funding_pending_past_external_deadline()
+            return
+
         view = self._channel(self.client)
         created = int(view["created_at"], 16) / 1000
         assert self._status()["type"] == "SignatureRequired"
@@ -1500,6 +1560,91 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         )
         self._finish_opening()
         assert time.time() - created < self.opening_window_seconds
+
+    def _keep_submitted_funding_pending_past_external_deadline(self):
+        ckb = self.node.rpcUrl
+        unsigned = self.tenant["opened"]["unsigned_funding_tx"]
+        funding_hash = _raw_transaction_hash(unsigned)
+        opening = self._channel(self.client)
+        created_at = int(opening["created_at"], 16) / 1000
+        created = time.monotonic() + created_at - time.time()
+        wallet_deadline = (
+            created + self.fiber_config_extra["external_funding_timeout_seconds"]
+        )
+        opening_deadline = created + self.opening_window_seconds
+
+        self._wait_for_opening_commitment(self.tenant)
+        miner_pid = self._stop_owned_miner(min(wallet_deadline, time.monotonic() + 5))
+        assert miner_pid > 0, "expected this test's active CKB miner"
+        frozen_tip = self._isolated_rpc(
+            ckb, "get_tip_block_number", [], wallet_deadline
+        )
+        signed = self._sign_funding_transaction(unsigned, wallet_deadline)
+        funded = self._isolated_rpc(
+            self.client,
+            "submit_signed_funding_tx",
+            [{"channel_id": self.channel_id, "signed_funding_tx": signed}],
+            wallet_deadline,
+        )
+        submitted = time.monotonic()
+        assert submitted < wallet_deadline
+        assert funded["channel_id"] == self.channel_id, funded
+        assert funded["funding_tx_hash"] == funding_hash, funded
+        self.tenant["funding_tx_hash"] = funding_hash
+
+        # Confirm the original transaction reached the real CKB pool.
+        pool_deadline = min(submitted + 30, opening_deadline)
+        pool_states = {"pending", "proposed"}
+        while True:
+            transaction = self._isolated_rpc(
+                ckb, "get_transaction", [funding_hash], pool_deadline
+            )
+            if transaction is not None:
+                status = transaction["tx_status"]["status"]
+                if status in pool_states:
+                    break
+                assert status == "unknown", transaction
+            time.sleep(min(0.2, self._remaining(pool_deadline)))
+
+        observe_until = submitted + 65
+        while True:
+            started = time.monotonic()
+            transaction = self._isolated_rpc(
+                ckb, "get_transaction", [funding_hash], opening_deadline
+            )
+            assert transaction and transaction["tx_status"]["status"] in pool_states, (
+                "original funding must remain in the pool without confirmation",
+                transaction,
+            )
+            assert (
+                self._isolated_rpc(ckb, "get_tip_block_number", [], opening_deadline)
+                == frozen_tip
+            ), "isolated miner did not stay paused"
+            for client in (self.client, self.fiber1.client):
+                open_rows = self._isolated_rpc(
+                    client, "list_channels", [{"only_pending": True}], opening_deadline
+                )["channels"]
+                assert len(open_rows) == 1, open_rows
+                assert open_rows[0]["channel_id"] == self.channel_id, open_rows
+                self._assert_funding_opening_pending({"channel": open_rows[0]})
+            if started >= observe_until:
+                break
+            time.sleep(max(0, min(1, observe_until - time.monotonic())))
+
+        print(f"Original funding {funding_hash} remained unconfirmed for at least 65s")
+        assert self._remaining(opening_deadline) > 3, "no budget to resume miner"
+        confirmation_deadline = time.monotonic() + 120
+        self.node.start_miner()
+        self._remaining(opening_deadline)
+        self._finish_opening()
+        assert self._funding_outpoint(self._channel(self.client)) == {
+            "tx_hash": funding_hash,
+            "index": "0x0",
+        }
+        assert len(self.fiber1.client.list_channels({})["channels"]) == 1
+        assert (
+            time.monotonic() < confirmation_deadline
+        ), "original funding was not verified within 120s of resuming mining"
 
     def _record_funding_spend(self, stage, **fields):
         row = {"stage": stage, "monotonic": time.monotonic(), **fields}
@@ -1627,9 +1772,12 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         unsigned = self.tenant["opened"]["unsigned_funding_tx"]
         funding_hash = _raw_transaction_hash(unsigned)
         self.funding_spend_gate.arm(funding_hash)
-        assert self.signer_control(self.tenant, "wait-opening-commitment") == {
-            "verified": True
-        }
+        if REVISION == MERGED_LSP_REVISION:
+            self._wait_for_opening_commitment(self.tenant)
+        else:
+            assert self.signer_control(self.tenant, "wait-opening-commitment") == {
+                "verified": True
+            }
         return unsigned, funding_hash
 
     def _abort_opening_on_confirmed_spend(self, unsigned, funding_hash):
@@ -2030,10 +2178,33 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
 
     # TEST-MAP: LSP-TIMEOUT-07
     def test_signature_after_deadline_is_not_applied(self):
+        """
+        1. 到达检查点 B，扣住撤销签名并保存 A/T 双方的承诺。
+        2. 越过 D 加 1 秒直连原签名 RPC，确认拒绝且承诺不变。
+        3. 核对 A 实际尝试保护、链上赢家确实花费原注资及待签清理。
+        """
+        # 1. 冻结原注资及双方的承诺签名消息，观察器原样转发。
         self._arm_signature_gate()
         payment = self._to_checkpoint_b(self._prepare_payment())
         funding = self._funding_outpoint(self._channel(self.client))
-        expected = self._commitment_hash(self.client)
+        local_hash = self._commitment_hash(self.client)
+        peer_hash = self._commitment_hash(self.fiber1.client)
+        records = self.signer_control(self.tenant, "records")
+        local = [
+            r
+            for r in records
+            if r["complete"]
+            and not r["for_remote"]
+            and r["transaction_hash"] == local_hash
+        ]
+        peer = [
+            r for r in records if r["for_remote"] and r["transaction_hash"] == peer_hash
+        ]
+        assert len(local) == len(peer) == 1, records
+        sides = {local[0]["signing_message"]: "A", peer[0]["signing_message"]: "T"}
+        assert len(sides) == 2, (local, peer)
+
+        # 2. 在原 30 秒业务窗口内，仅向 FNN 直交一次晚到签名。
         self._wait_past_deadline(payment)
         submitted_at = time.monotonic()
         assert submitted_at - payment["injected_at"] < 28, (
@@ -2041,17 +2212,20 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
         )
         body = self._submit_raw(payment["b_submission"])
         self._assert_not_applied(body)
-        assert self._commitment_hash(self.client) == expected
-        _, _, observed_at = self._assert_force_close_uses(funding, expected)
-        assert observed_at - payment["injected_at"] < 30
-        # The protection clears the pending request.
+        assert self._commitment_hash(self.client) == local_hash
+        self._observe("late_signature_rejected", response=body, original=local_hash)
+
+        # 3. 核对真实赢家与 A 的原始广播响应，再核对待签清理。
+        self._confirm_late_signature_close(payment, funding, sides)
         deadline = time.monotonic() + 15
-        while (
-            time.monotonic() < deadline
-            and self._status()["type"] == "SignatureRequired"
-        ):
-            time.sleep(0.5)
-        assert self._status()["type"] != "SignatureRequired", self._status()
+        while self._isolated_status(deadline)["type"] != "NoSignatureRequired":
+            time.sleep(min(0.2, self._remaining(deadline)))
+        assert (
+            self._isolated_view(self.client, deadline)[
+                "latest_commitment_transaction_hash"
+            ]
+            == local_hash
+        )
 
     # TEST-MAP: LSP-TIMEOUT-08
     def test_node_protects_without_any_submission(self):
@@ -2159,7 +2333,7 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
     def test_checkpoint_b_loser_recovers_remote_close(self):
         """
         1. 持续挖块，准备 B 的完整含 TLC 承诺与扣留撤销请求，唯一绑定双方交易。
-        2. 一次固定 250 ms 查询窗口保留真实竞争，取得 T 接受与 A 真实 RBF 拒绝。
+        2. 保留一次固定 250 ms 查询窗口，取得释放前 T 接受和释放后 A 真实 RBF 拒绝。
         3. 独立确认 T 精确花费原注资，等待同一输入索引可见后开始恢复窗口。
         4. 完整观察 330 秒及恢复后至少 10 秒，逐样本验证 A 远端关闭与 Hosted 归因。
         5. 保存全部证据并在独立 60 秒预算内清理，不用超期读取补成通过。
@@ -2590,7 +2764,7 @@ class TestChannelSigningDeadline(ChannelSigningTestBase):
             for payment in (first, second)
         ), signed
         self._wait_past_deadline(second)
-        self._assert_force_close_uses(funding, expected)
+        self._confirm_natural_close_with_tlc(funding, expected, records, first, second)
         assert self._invoice_status(first["hash"]) == "Received"
         assert self._invoice_status(first["hash"]) != "Paid"
         assert self._invoice_status(second["hash"]) != "Paid"
