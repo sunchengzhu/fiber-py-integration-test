@@ -23,6 +23,8 @@ if str(ROOT) not in sys.path:
 from scripts import run_lsp_regression as runner
 
 SUITE = runner.SUITE
+TEST_DISK_BUDGET_GIB = 2
+ARCHIVE_DISK_BUDGET_GIB = {"subscription": 3}
 CATEGORIES = {
     "query": (
         "查询与租户隔离",
@@ -237,6 +239,9 @@ def run_bucket(plan_path, bucket_id, output):
             "integration_commit": actual,
             "started_at": time.time(),
             "free_bytes_before": shutil.disk_usage(ROOT).free,
+            "archive_disk_budget_gib": ARCHIVE_DISK_BUDGET_GIB.get(
+                bucket_id, TEST_DISK_BUDGET_GIB
+            ),
             "nodeids": bucket["nodeids"],
             "test_inputs": inputs_before,
         },
@@ -251,7 +256,7 @@ def run_bucket(plan_path, bucket_id, output):
         "--progress",
         "--retain-runtime",
         "--disk-budget-gib",
-        "2",
+        str(TEST_DISK_BUDGET_GIB),
         "--batch-timeout",
         "9000",
         "--output",
@@ -302,15 +307,17 @@ def retain_runtime(bucket_dir):
     bucket_dir.mkdir(parents=True, exist_ok=True)
     sources = set()
     unavailable = []
-    initial = (
-        read(bucket_dir / "job.json").get("free_bytes_before")
-        if (bucket_dir / "job.json").is_file()
-        else None
-    )
+    job = read(bucket_dir / "job.json") if (bucket_dir / "job.json").is_file() else {}
+    initial = job.get("free_bytes_before")
+    archive_budget_gib = job.get("archive_disk_budget_gib", TEST_DISK_BUDGET_GIB)
+    if type(archive_budget_gib) is not int or archive_budget_gib not in (2, 3):
+        raise ValueError("invalid runtime archive disk budget")
 
     def check_space():
         free = shutil.disk_usage(ROOT).free
-        if free < 8 * 2**30 or (initial is not None and initial - free > 2 * 2**30):
+        if free < 8 * 2**30 or (
+            initial is not None and initial - free > archive_budget_gib * 2**30
+        ):
             raise RuntimeError(
                 "runtime evidence export exceeded disk floor/batch budget"
             )
@@ -375,6 +382,7 @@ def retain_runtime(bucket_dir):
             "unavailable": sorted(set(unavailable)),
             "archive_sha256": sha(bucket_dir / "runtime.tar.gz"),
             "files": len(manifest),
+            "archive_disk_budget_gib": archive_budget_gib,
             "originals_deleted": False,
         },
     )

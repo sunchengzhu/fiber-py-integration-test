@@ -29,12 +29,12 @@ jobs:
       short_revision: ${{ steps.resolve.outputs.short_revision }}
       matrix: ${{ steps.plan.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           repository: sunchengzhu/fiber-py-integration-test
           ref: ${{ inputs.integration_commit }}
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           cache: pip
@@ -63,7 +63,7 @@ jobs:
         run: python scripts/lsp_ci.py plan --revision "$FIBER_REVISION" --output ci-plan
       - name: 保存执行计划
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lsp-plan
           path: ci-plan
@@ -75,18 +75,18 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           repository: sunchengzhu/fiber-py-integration-test
           ref: ${{ inputs.integration_commit }}
           persist-credentials: false
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           repository: nervosnetwork/fiber
           ref: ${{ needs.plan.outputs.revision }}
           path: product
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           cache: pip
@@ -115,7 +115,7 @@ jobs:
             test_cases/framework/test_lsp_setup_cleanup.py 2>&1 | tee ci-preflight/stdout.log
       - name: 保留工程预检结果
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lsp-preflight
           path: |
@@ -123,7 +123,7 @@ jobs:
             ci-preflight/stdout.log
           retention-days: 14
       - name: 复用 Cargo 缓存，不复用未核验的运行二进制
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -137,7 +137,7 @@ jobs:
           FIBER_REVISION: ${{ needs.plan.outputs.revision }}
         run: python scripts/lsp_ci_build.py build --source product --revision "$FIBER_REVISION" --target ci-target --output ci-build
       - name: 上传运行二进制及逐文件清单
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lsp-runtime
           path: |
@@ -148,7 +148,7 @@ jobs:
           retention-days: 14
       - name: 无论成功失败均保留构建输出
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lsp-build-logs
           path: |
@@ -167,12 +167,12 @@ jobs:
       max-parallel: 8
       matrix: ${{ fromJSON(needs.plan.outputs.matrix || '{"include":[{"id":"unavailable","label":"未生成计划","count":0}]}') }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           repository: sunchengzhu/fiber-py-integration-test
           ref: ${{ inputs.integration_commit }}
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           cache: pip
@@ -181,11 +181,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y lsof
           python -m pip install -r requirements.txt -r test_cases/fiber/devnet/lsp/requirements.txt
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: lsp-plan
           path: ci-plan
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: lsp-runtime
           path: ci-build
@@ -209,7 +209,7 @@ jobs:
       - name: 归档失败时上传原运行目录
         id: runtime_fallback
         if: ${{ !cancelled() && steps.retain.outputs.fallback == 'true' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lsp-runtime-fallback-${{ matrix.id }}
           path: tmp
@@ -235,7 +235,7 @@ jobs:
         run: python scripts/lsp_ci.py collect --source "ci-artifacts/$BUCKET" --output "ci-results/$BUCKET"
       - name: 上传轻量结果供全局汇总
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lsp-results-${{ matrix.id }}
           path: ci-results
@@ -243,7 +243,7 @@ jobs:
           retention-days: 14
       - name: 上传本组完整证据
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lsp-evidence-${{ matrix.id }}
           path: ci-artifacts
@@ -259,20 +259,20 @@ jobs:
     outputs:
       complete: ${{ steps.render.outputs.complete }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           repository: sunchengzhu/fiber-py-integration-test
           ref: ${{ inputs.integration_commit }}
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         continue-on-error: true
         with:
           name: lsp-plan
           path: ci-plan
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         continue-on-error: true
         with:
           pattern: lsp-results-*
@@ -288,7 +288,7 @@ jobs:
         run: python scripts/lsp_ci.py report --plan ci-plan/plan.json --source ci-results --output ci-report --publish-only
       - name: 保存 HTML / JSON / JUnit / Markdown 报告
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lsp-report
           path: ci-report

@@ -631,6 +631,57 @@ def test_runtime_archive_keeps_original_database_and_manifest(tmp_path, monkeypa
         )
 
 
+@pytest.mark.parametrize(
+    ("bucket_id", "archive_budget_gib", "initial_gib", "free_gib", "succeeds"),
+    [
+        ("subscription", 3, 20, 17.5, True),
+        ("payment", 2, 20, 17.5, False),
+        ("subscription", 3, 9, 7, False),
+    ],
+)
+def test_subscription_archive_has_room_after_test_budget(
+    tmp_path,
+    monkeypatch,
+    bucket_id,
+    archive_budget_gib,
+    initial_gib,
+    free_gib,
+    succeeds,
+):
+    monkeypatch.setattr(ci, "ROOT", tmp_path)
+    source = tmp_path / "tmp/lsp-owned/contract/node"
+    source.mkdir(parents=True)
+    (source / "database").write_bytes(b"original database")
+    bucket = tmp_path / bucket_id
+    ci.write(
+        bucket / "job.json",
+        {
+            "id": bucket_id,
+            "free_bytes_before": int(initial_gib * 2**30),
+            "archive_disk_budget_gib": archive_budget_gib,
+        },
+    )
+    ci.write(
+        bucket / "entry/job-000/before-teardown/test/runtime.json",
+        {"sources": [["ckb", str(source)]]},
+    )
+    monkeypatch.setattr(
+        ci.shutil,
+        "disk_usage",
+        lambda _: SimpleNamespace(free=int(free_gib * 2**30)),
+    )
+
+    if succeeds:
+        ci.retain_runtime(bucket)
+        assert (
+            ci.read(bucket / "runtime-retention.json")["archive_disk_budget_gib"] == 3
+        )
+        assert (bucket / "runtime.tar.gz").is_file()
+    else:
+        with pytest.raises(RuntimeError, match="disk floor/batch budget"):
+            ci.retain_runtime(bucket)
+
+
 def test_valid_binary_bundle_restores_modes_and_refuses_overwrite(
     tmp_path, monkeypatch
 ):
